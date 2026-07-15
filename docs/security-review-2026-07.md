@@ -1,5 +1,75 @@
 # Security & operational review — 2026-07
 
+> **This doc is also the session handoff.** A follow-up session should read this
+> top section first, then the README, then the batched findings below.
+
+## Handoff — where things stand
+
+**What this is.** A client-configurable, code-driven deployment of Anthropic's
+self-hosted Claude apps gateway for Claude Code in AWS GovCloud `us-gov-west-1`,
+Bedrock inference (Opus 4.8 + Sonnet 4.5), Okta OIDC, offline Windows rollout,
+and an optional usage/cost observability stack. Full architecture and rationale
+are in `README.md` (Design decisions, VPC endpoints, Usage & cost observability
+sections). Repo: `github.com/EntropyZero/claude-gateway-in-govcloud`, branch
+`main`.
+
+**What is built and committed** (working tree clean as of this doc):
+- `cloudformation/01-database.yaml` — RDS PostgreSQL store.
+- `cloudformation/02-gateway.yaml` — ALB + TLS, ECS Fargate gateway, IAM,
+  secrets, VPC endpoints (Bedrock + optional supporting/S3), egress-proxy env,
+  ACM expiry alarm, ALB access logs, telemetry-forward toggle, activity-log
+  toggle.
+- `cloudformation/03-observability.yaml` — AMP workspace, ADOT collector
+  (OTLP→SigV4 remote_write), self-hosted Grafana at `/grafana`, activity-log
+  archive chain (CloudWatch window → Firehose → S3).
+- `docker/` — gateway container + entrypoint; `docker/grafana/` provisioned
+  image (AMP datasource + usage dashboard).
+- `client/` — offline release mirror + non-admin Windows installer
+  (`-CostCenter`/`-Team` OTEL attributes, full update lockdown).
+- `scripts/` — deploy.env-driven automation; **outputs auto-persist back into
+  `deploy.env`** (cert ARN, image URIs, OTLP URL) via `set_env_var` in
+  `common.sh`, so there are no manual copy-paste steps between runs.
+
+**Status of THIS review: findings only — NONE of the A/B/C/D fixes below have
+been applied.** The deployment functions for a NAT-equipped VPC; the batch-A
+items are what break in the strict landing-zone/ZPA profile. Everything below is
+open work.
+
+**Corrections already folded in during review:**
+- B1 (App Connector DNS) was corrected: an internal ALB's
+  `*.elb.amazonaws.com` name is a *public* record returning private IPs
+  (resolvable anywhere), so the only DNS requirement is that App Connectors
+  resolve the **corporate CNAME**. See B1 for the one config case (in-VPC
+  connectors) and the rebinding edge case.
+- C7 (Grafana) direction is settled: replace the single shared admin password
+  with per-user accounts — Okta SSO or provisioned Grafana users. Options are in
+  the C7 finding below.
+
+**Pending decisions (need the user):**
+1. **Grafana auth model** — Okta SSO (Option 1) vs. provisioned Grafana users
+   (Option 2); do the network-narrowing (Option 3) either way. See C7.
+2. **Batch sequencing** — recommended: apply A + D (unambiguous bugs) first,
+   turn B into a README "ZPA & landing-zone prerequisites" section, then scope C
+   (CMK/TLS/pgaudit/Object Lock/Grafana auth) against the client's ATO boundary
+   and SSP control baseline.
+
+**Recommended first actions for the next session:**
+- Apply batch A (will-break-on-deploy) and batch D (quick correctness bugs).
+- Draft the README "ZPA & landing-zone prerequisites" section from batch B
+  (App Connector DNS rule, `ClientIngressCidr` = connector source IPs, central
+  inspection allowlist, Intune SYSTEM-context install caveat, `NODE_EXTRA_CA_CERTS`
+  check, verify-from-connector note).
+- Confirm the Grafana auth decision, then implement C7 + C8 together (auth +
+  `GF_*` hardening + Grafana persistence, since provisioned/SSO users need a
+  durable store — RDS or EFS — or SSO to sidestep it).
+
+**Also-durable context** lives in project memory
+(`claude-gateway-project-context.md`): client template (never hardcode
+org-specifics), TGW landing zone, GovCloud model constraints, non-admin Windows
+installs.
+
+---
+
 Reviewed against the target deployment profile: **AWS GovCloud `us-gov-west-1`,
 government entity (FedRAMP High / IL4-5, NIST 800-53), AWS Landing Zone
 hub-and-spoke (Transit Gateway; workload VPC is a spoke; central egress;
@@ -187,9 +257,41 @@ rather than the two configured model IDs, so the app-layer model allowlist isn't
 enforced at IAM/network layer. The `bedrock:*::foundation-model` region wildcard
 also allows `us-gov-east-1` invocation. Scope to the approved models/region.
 
-**C7. Grafana: single shared admin, broad exposure (AC-2/AU-2).** See the
-dedicated explanation below — this is addressable with Grafana's own user model
-and/or Okta SSO plus a narrower network path.
+**C7. Grafana: single shared admin, broad exposure (AC-2/AU-2).** As configured
+the stack only has the bootstrap `admin` account, so whoever needs the dashboard
+shares the Secrets-Manager admin password — no individual attribution, and
+offboarding means rotating a shared secret. Grafana OSS fully supports per-user
+accounts; the fix is to use them. Three options, best to acceptable:
+
+- **Option 1 — Okta SSO (best; reuses the existing IdP).** Grafana speaks OIDC
+  natively (`GF_AUTH_GENERIC_OAUTH_*`). Point it at the same Okta auth server as
+  the gateway, map an Okta group → Grafana Admin/Editor/Viewer, and set
+  `GF_AUTH_DISABLE_LOGIN_FORM=true` to remove the shared local login. Access =
+  Okta group membership, MFA via Okta, automatic offboarding, real identity per
+  login. Requires registering the redirect URI
+  `https://<fqdn>/grafana/login/generic_oauth` in the Okta app and it being
+  reachable through ZPA (same pattern as the gateway callback). Users are
+  authoritative in Okta, which also sidesteps the persistence problem below.
+- **Option 2 — provisioned Grafana users (self-contained fallback).** Create a
+  handful of named users with per-user passwords/roles via provisioning or a
+  post-deploy API call; keep `admin` as break-glass only. No dependency on the
+  OIDC round-trip through ZPA. Trade-off: passwords live in Grafana's DB (another
+  store to manage/rotate), MFA not built in. Fine for 3–5 admins in a controlled
+  network.
+- **Option 3 — narrow the network path (do regardless of 1/2).** `/grafana`
+  currently rides the same ALB and `ClientIngressCidr` as developer traffic, so
+  every developer can reach the login page. Put the admin console behind a
+  separate ZPA app segment scoped to an admins group and/or a tighter
+  listener-rule condition.
+
+**Persistence note (blocks Option 1 & 2):** the Grafana task has no volume, so
+provisioned/SSO-created users live in the container's ephemeral SQLite and reset
+on redeploy. For durable accounts, point Grafana at a small database (reuse the
+RDS instance with its own DB) or an EFS volume. SSO (Option 1) mostly sidesteps
+this because identity is authoritative in Okta.
+
+Recommendation: Option 1 if extending the Okta app is easy; Option 2 to keep
+Grafana auth off the ZPA-OIDC path; Option 3 either way.
 
 **C8. Missing Grafana `GF_*` hardening.** No `GF_SECURITY_DISABLE_GRAVATAR`
 (default on → outbound gravatar.com calls with a hashed admin email — egress
