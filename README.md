@@ -125,7 +125,24 @@ depth) are written to whichever managed-settings source the run can reach:
 
 Ensure your enterprise root CA is in the Windows certificate store (on
 domain-joined machines it normally already is, via GPO — no admin needed at
-install time) so the ALB cert validates.
+install time) so the ALB cert validates. The distributed `claude.exe` is the
+**precompiled native build** (this deployment does not use the Node/npm
+distribution); if it does not pick up the Windows store for the gateway's
+enterprise-CA chain — `/login` fails TLS before the fingerprint prompt —
+deploy a PEM bundle of your CA chain alongside the binary and pass
+`-ExtraCaCertPath C:\path\to\ca-bundle.pem`, which sets
+`NODE_EXTRA_CA_CERTS` (honored by the precompiled build) in managed
+settings. Verify once against the pinned version on a test laptop.
+
+**Intune/SCCM device-context (SYSTEM) pushes need two phases.** A SYSTEM run
+would install `claude.exe` into SYSTEM's own `%USERPROFILE%` and PATH — the
+developer never gets it — so the installer refuses a SYSTEM binary install.
+Push managed settings as SYSTEM with `-SettingsOnly` (they land in
+`%ProgramData%`, tamper-resistant), and deploy the binary in **user**
+context (Intune "user" install behavior, or the manual command above). Note
+SYSTEM traffic is not carried by the ZPA user tunnel: if the SYSTEM phase
+pulls from the UNC share, that host needs a Zscaler **Machine Tunnel** or a
+non-ZPA path to the file server.
 
 Developer experience after install: new terminal → `claude` → `/login` →
 **Cloud gateway** (URL pre-filled) → Okta SSO → compare the fingerprint
@@ -195,10 +212,112 @@ interface endpoints** (a common landing-zone pattern — endpoints in a shared
 VPC with private hosted zones associated to spoke VPCs), leave
 `CREATE_SUPPORTING_ENDPOINTS=false` and use those — creating local endpoints
 with private DNS fails when a PHZ for the same service domain is already
-associated. The S3 **gateway** endpoint is the exception: it cannot be
-centralized over TGW, so create it locally in every case. And confirm TGW
-routes/SGs allow developer ranges to reach the ALB on 443
-(`CLIENT_INGRESS_CIDR`).
+associated. **This applies to all three endpoint sets**: the supporting
+endpoints, the Bedrock endpoint (set `BEDROCK_PRIVATE_DNS=false` if a
+centralized `bedrock-runtime` endpoint's PHZ covers this VPC — traffic then
+follows the shared PHZ to the central endpoint, so apply the Claude-only
+endpoint policy *there*, or the model guardrail at the network layer is
+silently lost), and the AMP endpoint (`CREATE_AMP_ENDPOINT` on the
+observability stack). The S3 **gateway** endpoint is the exception: it
+cannot be centralized over TGW, so create it locally in every case. And
+confirm TGW routes/SGs allow the ZPA App Connector / VPN ranges to reach the
+ALB on 443 (`CLIENT_INGRESS_CIDR`).
+
+## ZPA & landing-zone prerequisites
+
+What must be true *outside this repo* for the deployment to work in a
+hub-and-spoke landing zone with users on Zscaler Private Access. Each item
+is a real failure mode; work through them as a checklist with the network
+and Zscaler teams.
+
+**1. DNS resolves at the App Connector, not the laptop.** With ZPA, Client
+Connector answers the app-segment FQDN on the laptop with a synthetic
+CGNAT (100.64/10) IP; the *real* lookup happens on the **App Connector**,
+using that host's resolvers. The only DNS requirement is that every App
+Connector can resolve the corporate CNAME (`claude-gateway.example.com`).
+Its target — the internal ALB's `internal-*.elb.amazonaws.com` name — is a
+normal **public** DNS record that returns private IPs from any resolver
+(resolvable everywhere, routable only in-VPC), so it needs no Resolver
+inbound endpoint, forwarder, or private hosted zone.
+
+- *Connectors on-prem* already use AD DNS — the corporate CNAME resolves
+  natively; nothing to configure.
+- *Connectors in an AWS VPC* use the VPC `.2` resolver, which knows nothing
+  of the corporate zone: add a Route 53 Resolver **outbound** rule
+  forwarding that zone to AD DNS (plus a network path to those DNS
+  servers). Otherwise the connector gets NXDOMAIN, which surfaces to users
+  as an unexplained ZPA timeout.
+- *Edge case — DNS-rebinding protection.* A hardened resolver that strips
+  RFC1918 answers from public-zone responses breaks resolution of the
+  `internal-*.elb.amazonaws.com` target. The escape is a private hosted
+  zone associated to the connector VPC (or a hosts entry) so connectors
+  never query the public ELB name.
+
+**2. `CLIENT_INGRESS_CIDR` = the App Connectors' source IPs.** Through ZPA,
+every user connection reaches the ALB from a **connector** IP — not the
+user's IP and not a CGNAT range. The `10.0.0.0/8` placeholder is both too
+broad (auditor finding) and possibly wrong (on-prem connectors in
+172.16/12 or 192.168/16 are silently dropped by the ALB security group).
+Set it to the connector subnets; add extra
+`AWS::EC2::SecurityGroupIngress` resources for additional ranges.
+
+**3. Verify from the right vantage point.** `scripts/verify-gateway.sh`
+run from behind ZPA sees synthetic DNS answers, so its DNS checks are not
+authoritative (the script now says so when it detects CGNAT answers) — run
+the DNS assertions from an App Connector's resolution context. The TLS and
+OAuth checks are valid through ZPA (ZPA doesn't intercept TLS), and the
+script fails hard if it sees a Zscaler-issued certificate, which means the
+FQDN is accidentally routing via ZIA SSL inspection instead of the
+bypass/app segment.
+
+**4. Central inspection allowlist.** With TGW→central-egress (no local
+NAT), the inspection firewall must allow the gateway subnets outbound to:
+the **Okta issuer** (always — OIDC has no VPC endpoint),
+`aps-workspaces.us-gov-west-1.amazonaws.com` (only if `CREATE_AMP_ENDPOINT`
+is off), and ECR/S3 domains (only if the supporting endpoints are off).
+
+**5. Egress-proxy name resolution.** If `HTTPS_PROXY_URL` is a corporate
+hostname, the *VPC resolver* must resolve it (Route 53 Resolver outbound
+rules for the corporate zone) — otherwise the gateway cannot resolve its
+own proxy and Okta login breaks the moment the proxy is configured.
+
+**6. Per-user IP attribution is lost.** `trusted_proxies` covers the VPC
+CIDR, and through ZPA all users arrive from a handful of connector IPs, so
+gateway/ALB logs cannot attribute traffic by source network. Identity
+attribution comes from Okta (JWT `user.id`/`user.email` on every request
+and telemetry export) — treat that as the audit key, not IPs.
+
+**7. UNC file share needs its own app segment.** The offline installer
+pulls `claude.exe` from a file share; over ZPA that's a separate app
+segment (fileserver FQDN, TCP 445) — address it by FQDN (synthetic-IP +
+Kerberos SPN behavior), distinct from the gateway's 443 segment. SYSTEM
+context pulls additionally need a Machine Tunnel (see the Windows rollout
+section).
+
+**8. Admin console exposure.** `/grafana` rides the same ALB and
+`CLIENT_INGRESS_CIDR` as developer traffic, so every developer can reach
+the Grafana login page (auth is Okta SSO with strict group mapping — see
+below). Where policy requires, put `/grafana` behind a separate ZPA app
+segment scoped to the admin group.
+
+## Teardown & update order
+
+The observability stack imports the gateway stack's exports (`svc-sg`,
+`alb-sg`, `https-listener`, `cluster-arn`). Two consequences:
+
+- **Update lock:** while 03 exists, any 02 update that must *replace* one of
+  those resources fails with "Cannot update export … in use" (even an SG
+  `GroupDescription` edit triggers replacement). Recovery: delete the 03
+  stack, update 02, redeploy 03. The AMP workspace has `DeletionPolicy:
+  Retain`, so metrics history survives — but re-adopt or delete the orphaned
+  workspace deliberately (a redeployed 03 creates a **new** workspace;
+  Grafana keeps querying whichever `AMP_QUERY_URL` its task got).
+- **Fresh-deploy order:** the gateway resolves its OTLP forward target at
+  startup, so `OBSERVABILITY_OTLP_URL` must stay empty until 03 is up:
+  deploy 02 without it → deploy 03 (persists the URL into `deploy.env`) →
+  re-run `deploy-gateway.sh`. `deploy-gateway.sh` guards this — if the URL
+  is set but the 03 stack doesn't exist, it deploys without forwarding and
+  tells you.
 
 ## Usage & cost observability
 
