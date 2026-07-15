@@ -32,4 +32,5 @@ docker build \
 log "Pushing ${IMAGE}"
 docker push "$IMAGE"
 
-log "Done. Set GRAFANA_IMAGE=${IMAGE} in deploy.env"
+set_env_var GRAFANA_IMAGE "$IMAGE"
+log "Done. GRAFANA_IMAGE persisted to deploy.env (deploy-observability.sh uses it)."

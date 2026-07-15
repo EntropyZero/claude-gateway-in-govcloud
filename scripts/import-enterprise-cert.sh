@@ -17,6 +17,10 @@
 # SHA-256 fingerprint first (this script prints it).
 set -euo pipefail
 
+# Helpers only (set_env_var) - this script may run on a PKI workstation with
+# no deploy.env, so don't require one.
+COMMON_SH_OPTIONAL_ENV=1 source "$(cd "$(dirname "$0")" && pwd)/common.sh"
+
 REGION="${AWS_REGION:-us-gov-west-1}"
 CMD="${1:-}"; FQDN="${2:-}"
 
@@ -59,6 +63,7 @@ case "$CMD" in
       --query CertificateArn --output text)
 
     echo "CertificateArn: ${ARN}"
+    set_env_var CERTIFICATE_ARN "$ARN"
     echo "Publish this fingerprint to developers (first-connect trust prompt):"
     openssl x509 -in "$LEAF" -noout -fingerprint -sha256
     echo "Reminder: imported certs do NOT auto-renew - alarm on expiry:"

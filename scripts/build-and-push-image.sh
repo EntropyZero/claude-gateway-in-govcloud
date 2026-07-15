@@ -40,4 +40,5 @@ docker build \
 log "Pushing ${IMAGE}"
 docker push "$IMAGE"
 
-log "Done. deploy-gateway.sh will derive this URI, or set IMAGE_URI=${IMAGE}"
+set_env_var IMAGE_URI "$IMAGE"
+log "Done. IMAGE_URI persisted to deploy.env (deploy-gateway.sh uses it)."

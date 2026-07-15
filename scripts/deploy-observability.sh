@@ -34,12 +34,16 @@ aws cloudformation describe-stacks --region "$AWS_REGION" \
   --stack-name "$OBS_STACK_NAME" \
   --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
 
+OTLP_URL="$(stack_output "$OBS_STACK_NAME" OtlpForwardUrl)"
+[ -n "$OTLP_URL" ] && [ "$OTLP_URL" != "None" ] && set_env_var OBSERVABILITY_OTLP_URL "$OTLP_URL"
+
 cat <<EOF
 
 Next steps:
-  1. Set OBSERVABILITY_OTLP_URL in deploy.env to the OtlpForwardUrl output
-     and re-run scripts/deploy-gateway.sh (ECS rolls the service; the
-     gateway then pushes telemetry env vars to every connected client).
+  1. OBSERVABILITY_OTLP_URL is now set in deploy.env. Re-run
+     scripts/deploy-gateway.sh so the gateway starts forwarding telemetry
+     (ECS rolls the service; the gateway then pushes the OTLP env vars to
+     every connected client).
   2. Grafana: https://${GATEWAY_FQDN}/grafana  (user 'admin'; password:
      aws secretsmanager get-secret-value --secret-id ${NAME_PREFIX}/grafana-admin-password)
   3. Workstation grouping labels: re-run Install-ClaudeCode.ps1 with
