@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Claude apps gateway - PostgreSQL backing store (RDS) for AWS GovCloud.
+  Creates an encrypted RDS PostgreSQL instance in private subnets, an
+  RDS-managed master-user secret in Secrets Manager, and a client security
+  group that the gateway service attaches to reach the database.
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: claude-gw
+    Description: Prefix applied to resource names and export names.
+    AllowedPattern: '[a-z][a-z0-9-]{1,20}'
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC hosting the gateway and database.
+
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two private subnets (different AZs) for the DB subnet group.
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t4g.medium
+    Description: Any Postgres-compatible class works; the gateway's store load is light.
+
+  DBEngineVersion:
+    Type: String
+    Default: '16.8'
+    Description: PostgreSQL engine version (gateway requires >= 14).
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 50
+    MinValue: 20
+
+  MultiAZ:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Recommended true when spend limits are enabled - a lost store means lost
+      spend tracking and caps, not just re-logins.
+
+  BackupRetentionDays:
+    Type: Number
+    Default: 14
+    MinValue: 1
+    MaxValue: 35
+
+Resources:
+  # Attached to the gateway ECS tasks; the DB ingress rule references it, so
+  # no CIDRs are opened to the database.
+  DBClientSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} - attach to workloads that may reach the gateway database'
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-db-client'
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} - gateway database'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref DBClientSecurityGroup
+          Description: PostgreSQL from gateway tasks only
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-db'
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub '${NamePrefix} gateway database subnets'
+      SubnetIds: !Ref PrivateSubnetIds
+
+  # Enforce TLS to the database (gateway connects with ?sslmode=require).
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: !Sub '${NamePrefix} - force SSL'
+      Family: postgres16
+      Parameters:
+        rds.force_ssl: '1'
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${NamePrefix}-store'
+      Engine: postgres
+      EngineVersion: !Ref DBEngineVersion
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      MultiAZ: !Ref MultiAZ
+      DBName: gateway
+      # RDS creates and rotates the master secret in Secrets Manager.
+      # The gateway entrypoint reads username/password keys from it.
+      ManageMasterUserPassword: true
+      MasterUsername: gw
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      DBParameterGroupName: !Ref DBParameterGroup
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroup
+      PubliclyAccessible: false
+      BackupRetentionPeriod: !Ref BackupRetentionDays
+      DeletionProtection: true
+      AutoMinorVersionUpgrade: true
+      EnableCloudwatchLogsExports:
+        - postgresql
+      CACertificateIdentifier: rds-ca-rsa2048-g1
+
+Outputs:
+  DBEndpointAddress:
+    Value: !GetAtt Database.Endpoint.Address
+    Export:
+      Name: !Sub '${NamePrefix}-db-endpoint'
+  DBEndpointPort:
+    Value: !GetAtt Database.Endpoint.Port
+    Export:
+      Name: !Sub '${NamePrefix}-db-port'
+  DBName:
+    Value: gateway
+    Export:
+      Name: !Sub '${NamePrefix}-db-name'
+  DBMasterSecretArn:
+    Description: RDS-managed secret holding username/password JSON keys.
+    Value: !GetAtt Database.MasterUserSecret.SecretArn
+    Export:
+      Name: !Sub '${NamePrefix}-db-secret-arn'
+  DBClientSecurityGroupId:
+    Description: Attach this SG to the gateway service to reach the database.
+    Value: !Ref DBClientSecurityGroup
+    Export:
+      Name: !Sub '${NamePrefix}-db-client-sg'

@@ -1,0 +1,15 @@
+# Per-environment deploy configuration (copy from deploy.env.example)
+scripts/deploy.env
+
+# The mirrored claude binary staged for the container build - never commit
+docker/claude
+docker/claude.exe
+
+# Local release mirrors
+client/mirror/
+mirror/
+
+# Key material and CSRs from import-enterprise-cert.sh
+*.key.pem
+*.csr
+*.pem

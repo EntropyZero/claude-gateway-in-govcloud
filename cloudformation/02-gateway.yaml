@@ -1,0 +1,722 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Claude apps gateway on ECS Fargate behind an internal IPv4-only ALB
+  (AWS GovCloud). TLS terminates at the ALB with a certificate signed by
+  your enterprise CA (imported into ACM; pass its ARN). Developers reach
+  the gateway via a corporate-DNS CNAME that points at the ALB's default
+  DNS name. Deploy 01-database.yaml first with the same NamePrefix.
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: claude-gw
+    Description: Must match the NamePrefix used by 01-database.yaml (cross-stack imports).
+    AllowedPattern: '[a-z][a-z0-9-]{1,20}'
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: VPC CIDR - used for listen.trusted_proxies so the gateway reads real client IPs from X-Forwarded-For.
+    AllowedPattern: '^\d+\.\d+\.\d+\.\d+/\d+$'
+
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets for the ALB and the Fargate tasks (>= 2 AZs).
+
+  ClientIngressCidr:
+    Type: String
+    Default: 10.0.0.0/8
+    AllowedPattern: '^\d+\.\d+\.\d+\.\d+/\d+$'
+    Description: >-
+      CIDR allowed to reach the ALB on 443 - VPN client pool and/or the
+      subnets where your Zscaler ZPA App Connectors run. Add further
+      AWS::EC2::SecurityGroupIngress resources for additional ranges.
+
+  CertificateArn:
+    Type: String
+    Description: >-
+      ACM ARN of the enterprise-CA-signed certificate whose SAN is the
+      corporate CNAME (import first with scripts/import-enterprise-cert.sh).
+    AllowedPattern: '^arn:aws[a-z-]*:acm:.+'
+
+  TlsSecurityPolicy:
+    Type: String
+    Default: ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04
+    Description: FIPS policy by default; use ELBSecurityPolicy-TLS13-1-2-2021-06 if FIPS endpoints are not mandated.
+
+  GatewayFqdn:
+    Type: String
+    Description: >-
+      The corporate-DNS CNAME developers use (e.g. claude-gateway.example.com).
+      Becomes listen.public_url and the Okta redirect_uri host. The CNAME
+      record itself is created in your corporate DNS, pointing at this
+      stack's AlbDnsName output.
+    AllowedPattern: '^[a-z0-9.-]+\.[a-z]{2,}$'
+
+  ContainerImage:
+    Type: String
+    Description: 'ECR image URI built from docker/ (e.g. <acct>.dkr.ecr.us-gov-west-1.amazonaws.com/claude-gateway:2.1.207).'
+
+  DesiredCount:
+    Type: Number
+    Default: 2
+    MinValue: 1
+
+  TaskCpu:
+    Type: String
+    Default: '1024'
+    AllowedValues: ['512', '1024', '2048', '4096']
+
+  TaskMemory:
+    Type: String
+    Default: '2048'
+
+  OktaIssuer:
+    Type: String
+    Description: >-
+      Okta issuer URL. A custom authorization server is recommended
+      (https://your-org.okta.com/oauth2/default); the org server
+      (https://your-org.okta.com) also works because userinfo_fallback is enabled.
+
+  OktaClientId:
+    Type: String
+    Description: Client ID of the OIDC web app registered in Okta (redirect_uri = https://<GatewayFqdn>/oauth/callback).
+
+  AllowedEmailDomains:
+    Type: String
+    Description: 'Comma-separated email domains accepted at sign-in (e.g.: example.com, example.gov).'
+
+  SessionTtlHours:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 24
+
+  CreateBedrockEndpoint:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Create a bedrock-runtime interface VPC endpoint so inference needs no NAT/IGW path.
+
+  CreateSupportingEndpoints:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Create the interface VPC endpoints Fargate itself depends on - ecr.api,
+      ecr.dkr, logs, secretsmanager (billed per AZ-hour). Pair with
+      PrivateRouteTableIds for the free S3 gateway endpoint - without it,
+      no-NAT image pulls still fail (ECR layers are served from S3). Leave
+      false when the private subnets already have NAT egress. Note the
+      gateway still needs an egress path to the Okta issuer for OIDC either
+      way - no VPC endpoint can provide that.
+
+  PrivateRouteTableIds:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: >-
+      Route table IDs of the private subnets. When set, creates a free S3
+      gateway endpoint - worthwhile in every VPC (ECR image layers are
+      served from S3, so this keeps pulls off NAT data-processing charges),
+      and required for pulls to work at all when there is no NAT. Leave
+      empty to skip.
+
+  CertExpiryAlarmDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    Description: >-
+      Alarm when the imported certificate has this many days (or fewer)
+      left. Imported ACM certs do NOT auto-renew - this alarm is the
+      renewal reminder.
+
+  AlarmSnsTopicArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional SNS topic ARN to notify when the certificate-expiry alarm
+      fires. Leave empty to create the alarm without a notification action
+      (still visible in the CloudWatch console).
+
+  AlbLogRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: Days to keep ALB access logs in the logs bucket before expiry.
+
+  HttpsProxyUrl:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional egress proxy URL (e.g. http://proxy.corp.example.com:3128)
+      injected as HTTP_PROXY/HTTPS_PROXY into the gateway task. Set it when
+      the landing zone mandates a central proxy for internet egress (the
+      Okta issuer). Leave empty when egress is via NAT - local or a Transit
+      Gateway egress VPC. AWS API calls and the database stay direct via
+      NO_PROXY (.amazonaws.com), so Bedrock still flows through the VPC
+      endpoint either way.
+
+  OpusModelId:
+    Type: String
+    Default: claude-opus-4-8
+    Description: Opus model ID presented to Claude Code clients through the gateway.
+
+  OpusBedrockModelId:
+    Type: String
+    Default: us-gov.anthropic.claude-opus-4-8
+    Description: >-
+      Bedrock model / inference-profile ID the gateway invokes for Opus.
+      Default is the GovCloud geo inference profile for Claude Opus 4.8
+      (us-gov-west-1 also supports in-region invocation via
+      anthropic.claude-opus-4-8). Verify against the Bedrock console:
+      aws bedrock list-inference-profiles --region us-gov-west-1.
+
+  SonnetModelId:
+    Type: String
+    Default: claude-sonnet-4-5
+    Description: Sonnet model ID presented to Claude Code clients through the gateway.
+
+  SonnetBedrockModelId:
+    Type: String
+    Default: us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0
+    Description: >-
+      Bedrock model / inference-profile ID the gateway invokes for Sonnet.
+      Default is the GovCloud geo inference profile for Claude Sonnet 4.5 —
+      the newest Sonnet available in GovCloud (Sonnet 4.6 and Sonnet 5 are
+      not offered there); note older models keep the dated -v1:0 ID format.
+      Verify against the Bedrock console.
+
+Conditions:
+  WantBedrockEndpoint: !Equals [!Ref CreateBedrockEndpoint, 'true']
+  WantSupportingEndpoints: !Equals [!Ref CreateSupportingEndpoints, 'true']
+  WantAnyInterfaceEndpoint: !Or [!Condition WantBedrockEndpoint, !Condition WantSupportingEndpoints]
+  WantS3Endpoint: !Not [!Equals [!Join ['', !Ref PrivateRouteTableIds], '']]
+  HaveAlarmTopic: !Not [!Equals [!Ref AlarmSnsTopicArn, '']]
+  HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
+
+# Account IDs that Elastic Load Balancing uses to deliver access logs
+# (regions without a service-principal log-delivery path, incl. GovCloud).
+Mappings:
+  ElbAccount:
+    us-gov-west-1: { Id: '048591011584' }
+    us-gov-east-1: { Id: '190560391635' }
+    us-east-1:     { Id: '127311923021' }
+    us-east-2:     { Id: '033677994240' }
+    us-west-1:     { Id: '027434742980' }
+    us-west-2:     { Id: '797873946194' }
+
+Resources:
+
+  # ------------------------------------------------------------------ secrets
+  OktaClientSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/oidc-client-secret'
+      Description: Okta OIDC client secret. Placeholder at creation - set the real value after deploy.
+      SecretString: 'REPLACE-ME-run-aws-secretsmanager-put-secret-value'
+
+  JwtSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/jwt-secret'
+      Description: Gateway session-signing secret (rotate per the runbook - prepend new value, roll, remove old).
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  # ------------------------------------------------------------ load balancer
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} - internal ALB (TLS from developer networks)'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref ClientIngressCidr
+          Description: HTTPS from developer/VPN/ZPA-connector networks
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-alb'
+
+  ServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} - gateway tasks'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+          Description: Plain HTTP from the ALB only
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-svc'
+
+  # ALB access logs land here (ELB requires SSE-S3; delivery is via the
+  # regional ELB account, granted in the bucket policy below).
+  AlbLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-alb-logs
+            Status: Enabled
+            ExpirationInDays: !Ref AlbLogRetentionDays
+
+  AlbLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AlbLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowElbLogDelivery
+            Effect: Allow
+            Principal:
+              AWS: !Sub
+                - 'arn:${AWS::Partition}:iam::${ElbAccountId}:root'
+                - ElbAccountId: !FindInMap [ElbAccount, !Ref 'AWS::Region', Id]
+            Action: s3:PutObject
+            Resource: !Sub '${AlbLogsBucket.Arn}/AWSLogs/${AWS::AccountId}/*'
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    # The bucket policy must exist before ELB validates log delivery.
+    DependsOn: AlbLogsBucketPolicy
+    Properties:
+      Name: !Sub '${NamePrefix}-alb'
+      Scheme: internal
+      Type: application
+      # IPv4-only is REQUIRED: dual-stack internal ALBs publish public-range
+      # AAAA records, which fails Claude Code's /login private-network check.
+      IpAddressType: ipv4
+      Subnets: !Ref PrivateSubnetIds
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      LoadBalancerAttributes:
+        - Key: deletion_protection.enabled
+          Value: 'true'
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: 'true'
+        - Key: access_logs.s3.enabled
+          Value: 'true'
+        - Key: access_logs.s3.bucket
+          Value: !Ref AlbLogsBucket
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${NamePrefix}-tg'
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 8080
+      TargetType: ip
+      # /healthz (liveness) keeps signed-in developers working through a
+      # Postgres outage; use /readyz instead to pull replicas when the store is down.
+      HealthCheckPath: /healthz
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTPS
+      Port: 443
+      SslPolicy: !Ref TlsSecurityPolicy
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ------------------------------------------------------------------ ECS
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${NamePrefix}-cluster'
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${NamePrefix}'
+      RetentionInDays: 365
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-execution'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+      Policies:
+        - PolicyName: read-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref OktaClientSecret
+                  - !Ref JwtSecret
+                  - Fn::ImportValue: !Sub '${NamePrefix}-db-secret-arn'
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-task'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: bedrock-invoke-claude-only
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: InvokeClaudeModels
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/anthropic.*'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us-gov.anthropic.*'
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${NamePrefix}-gateway'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: gateway
+          Image: !Ref ContainerImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: gateway
+          Environment:
+            - Name: CLAUDE_CONFIG_DIR
+              Value: /tmp/.claude
+            - Name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+              Value: '1'
+            - Name: CLAUDE_GATEWAY_LOG_LEVEL
+              Value: info
+            # Egress proxy for public endpoints (Okta). NO_PROXY keeps AWS
+            # API calls on the VPC endpoints (Bedrock private DNS resolves
+            # under .amazonaws.com) and the database direct.
+            - !If
+              - HaveProxy
+              - Name: HTTP_PROXY
+                Value: !Ref HttpsProxyUrl
+              - !Ref 'AWS::NoValue'
+            - !If
+              - HaveProxy
+              - Name: HTTPS_PROXY
+                Value: !Ref HttpsProxyUrl
+              - !Ref 'AWS::NoValue'
+            - !If
+              - HaveProxy
+              - Name: NO_PROXY
+                Value: 'localhost,127.0.0.1,169.254.169.254,169.254.170.2,.amazonaws.com'
+              - !Ref 'AWS::NoValue'
+            - Name: PGHOST
+              Value:
+                Fn::ImportValue: !Sub '${NamePrefix}-db-endpoint'
+            - Name: PGPORT
+              Value:
+                Fn::ImportValue: !Sub '${NamePrefix}-db-port'
+            - Name: PGDATABASE
+              Value:
+                Fn::ImportValue: !Sub '${NamePrefix}-db-name'
+            # gateway.yaml, rendered by CloudFormation and decoded by the
+            # container entrypoint. ${!VAR} below escapes CFN substitution so
+            # the gateway's own ${ENV} expansion sees the literal placeholder.
+            - Name: GATEWAY_CONFIG_B64
+              Value:
+                Fn::Base64: !Sub |
+                  listen:
+                    host: 0.0.0.0
+                    port: 8080
+                    public_url: https://${GatewayFqdn}
+                    trusted_proxies: ["${VpcCidr}"]
+
+                  oidc:
+                    issuer: ${OktaIssuer}
+                    client_id: ${OktaClientId}
+                    client_secret: ${!OIDC_CLIENT_SECRET}
+                    allowed_email_domains: [${AllowedEmailDomains}]
+                    # Okta org authorization server omits email/groups from the
+                    # id_token; harmless when using a custom auth server.
+                    userinfo_fallback: true
+                    # Uncomment to receive Okta group claims for managed.policies:
+                    # scopes: [openid, profile, email, offline_access, groups]
+
+                  session:
+                    jwt_secret: ${!GATEWAY_JWT_SECRET}
+                    ttl_hours: ${SessionTtlHours}
+
+                  store:
+                    postgres_url: ${!GATEWAY_POSTGRES_URL}
+
+                  upstreams:
+                    - provider: bedrock
+                      region: ${AWS::Region}
+                      auth: {}   # ECS task role via the default credential chain
+
+                  # GovCloud serves Claude through us-gov.* inference profiles.
+                  # If the built-in catalog does not resolve them on your gateway
+                  # version, disable it and map models explicitly. Developers see
+                  # both entries in the Claude Code model picker; the mapping is
+                  # parameterized (OpusModelId/SonnetModelId + Bedrock IDs).
+                  auto_include_builtin_models: false
+                  models:
+                    - id: ${OpusModelId}
+                      upstream_model: ${OpusBedrockModelId}
+                    - id: ${SonnetModelId}
+                      upstream_model: ${SonnetBedrockModelId}
+
+                  # Per-IdP-group guardrails and managed settings:
+                  # managed:
+                  #   policies:
+                  #     - match: { groups: [claude-developers] }
+                  #       availableModels: [claude-opus-4-8, claude-sonnet-4-5]
+                  #       cli:
+                  #         env: { DISABLE_UPDATES: "1" }
+                  #         skipWebFetchPreflight: true
+          Secrets:
+            - Name: OIDC_CLIENT_SECRET
+              ValueFrom: !Ref OktaClientSecret
+            - Name: GATEWAY_JWT_SECRET
+              ValueFrom: !Ref JwtSecret
+            - Name: PGUSER
+              ValueFrom: !Sub
+                - '${SecretArn}:username::'
+                - SecretArn:
+                    Fn::ImportValue: !Sub '${NamePrefix}-db-secret-arn'
+            - Name: PGPASSWORD
+              ValueFrom: !Sub
+                - '${SecretArn}:password::'
+                - SecretArn:
+                    Fn::ImportValue: !Sub '${NamePrefix}-db-secret-arn'
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: HttpsListener
+    Properties:
+      ServiceName: !Sub '${NamePrefix}-gateway'
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref ServiceSecurityGroup
+            - Fn::ImportValue: !Sub '${NamePrefix}-db-client-sg'
+      LoadBalancers:
+        - ContainerName: gateway
+          ContainerPort: 8080
+          TargetGroupArn: !Ref TargetGroup
+
+  # -------------------------------------------------- optional VPC endpoints
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: WantAnyInterfaceEndpoint
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} - interface VPC endpoints'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ServiceSecurityGroup
+          Description: TLS from gateway tasks
+
+  BedrockRuntimeEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: WantBedrockEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.bedrock-runtime'
+      SubnetIds: !Ref PrivateSubnetIds
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ClaudeOnlyThroughThisEndpoint
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/anthropic.*'
+              - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us-gov.anthropic.*'
+
+  # Endpoints Fargate itself depends on when the private subnets have no NAT:
+  # image pull (ecr.api + ecr.dkr + S3 for layer blobs), awslogs (logs), and
+  # task secret injection (secretsmanager). RDS needs no endpoint - the DB is
+  # in-VPC. Okta remains an external HTTPS dependency no endpoint can cover.
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: WantSupportingEndpoints
+    Properties:
+      VpcId: !Ref VpcId
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.api'
+      SubnetIds: !Ref PrivateSubnetIds
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  EcrDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: WantSupportingEndpoints
+    Properties:
+      VpcId: !Ref VpcId
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.dkr'
+      SubnetIds: !Ref PrivateSubnetIds
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: WantSupportingEndpoints
+    Properties:
+      VpcId: !Ref VpcId
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+      SubnetIds: !Ref PrivateSubnetIds
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: WantSupportingEndpoints
+    Properties:
+      VpcId: !Ref VpcId
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.secretsmanager'
+      SubnetIds: !Ref PrivateSubnetIds
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: WantS3Endpoint
+    Properties:
+      VpcId: !Ref VpcId
+      VpcEndpointType: Gateway
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      RouteTableIds: !Ref PrivateRouteTableIds
+
+  # ------------------------------------------------------------------ alarms
+  # Imported ACM certificates do NOT auto-renew; ACM publishes DaysToExpiry
+  # daily for every certificate. This alarm is the renewal reminder.
+  CertificateExpiryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${NamePrefix}-certificate-expiry'
+      AlarmDescription: !Sub >-
+        The ${NamePrefix} gateway certificate expires in
+        ${CertExpiryAlarmDays} days or fewer. Imported ACM certificates do
+        not auto-renew: re-issue with the enterprise CA, publish the new
+        SHA-256 fingerprint to developers, then re-run
+        import-enterprise-cert.sh import --certificate-arn to replace
+        in place.
+      Namespace: AWS/CertificateManager
+      MetricName: DaysToExpiry
+      Dimensions:
+        - Name: CertificateArn
+          Value: !Ref CertificateArn
+      Statistic: Minimum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: !Ref CertExpiryAlarmDays
+      ComparisonOperator: LessThanOrEqualToThreshold
+      TreatMissingData: ignore
+      AlarmActions: !If [HaveAlarmTopic, [!Ref AlarmSnsTopicArn], !Ref 'AWS::NoValue']
+
+Outputs:
+  AlbDnsName:
+    Description: >-
+      CNAME target. Create in corporate DNS:
+      <GatewayFqdn>  CNAME  <this value>  - then bypass that FQDN in Zscaler
+      (ZIA SSL-inspection exemption, or ZPA app segment for the FQDN).
+    Value: !GetAtt LoadBalancer.DNSName
+  GatewayUrl:
+    Description: Value for forceLoginGatewayUrl in managed-settings.json and the Okta redirect host.
+    Value: !Sub 'https://${GatewayFqdn}'
+  OktaRedirectUri:
+    Value: !Sub 'https://${GatewayFqdn}/oauth/callback'
+  OktaClientSecretArn:
+    Description: 'Set the real secret: aws secretsmanager put-secret-value --secret-id <arn> --secret-string <value>'
+    Value: !Ref OktaClientSecret
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !Sub '${NamePrefix}-gateway'
+  AlbLogsBucketName:
+    Description: S3 bucket receiving ALB access logs (expires per AlbLogRetentionDays).
+    Value: !Ref AlbLogsBucket
