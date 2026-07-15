@@ -74,17 +74,29 @@ mirroring to ECR mandatory.
 ## B. ZPA / landing-zone operational prerequisites
 
 **B1. DNS resolves at the App Connector, not the laptop.** With ZPA, Client
-Connector answers the app-segment FQDN with a synthetic 100.64/10 IP; real
-resolution of the corporate CNAME → `internal-*.elb.amazonaws.com` → private A
-records happens on the App Connector. The repo's DNS design ("corporate-DNS
-CNAME… No private hosted zone required") assumes client-side resolution and
-never states this. Consequences:
-- App Connectors in an AWS VPC cannot resolve the corporate CNAME unless Route
-  53 Resolver outbound rules forward the corporate zone to on-prem AD DNS; the
-  VPC `.2` resolver knows nothing of it (NXDOMAIN at the connector, looks like a
-  ZPA timeout to the user).
-- On-prem App Connectors need internet-capable DNS to resolve the public
-  `internal-*.elb.amazonaws.com` name (which returns private IPs).
+Connector answers the app-segment FQDN with a synthetic 100.64/10 IP; the real
+lookup happens on the App Connector, using that host's resolvers. The **only**
+DNS requirement is that every App Connector can resolve the **corporate CNAME**
+(`claude-gateway.example.com`). The CNAME target — the internal ALB's
+`internal-*.elb.amazonaws.com` name — is a normal **public** DNS record that
+returns the ALB's private IPs from any resolver anywhere (resolvable
+everywhere; routable only inside the VPC), so it needs no Resolver inbound
+endpoint, conditional forwarder, or private hosted zone. This is unlike a Route
+53 private hosted zone, which is split-horizon and only answers inside the
+associated VPC.
+
+- **Connectors on-prem** already query AD DNS, so the corporate CNAME resolves
+  natively — nothing to configure.
+- **Connectors in an AWS VPC** use the `.2` resolver, which knows nothing of the
+  corporate zone. Add a Route 53 Resolver **outbound** rule forwarding that zone
+  to AD DNS (plus a network path to those DNS servers). NXDOMAIN at the connector
+  otherwise, which surfaces to the user as a ZPA timeout with no obvious cause.
+- **Edge case — DNS rebinding protection.** A resolver/appliance that strips
+  RFC1918 answers out of public-zone responses (an anti-rebinding control, and
+  the kind of thing a hardened gov resolver may enforce) would break resolution
+  of the `internal-*.elb.amazonaws.com` target. Uncommon, but worth a check; the
+  escape is a PHZ associated to the connector VPC (or a hosts entry) so the
+  connector never touches the public ELB name.
 
 **B2. `ClientIngressCidr` must be the App Connectors' source IPs**, not user or
 CGNAT ranges. Default `10.0.0.0/8` is simultaneously too broad (auditor
