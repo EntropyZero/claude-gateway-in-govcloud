@@ -65,7 +65,9 @@ cp scripts/deploy.env.example scripts/deploy.env   # fill in VPC, Okta, network 
 ./scripts/import-enterprise-cert.sh import claude-gateway.example.com leaf.pem key.pem chain.pem
 #    ^ writes CERTIFICATE_ARN back into deploy.env automatically
 
-# 2. Image (on a machine with egress + Docker)
+# 2. Image (on a machine with egress + Docker). Verification fails closed:
+#    supply Anthropic's release-signing key via ANTHROPIC_GPG_KEY, or
+#    explicitly accept TLS-only trust with ALLOW_UNVERIFIED_MANIFEST=1.
 ./client/mirror-claude-release.sh 2.1.207
 cp mirror/2.1.207/claude docker/claude
 ./scripts/build-and-push-image.sh          # writes IMAGE_URI back into deploy.env
@@ -90,7 +92,9 @@ endpoint, the ALB listener) travel as stack exports and never touch
 
 On a machine with egress, mirror a pinned release and its manifest with
 `client/mirror-claude-release.sh <version>` (downloads, checksum-verifies, and
-GPG-verifies when the signing key is supplied), and stage `claude.exe`
+GPG-verifies the manifest — verification **fails closed**: set
+`ANTHROPIC_GPG_KEY` to the release-signing public key, or deliberately
+override with `ALLOW_UNVERIFIED_MANIFEST=1`), and stage `claude.exe`
 (win32-x64) plus `CHECKSUMS.txt` on your file share. Then per laptop — **no
 admin rights required** — or via Intune/SCCM:
 

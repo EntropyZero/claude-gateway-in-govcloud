@@ -83,8 +83,14 @@ Conditions:
 Resources:
 
   # ------------------------------------------------------------------ AMP
+  # Retain: the workspace holds the full usage/cost history, and this stack
+  # must be deleted before most replacement-updates of the gateway stack's
+  # exported resources (see README "Teardown & update order") - without
+  # Retain that routine recovery step would destroy the metrics.
   Workspace:
     Type: AWS::APS::Workspace
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Alias: !Sub '${NamePrefix}-usage'
 
@@ -170,7 +176,8 @@ Resources:
                   - logs:PutLogEvents
                   - logs:DescribeLogStreams
                   - logs:PutRetentionPolicy
-                Resource: !Sub '${ActivityLogGroup.Arn}*'
+                # The log-group Arn attribute already ends in :* (covers streams).
+                Resource: !GetAtt ActivityLogGroup.Arn
 
   CollectorTaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -259,7 +266,7 @@ Resources:
       Cluster:
         Fn::ImportValue: !Sub '${NamePrefix}-cluster-arn'
       LaunchType: FARGATE
-      DesiredCount: 1
+      DesiredCount: !Ref CollectorDesiredCount
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: DISABLED

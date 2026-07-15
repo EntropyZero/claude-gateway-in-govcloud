@@ -10,26 +10,7 @@ SECRET_ARN="$(stack_output "$GATEWAY_STACK_NAME" OktaClientSecretArn)"
   exit 1
 }
 
-read -r -s -p "Okta client secret (input hidden): " OKTA_CLIENT_SECRET; echo
-[ -n "$OKTA_CLIENT_SECRET" ] || { echo "FATAL: empty secret" >&2; exit 1; }
-
-log "Updating ${SECRET_ARN}"
-aws secretsmanager put-secret-value \
-  --region "$AWS_REGION" \
-  --secret-id "$SECRET_ARN" \
-  --secret-string "$OKTA_CLIENT_SECRET" >/dev/null
-unset OKTA_CLIENT_SECRET
-
 CLUSTER="$(stack_output "$GATEWAY_STACK_NAME" ClusterName)"
 SERVICE="$(stack_output "$GATEWAY_STACK_NAME" ServiceName)"
 
-log "Forcing new deployment of ${SERVICE} on ${CLUSTER}"
-aws ecs update-service \
-  --region "$AWS_REGION" \
-  --cluster "$CLUSTER" \
-  --service "$SERVICE" \
-  --force-new-deployment \
-  --query 'service.deployments[0].{status:status,rolloutState:rolloutState}' \
-  --output table
-
-log "Watch rollout: aws ecs wait services-stable --region $AWS_REGION --cluster $CLUSTER --services $SERVICE"
+put_secret_and_roll "$SECRET_ARN" "$CLUSTER" "$SERVICE" "Okta client secret"

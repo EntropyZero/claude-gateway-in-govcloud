@@ -3,7 +3,9 @@
 # Bakes the AMP datasource and the Claude Code usage dashboard so the
 # container is fully provisioned at boot (no clicking, no persistent volume
 # needed for the provisioned content). Mirror the base image into your
-# internal registry for controlled networks:
+# internal registry for controlled networks, and pin by digest there
+# (GRAFANA_BASE_IMAGE=<registry>/grafana-oss@sha256:<digest> - a floating
+# tag is mutable upstream):
 #   docker pull grafana/grafana-oss:11.5.1
 #   docker build -t claude-gw-grafana:11.5.1 docker/grafana/
 ARG GRAFANA_BASE_IMAGE=grafana/grafana-oss:11.5.1

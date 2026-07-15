@@ -42,6 +42,9 @@ echo "==> Fetching manifest for ${VERSION}"
 curl -fsSL "${BASE_URL}/${VERSION}/manifest.json" -o "${OUT}/manifest.json"
 
 # --- GPG verification of the signed manifest --------------------------------
+# Fail closed: without GPG verification the whole pipeline trusts the
+# manifest on TLS alone. Override only deliberately, with
+# ALLOW_UNVERIFIED_MANIFEST=1.
 if curl -fsSL "${BASE_URL}/${VERSION}/manifest.json.sig" -o "${OUT}/manifest.json.sig" 2>/dev/null; then
   if [ -n "${ANTHROPIC_GPG_KEY:-}" ]; then
     echo "==> GPG-verifying manifest signature"
@@ -50,12 +53,22 @@ if curl -fsSL "${BASE_URL}/${VERSION}/manifest.json.sig" -o "${OUT}/manifest.jso
     gpg --quiet --import "$ANTHROPIC_GPG_KEY"
     gpg --verify "${OUT}/manifest.json.sig" "${OUT}/manifest.json"
     echo "    manifest signature OK"
+  elif [ "${ALLOW_UNVERIFIED_MANIFEST:-}" = "1" ]; then
+    echo "WARN: ANTHROPIC_GPG_KEY unset - manifest NOT verified (ALLOW_UNVERIFIED_MANIFEST=1)" >&2
   else
-    echo "WARN: manifest.json.sig downloaded but ANTHROPIC_GPG_KEY is unset - signature NOT verified" >&2
+    echo "FATAL: manifest.json.sig exists but ANTHROPIC_GPG_KEY is unset." >&2
+    echo "       Supply Anthropic's release-signing public key, or set" >&2
+    echo "       ALLOW_UNVERIFIED_MANIFEST=1 to accept TLS-only trust." >&2
+    exit 3
   fi
-else
-  echo "WARN: no manifest signature published at ${BASE_URL}/${VERSION}/manifest.json.sig" >&2
+elif [ "${ALLOW_UNVERIFIED_MANIFEST:-}" = "1" ]; then
+  echo "WARN: no manifest signature published - proceeding unverified (ALLOW_UNVERIFIED_MANIFEST=1)" >&2
   rm -f "${OUT}/manifest.json.sig"
+else
+  rm -f "${OUT}/manifest.json.sig"
+  echo "FATAL: no manifest signature published at ${BASE_URL}/${VERSION}/manifest.json.sig" >&2
+  echo "       Set ALLOW_UNVERIFIED_MANIFEST=1 to accept TLS-only trust." >&2
+  exit 3
 fi
 
 # --- Binaries ----------------------------------------------------------------

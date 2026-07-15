@@ -29,13 +29,20 @@ usage() { grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
 case "$CMD" in
   csr)
-    openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
-      -keyout "${FQDN}.key.pem" -out "${FQDN}.csr" \
-      -subj "/CN=${FQDN}" \
-      -addext "subjectAltName=DNS:${FQDN}" \
-      -addext "keyUsage=digitalSignature" \
-      -addext "extendedKeyUsage=serverAuth"
-    chmod 600 "${FQDN}.key.pem"
+    # umask before creation so the key is never briefly world-readable on a
+    # shared host - and remove any pre-existing key file first, because
+    # umask only governs NEW files (openssl overwriting an existing 644 key
+    # would keep its permissive mode).
+    (
+      umask 077
+      rm -f "${FQDN}.key.pem"
+      openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+        -keyout "${FQDN}.key.pem" -out "${FQDN}.csr" \
+        -subj "/CN=${FQDN}" \
+        -addext "subjectAltName=DNS:${FQDN}" \
+        -addext "keyUsage=digitalSignature" \
+        -addext "extendedKeyUsage=serverAuth"
+    )
     echo "CSR written to ${FQDN}.csr - submit to the enterprise CA."
     echo "SAN must be exactly: DNS:${FQDN} (the corporate CNAME, not the ALB name)."
     ;;

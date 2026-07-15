@@ -28,7 +28,11 @@ Parameters:
   DBEngineVersion:
     Type: String
     Default: '16.8'
-    Description: PostgreSQL engine version (gateway requires >= 14).
+    AllowedPattern: '^16\.[0-9]+$'
+    Description: >-
+      PostgreSQL engine version. Constrained to 16.x because the parameter
+      group family below is postgres16 - a different major version needs
+      both changed together.
 
   DBAllocatedStorage:
     Type: Number

@@ -249,6 +249,34 @@ Parameters:
       not offered there); note older models keep the dated -v1:0 ID format.
       Verify against the Bedrock console.
 
+# Fargate only accepts specific CPU/memory pairings; an invalid combo
+# otherwise surfaces as an opaque task-definition error mid-deploy.
+Rules:
+  FargateMemoryForCpu512:
+    RuleCondition: !Equals [!Ref TaskCpu, '512']
+    Assertions:
+      - Assert:
+          Fn::Contains: [['1024', '2048', '3072', '4096'], !Ref TaskMemory]
+        AssertDescription: With TaskCpu 512, TaskMemory must be 1024-4096 in 1024 steps.
+  FargateMemoryForCpu1024:
+    RuleCondition: !Equals [!Ref TaskCpu, '1024']
+    Assertions:
+      - Assert:
+          Fn::Contains: [['2048', '3072', '4096', '5120', '6144', '7168', '8192'], !Ref TaskMemory]
+        AssertDescription: With TaskCpu 1024, TaskMemory must be 2048-8192 in 1024 steps.
+  FargateMemoryForCpu2048:
+    RuleCondition: !Equals [!Ref TaskCpu, '2048']
+    Assertions:
+      - Assert:
+          Fn::Contains: [['4096', '5120', '6144', '7168', '8192', '9216', '10240', '11264', '12288', '13312', '14336', '15360', '16384'], !Ref TaskMemory]
+        AssertDescription: With TaskCpu 2048, TaskMemory must be 4096-16384 in 1024 steps.
+  FargateMemoryForCpu4096:
+    RuleCondition: !Equals [!Ref TaskCpu, '4096']
+    Assertions:
+      - Assert:
+          Fn::Contains: [['8192', '9216', '10240', '11264', '12288', '13312', '14336', '15360', '16384', '17408', '18432', '19456', '20480', '21504', '22528', '23552', '24576', '25600', '26624', '27648', '28672', '29696', '30720'], !Ref TaskMemory]
+        AssertDescription: With TaskCpu 4096, TaskMemory must be 8192-30720 in 1024 steps.
+
 Conditions:
   WantBedrockEndpoint: !Equals [!Ref CreateBedrockEndpoint, 'true']
   WantBedrockPrivateDns: !Equals [!Ref BedrockPrivateDns, 'true']

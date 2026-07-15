@@ -15,21 +15,9 @@ if [ ! -f "$BINARY" ]; then
   exit 1
 fi
 
-ACCOUNT="$(account_id)"
-REGISTRY="${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+ensure_ecr_repo "$ECR_REPO_NAME"
+REGISTRY="$(ecr_login)"
 IMAGE="${REGISTRY}/${ECR_REPO_NAME}:${CLAUDE_VERSION}"
-
-log "Ensuring ECR repository ${ECR_REPO_NAME} exists"
-aws ecr describe-repositories --region "$AWS_REGION" \
-    --repository-names "$ECR_REPO_NAME" >/dev/null 2>&1 || \
-  aws ecr create-repository --region "$AWS_REGION" \
-    --repository-name "$ECR_REPO_NAME" \
-    --image-scanning-configuration scanOnPush=true \
-    --image-tag-mutability IMMUTABLE >/dev/null
-
-log "Logging in to ${REGISTRY}"
-aws ecr get-login-password --region "$AWS_REGION" | \
-  docker login --username AWS --password-stdin "$REGISTRY"
 
 log "Building ${IMAGE}"
 docker build \

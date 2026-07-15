@@ -4,7 +4,9 @@
 # GPG-verified per the runbook (downloads.claude.ai/claude-code-releases/<ver>/):
 #   docker build -t claude-gateway:2.1.207 --build-arg CLAUDE_VERSION=2.1.207 .
 #
-# Mirror the base image into your internal registry for controlled networks.
+# Mirror the base image into your internal registry for controlled networks,
+# and pin it by digest there (FROM <registry>/debian@sha256:<digest>) so the
+# base can't change under you - a floating tag is mutable upstream.
 FROM debian:bookworm-slim
 
 ARG CLAUDE_VERSION=unknown

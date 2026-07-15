@@ -7,21 +7,14 @@ source "$(dirname "$0")/common.sh"
 GRAFANA_VERSION="${GRAFANA_VERSION:-11.5.1}"
 GRAFANA_BASE_IMAGE="${GRAFANA_BASE_IMAGE:-grafana/grafana-oss:${GRAFANA_VERSION}}"
 REPO_NAME="${GRAFANA_ECR_REPO_NAME:-claude-gw-grafana}"
+# The repo is tag-IMMUTABLE (this image bakes in the provisioned dashboard -
+# it must not be silently overwritten). When you change provisioning without
+# bumping Grafana, push under a new tag: GRAFANA_IMAGE_TAG=11.5.1-r2
+GRAFANA_IMAGE_TAG="${GRAFANA_IMAGE_TAG:-${GRAFANA_VERSION}}"
 
-ACCOUNT="$(account_id)"
-REGISTRY="${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-IMAGE="${REGISTRY}/${REPO_NAME}:${GRAFANA_VERSION}"
-
-log "Ensuring ECR repository ${REPO_NAME} exists"
-aws ecr describe-repositories --region "$AWS_REGION" \
-    --repository-names "$REPO_NAME" >/dev/null 2>&1 || \
-  aws ecr create-repository --region "$AWS_REGION" \
-    --repository-name "$REPO_NAME" \
-    --image-scanning-configuration scanOnPush=true >/dev/null
-
-log "Logging in to ${REGISTRY}"
-aws ecr get-login-password --region "$AWS_REGION" | \
-  docker login --username AWS --password-stdin "$REGISTRY"
+ensure_ecr_repo "$REPO_NAME"
+REGISTRY="$(ecr_login)"
+IMAGE="${REGISTRY}/${REPO_NAME}:${GRAFANA_IMAGE_TAG}"
 
 log "Building ${IMAGE} (base: ${GRAFANA_BASE_IMAGE})"
 docker build \
