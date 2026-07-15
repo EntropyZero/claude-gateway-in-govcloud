@@ -95,11 +95,49 @@ Parameters:
     MinValue: 1
     MaxValue: 24
 
+  AlbIdleTimeoutSeconds:
+    Type: Number
+    Default: 900
+    MinValue: 60
+    MaxValue: 4000
+    Description: >-
+      ALB idle timeout. Must comfortably exceed the longest silent gap in a
+      streaming inference response - an extended-thinking turn can go minutes
+      with no bytes on the wire, and the 60s ALB default truncates the stream
+      mid-response. Keep >= 300; 900 is a safe ceiling for long turns.
+
+  DeregistrationDelaySeconds:
+    Type: Number
+    Default: 300
+    MinValue: 0
+    MaxValue: 3600
+    Description: >-
+      Target-group drain time on every rolling deploy (config changes roll
+      the service). Trade-off: streams still open when a deploy starts are
+      cut after THIS long (not AlbIdleTimeoutSeconds), and the ALB always
+      waits the FULL delay before ECS stops the old task - so every deploy
+      takes this much longer per task wave. 300 protects most turns at +5
+      min per deploy; raise toward the idle timeout only if cut long turns
+      during deploys are unacceptable.
+
   CreateBedrockEndpoint:
     Type: String
     Default: 'true'
     AllowedValues: ['true', 'false']
     Description: Create a bedrock-runtime interface VPC endpoint so inference needs no NAT/IGW path.
+
+  BedrockPrivateDns:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Private DNS on the bedrock-runtime endpoint. Set false when a
+      centralized (shared-services) bedrock-runtime endpoint already
+      associates a private hosted zone with this VPC - creating a second
+      PrivateDnsEnabled endpoint for the same service fails the stack. Note
+      that with false, traffic follows the shared PHZ to the CENTRAL
+      endpoint, so apply the Claude-only endpoint policy there (see README
+      "VPC endpoints").
 
   CreateSupportingEndpoints:
     Type: String
@@ -213,6 +251,7 @@ Parameters:
 
 Conditions:
   WantBedrockEndpoint: !Equals [!Ref CreateBedrockEndpoint, 'true']
+  WantBedrockPrivateDns: !Equals [!Ref BedrockPrivateDns, 'true']
   WantSupportingEndpoints: !Equals [!Ref CreateSupportingEndpoints, 'true']
   WantAnyInterfaceEndpoint: !Or [!Condition WantBedrockEndpoint, !Condition WantSupportingEndpoints]
   WantS3Endpoint: !Not [!Equals [!Join ['', !Ref PrivateRouteTableIds], '']]
@@ -341,6 +380,10 @@ Resources:
           Value: 'true'
         - Key: routing.http.drop_invalid_header_fields.enabled
           Value: 'true'
+        # Streaming inference: a turn can stay silent for minutes; the 60s
+        # default idle timeout truncates the SSE stream mid-response.
+        - Key: idle_timeout.timeout_seconds
+          Value: !Ref AlbIdleTimeoutSeconds
         - Key: access_logs.s3.enabled
           Value: 'true'
         - Key: access_logs.s3.bucket
@@ -361,8 +404,10 @@ Resources:
       HealthyThresholdCount: 2
       UnhealthyThresholdCount: 3
       TargetGroupAttributes:
+        # See the DeregistrationDelaySeconds parameter for the drain/deploy
+        # trade-off (streams older than the delay are still cut on deploys).
         - Key: deregistration_delay.timeout_seconds
-          Value: '30'
+          Value: !Ref DeregistrationDelaySeconds
 
   HttpsListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -475,7 +520,10 @@ Resources:
               Value: info
             # Egress proxy for public endpoints (Okta). NO_PROXY keeps AWS
             # API calls on the VPC endpoints (Bedrock private DNS resolves
-            # under .amazonaws.com) and the database direct.
+            # under .amazonaws.com), the database direct, and the OTLP
+            # forward to the Cloud Map name (otel-collector.<prefix>.internal)
+            # off the proxy - the corporate proxy cannot resolve a private
+            # namespace, so without .internal all telemetry silently dies.
             - !If
               - HaveProxy
               - Name: HTTP_PROXY
@@ -489,7 +537,10 @@ Resources:
             - !If
               - HaveProxy
               - Name: NO_PROXY
-                Value: 'localhost,127.0.0.1,169.254.169.254,169.254.170.2,.amazonaws.com'
+                # Scoped to this stack's Cloud Map namespace, not bare
+                # .internal - corporate *.internal zones may legitimately
+                # need the proxy.
+                Value: !Sub 'localhost,127.0.0.1,169.254.169.254,169.254.170.2,.amazonaws.com,.${NamePrefix}.internal'
               - !Ref 'AWS::NoValue'
             - Name: PGHOST
               Value:
@@ -635,7 +686,7 @@ Resources:
       SubnetIds: !Ref PrivateSubnetIds
       SecurityGroupIds:
         - !Ref EndpointSecurityGroup
-      PrivateDnsEnabled: true
+      PrivateDnsEnabled: !If [WantBedrockPrivateDns, true, false]
       PolicyDocument:
         Version: '2012-10-17'
         Statement:

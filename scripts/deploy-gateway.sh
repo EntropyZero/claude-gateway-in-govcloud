@@ -30,11 +30,16 @@ aws cloudformation deploy \
       "GatewayFqdn=${GATEWAY_FQDN}" \
       "ContainerImage=${IMAGE_URI}" \
       "DesiredCount=${DESIRED_COUNT:-2}" \
+      "TaskCpu=${TASK_CPU:-1024}" \
+      "TaskMemory=${TASK_MEMORY:-2048}" \
       "OktaIssuer=${OKTA_ISSUER}" \
       "OktaClientId=${OKTA_CLIENT_ID}" \
       "AllowedEmailDomains=${ALLOWED_EMAIL_DOMAINS}" \
       "SessionTtlHours=${SESSION_TTL_HOURS:-1}" \
+      "AlbIdleTimeoutSeconds=${ALB_IDLE_TIMEOUT_SECONDS:-900}" \
+      "DeregistrationDelaySeconds=${DEREGISTRATION_DELAY_SECONDS:-300}" \
       "CreateBedrockEndpoint=${CREATE_BEDROCK_ENDPOINT:-true}" \
+      "BedrockPrivateDns=${BEDROCK_PRIVATE_DNS:-true}" \
       "CreateSupportingEndpoints=${CREATE_SUPPORTING_ENDPOINTS:-false}" \
       "PrivateRouteTableIds=${PRIVATE_ROUTE_TABLE_IDS:-}" \
       "HttpsProxyUrl=${HTTPS_PROXY_URL:-}" \

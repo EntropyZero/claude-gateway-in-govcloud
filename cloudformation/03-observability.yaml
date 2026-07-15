@@ -29,10 +29,24 @@ Parameters:
 
   CollectorImage:
     Type: String
-    Default: public.ecr.aws/aws-observability/aws-otel-collector:latest
+    AllowedPattern: '.+'
     Description: >-
-      ADOT collector image. For offline/controlled networks, mirror it into
-      your ECR and pass that URI (docker pull / tag / push).
+      ADOT collector image URI - mirror a pinned release into your ECR and
+      pass that URI (pin by digest, not tag, so upstream cannot swap the
+      image). No default on purpose: public.ecr.aws is unreachable from a
+      locked-down spoke, and :latest is a supply-chain risk. Example:
+      docker pull public.ecr.aws/aws-observability/aws-otel-collector:v0.43.0
+      then tag/push to <acct>.dkr.ecr.<region>.amazonaws.com and reference
+      the pushed image @sha256:<digest>.
+
+  CollectorDesiredCount:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    Description: >-
+      Collector task count. With 1, every collector redeploy is a telemetry
+      blackout (Cloud Map health FailureThreshold is 1); 2 keeps the OTLP
+      forward target resolvable through rollouts.
 
   GrafanaImage:
     Type: String
