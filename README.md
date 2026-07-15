@@ -23,28 +23,22 @@ be re-litigated — are in [Design decisions](#design-decisions) below.
 
 ## Layout
 
-```
-cloudformation/
-  01-database.yaml            RDS Postgres, managed master secret, client SG
-  02-gateway.yaml             ALB + TLS listener, ECS Fargate service, IAM,
-                              secrets, optional VPC endpoints (bedrock-runtime;
-                              ECR/logs/Secrets Manager/S3 for no-NAT VPCs)
-docker/
-  Dockerfile                  Container around the pinned, verified claude binary
-  entrypoint.sh               Renders gateway.yaml, assembles the Postgres URL
-client/
-  mirror-claude-release.sh    Egress-side: download + verify a pinned release
-  Install-ClaudeCode.ps1      Offline Windows install (Intune/SCCM or manual)
-scripts/
-  deploy.env.example          Per-environment parameters (copy to deploy.env)
-  import-enterprise-cert.sh   CSR generation + ACM import + fingerprint output
-  build-and-push-image.sh     Build the gateway image and push to ECR
-  deploy-database.sh          Deploy the database stack
-  deploy-gateway.sh           Deploy the gateway stack
-  set-okta-secret.sh          Set the real OIDC client secret + roll the service
-  stack-outputs.sh            Print both stacks' outputs
-  verify-gateway.sh           Post-deploy DNS / TLS / OAuth endpoint checks
-```
+| Path | Purpose |
+|---|---|
+| `cloudformation/01-database.yaml` | RDS PostgreSQL store, managed master secret, client security group |
+| `cloudformation/02-gateway.yaml` | ALB + TLS listener, ECS Fargate service, IAM, secrets, optional VPC endpoints, cert-expiry alarm, ALB access logs |
+| `docker/Dockerfile` | Container around the pinned, verified `claude` binary |
+| `docker/entrypoint.sh` | Renders `gateway.yaml`, assembles the Postgres URL |
+| `client/mirror-claude-release.sh` | Egress-side: download + verify a pinned release |
+| `client/Install-ClaudeCode.ps1` | Offline Windows install — non-admin, Intune/SCCM, or manual |
+| `scripts/deploy.env.example` | Per-environment parameters (copy to `deploy.env`) |
+| `scripts/import-enterprise-cert.sh` | CSR generation, ACM import, fingerprint output |
+| `scripts/build-and-push-image.sh` | Build the gateway image and push to ECR |
+| `scripts/deploy-database.sh` | Deploy the database stack |
+| `scripts/deploy-gateway.sh` | Deploy the gateway stack |
+| `scripts/set-okta-secret.sh` | Set the real OIDC client secret and roll the service |
+| `scripts/stack-outputs.sh` | Print both stacks' outputs |
+| `scripts/verify-gateway.sh` | Post-deploy DNS / TLS / OAuth endpoint checks |
 
 ## Quick start
 
