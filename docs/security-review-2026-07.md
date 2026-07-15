@@ -30,10 +30,28 @@ sections). Repo: `github.com/EntropyZero/claude-gateway-in-govcloud`, branch
   `deploy.env`** (cert ARN, image URIs, OTLP URL) via `set_env_var` in
   `common.sh`, so there are no manual copy-paste steps between runs.
 
-**Status of THIS review: findings only — NONE of the A/B/C/D fixes below have
-been applied.** The deployment functions for a NAT-equipped VPC; the batch-A
-items are what break in the strict landing-zone/ZPA profile. Everything below is
-open work.
+**Status as of 2026-07-15: batches A and D are APPLIED, batch B is
+documented (README "ZPA & landing-zone prerequisites" + script/installer
+changes), and C7 + C8 are IMPLEMENTED (Grafana Okta SSO + `GF_*`
+hardening).** The remaining open work is the rest of batch C — see "What
+remains" below. Line references in the findings predate the fixes (commit
+`30bb899`) and have drifted.
+
+**Decisions made (user, 2026-07-15):**
+1. **Client distribution is the precompiled native binary only** — the
+   Node/npm distribution is out of scope. B5 was re-scoped accordingly: the
+   README documents the enterprise-CA check for the native build, and the
+   installer gained `-ExtraCaCertPath` (writes `NODE_EXTRA_CA_CERTS`, which
+   the precompiled build honors) as the fallback if the Windows store isn't
+   consulted. Still verify once against the pinned version.
+2. **S3 Object Lock (C9) is DEFERRED** — revisit later if/when determined
+   necessary; not part of the hardening batch for now.
+3. **Grafana auth = Okta SSO (C7 Option 1)** — implemented: generic-OAuth
+   SSO against the same Okta issuer, strict Okta-group→role mapping, login
+   form disabled (break-glass `admin` behind `GRAFANA_DISABLE_LOGIN_FORM=false`),
+   new `<prefix>/grafana-oidc-client-secret` + `set-grafana-oidc-secret.sh`.
+   Option 3 (separate ZPA app segment for `/grafana`) is documented as a
+   client-side option, not code.
 
 **Corrections already folded in during review:**
 - B1 (App Connector DNS) was corrected: an internal ALB's
@@ -41,27 +59,52 @@ open work.
   (resolvable anywhere), so the only DNS requirement is that App Connectors
   resolve the **corporate CNAME**. See B1 for the one config case (in-VPC
   connectors) and the rebinding edge case.
-- C7 (Grafana) direction is settled: replace the single shared admin password
-  with per-user accounts — Okta SSO or provisioned Grafana users. Options are in
-  the C7 finding below.
 
-**Pending decisions (need the user):**
-1. **Grafana auth model** — Okta SSO (Option 1) vs. provisioned Grafana users
-   (Option 2); do the network-narrowing (Option 3) either way. See C7.
-2. **Batch sequencing** — recommended: apply A + D (unambiguous bugs) first,
-   turn B into a README "ZPA & landing-zone prerequisites" section, then scope C
-   (CMK/TLS/pgaudit/Object Lock/Grafana auth) against the client's ATO boundary
-   and SSP control baseline.
+**Self-review of the fix batch (2026-07-15, multi-agent review of the diff)**
+surfaced and fixed several issues in the fixes themselves:
+- Grafana SSO had no egress-proxy plumbing — in a proxy-mandated landing
+  zone the Okta token exchange would time out with the login form disabled
+  (total lockout). 03 now takes `HttpsProxyUrl` (same value as the gateway).
+- 03's `OktaIssuer` now has `AllowedPattern: ^https://.+/oauth2/.+$` — the
+  gateway accepts the org-server issuer but Grafana's derived
+  `<issuer>/v1/...` URLs 404 on it; this fails at deploy instead of first login.
+- The deploy-gateway.sh telemetry guard now only clears
+  `OBSERVABILITY_OTLP_URL` on a definitive missing/never-came-up stack
+  (incl. `ROLLBACK_COMPLETE`); any other describe-stacks failure
+  (permissions/throttle/expired creds) is fatal instead of silently
+  disabling forwarding fleet-wide.
+- `DeregistrationDelaySeconds` is now a parameter with the honest trade-off
+  documented (full delay is always waited → +5 min per deploy; streams
+  older than the delay are still cut on deploys).
+- `NO_PROXY` scoped to `.${NamePrefix}.internal` (bare `.internal` would
+  bypass the proxy for corporate `*.internal` zones).
+- `TASK_CPU`/`TASK_MEMORY` plumbed through deploy.env/deploy-gateway.sh
+  (the D7 Rules were otherwise unreachable via the repo's own tooling).
+- ECR immutability is back-filled onto pre-existing repos
+  (`put-image-tag-mutability` runs every time, not just at create).
+- verify-gateway.sh now cross-checks the served cert's SHA-256 against the
+  ACM-imported cert when credentials allow — catches ZIA inspection signed
+  by a corporate intermediate that the `zscaler` issuer heuristic misses.
+- Installer: `-WhatIf` no longer breaks on the staging copy (binary phase
+  is described and skipped); elevated interactive runs get a profile-owner
+  warning; `csr` key generation removes a pre-existing key file (umask
+  doesn't fix modes on overwrite).
+- Dedup: `put_secret_and_roll` + `ensure_ecr_repo`/`ecr_login` helpers in
+  common.sh; `OBS_STACK_NAME` centralized in deploy.env; CGNAT regex
+  hoisted in verify-gateway.sh; `GrafanaServiceName` output uses
+  `!GetAtt GrafanaService.Name`.
+- README documents the mirror script's fail-closed GPG behavior
+  (`ANTHROPIC_GPG_KEY` / `ALLOW_UNVERIFIED_MANIFEST=1`).
 
-**Recommended first actions for the next session:**
-- Apply batch A (will-break-on-deploy) and batch D (quick correctness bugs).
-- Draft the README "ZPA & landing-zone prerequisites" section from batch B
-  (App Connector DNS rule, `ClientIngressCidr` = connector source IPs, central
-  inspection allowlist, Intune SYSTEM-context install caveat, `NODE_EXTRA_CA_CERTS`
-  check, verify-from-connector note).
-- Confirm the Grafana auth decision, then implement C7 + C8 together (auth +
-  `GF_*` hardening + Grafana persistence, since provisioned/SSO users need a
-  durable store — RDS or EFS — or SSO to sidestep it).
+**What remains (open work):**
+- **Batch C except C7/C8/C9**: C1 CMKs, C2 internal TLS, C3 RDS
+  `verify-full`, C4 pgaudit, C5 endpoint policies, C6 IAM/endpoint model
+  scoping, C10 SG egress scoping, C11 secret rotation schedules. Scope
+  against the client's ATO boundary and SSP baseline before implementing.
+- Deploy-time verification of the applied fixes (nothing has been deployed
+  since the changes): fresh `deploy-database.sh` → `deploy-gateway.sh` →
+  observability chain in a test account, plus the Grafana Okta login flow
+  end-to-end (custom auth server with `groups` claim + redirect URI).
 
 **Also-durable context** lives in project memory
 (`claude-gateway-project-context.md`): client template (never hardcode
@@ -87,16 +130,22 @@ Line references are as of commit `30bb899` and may drift as fixes land.
 
 ## Triage summary
 
-| Batch | Theme | Recommended handling |
+| Batch | Theme | Status |
 |---|---|---|
-| **A** | Will break on first deploy in this exact profile | Fix before ship — unambiguous |
-| **B** | ZPA / landing-zone operational prerequisites | Document as prerequisites; some code |
-| **C** | FedRAMP High / IL4-5 compliance posture | Deliberate hardening batch; ATO-boundary decisions |
-| **D** | Cross-stack trap + quick correctness bugs | Fix — low risk |
+| **A** | Will break on first deploy in this exact profile | ✅ Applied 2026-07-15 |
+| **B** | ZPA / landing-zone operational prerequisites | ✅ Documented (README section) + script/installer changes |
+| **C** | FedRAMP High / IL4-5 compliance posture | C7+C8 ✅ implemented; C9 deferred (user decision); rest open |
+| **D** | Cross-stack trap + quick correctness bugs | ✅ Applied 2026-07-15 |
 
 ---
 
 ## A. Will break on first deploy
+
+> **Status: all applied 2026-07-15.** A1 → `AlbIdleTimeoutSeconds` param
+> (default 900) + deregistration delay 300; A2 → `.internal` in `NO_PROXY`;
+> A3 → `BedrockPrivateDns` param + README centralized-endpoints coverage;
+> A4 → landing-zone decision trees in `deploy.env.example` + README; A5 →
+> `CollectorImage` now required (mirror to ECR, pin by digest).
 
 **A1. ALB idle timeout unset (60s default) → streaming inference truncates.**
 `cloudformation/02-gateway.yaml` `LoadBalancerAttributes` sets deletion
@@ -142,6 +191,14 @@ mirroring to ECR mandatory.
 ---
 
 ## B. ZPA / landing-zone operational prerequisites
+
+> **Status: addressed 2026-07-15.** B1/B2/B6/B7/B8/B9 → README
+> "ZPA & landing-zone prerequisites" section; B2 also in
+> `deploy.env.example` comments; B3 → verify-gateway.sh ZPA caveats +
+> synthetic-answer note + hard FAIL on a Zscaler-issued cert; B4 →
+> installer refuses SYSTEM binary installs, new `-SettingsOnly` two-phase
+> mode + README; B5 → re-scoped to the precompiled binary (user decision),
+> README note + installer `-ExtraCaCertPath` → `NODE_EXTRA_CA_CERTS`.
 
 **B1. DNS resolves at the App Connector, not the laptop.** With ZPA, Client
 Connector answers the app-segment FQDN with a synthetic 100.64/10 IP; the real
@@ -218,6 +275,12 @@ the gateway segment.
 ---
 
 ## C. FedRAMP High / IL4-5 compliance posture
+
+> **Status:** C7 implemented as Option 1 (Okta SSO, strict group→role
+> mapping, login form off, break-glass admin retained) and C8 implemented
+> (gravatar off, secure cookies, anonymous/sign-up off, session lifetimes,
+> external snapshots off). C9 **deferred** by user decision (2026-07-15).
+> C1–C6, C10, C11 remain open pending ATO-boundary scoping.
 
 **C1. No customer-managed KMS keys anywhere.** RDS (`StorageEncrypted: true`,
 no `KmsKeyId`), Secrets Manager (RDS master, Okta, JWT, Grafana admin secrets),
@@ -317,6 +380,16 @@ runbook.
 
 ## D. Cross-stack trap + quick correctness bugs
 
+> **Status: all applied 2026-07-15.** D1 → AMP `Retain` + README
+> "Teardown & update order"; D2 → version pattern-constrained to 16.x;
+> D3 → `file://` temp file (same pattern in the new Grafana secret
+> script); D4 → local staging copy + optional `-SignerThumbprint` + CN
+> anchor; D5 → fail-closed (`ALLOW_UNVERIFIED_MANIFEST=1` override);
+> D6 → `CollectorDesiredCount` default 2; D7 → CFN `Rules` assertions;
+> D8 → deploy-gateway.sh guard + README; D9 → IMMUTABLE +
+> `GRAFANA_IMAGE_TAG`; D10 → bare `GetAtt Arn`; D11 → digest-pinning
+> guidance in both Dockerfiles; D12 → `umask 077` subshell.
+
 **D1. 02↔03 cross-stack export lock + AMP workspace deletion.** The gateway
 stack exports `svc-sg`, `alb-sg`, `https-listener`, `cluster-arn`, all imported
 by the observability stack. While 03 exists, any 02 update that *replaces* one
@@ -374,9 +447,11 @@ ADOT images.
 
 ## Recommended sequencing
 
-1. **A + D now** — unambiguous bugs/breakage, low risk.
-2. **B** — a "ZPA & landing-zone prerequisites" README section (mostly docs;
-   `ClientIngressCidr` guidance and the verify-script caveats are code/comment).
-3. **C** — a deliberate compliance-hardening batch (CMKs, end-to-end TLS,
-   Grafana SSO/accounts, pgaudit, Object Lock), scoped against the client's ATO
-   boundary and SSP control baseline.
+1. ~~**A + D now**~~ — ✅ done 2026-07-15.
+2. ~~**B** — README "ZPA & landing-zone prerequisites" section~~ — ✅ done
+   2026-07-15 (plus verify-script and installer code changes).
+3. **C** — the remaining compliance-hardening batch (CMKs, end-to-end TLS,
+   RDS `verify-full`, pgaudit, endpoint policies, IAM model scoping, SG
+   egress, secret rotation), scoped against the client's ATO boundary and
+   SSP control baseline. Grafana SSO/hardening ✅ done; Object Lock
+   deferred by user decision.
