@@ -63,6 +63,71 @@ Parameters:
       queries to AMP stay off the NAT/TGW path. Recommended alongside
       CreateSupportingEndpoints in no-NAT VPCs.
 
+  # ----- Grafana auth: Okta SSO (per-user accounts, no shared admin) -----
+  OktaIssuer:
+    Type: String
+    # The gateway accepts the org-server issuer (userinfo_fallback), but
+    # Grafana derives its OAuth URLs as <issuer>/v1/... - the custom-auth-
+    # server layout. Enforce the /oauth2/ path here so the mismatch fails at
+    # deploy time, not as a 404 at first login with the login form disabled.
+    AllowedPattern: '^https://.+/oauth2/.+$'
+    ConstraintDescription: >-
+      Must be a custom Okta authorization server URL, e.g.
+      https://your-org.okta.com/oauth2/default (the org-server issuer form
+      https://your-org.okta.com does not work for Grafana SSO).
+    Description: >-
+      Okta issuer for Grafana SSO - usually the same value as the gateway
+      stack's OktaIssuer, but it MUST be a custom authorization server
+      (https://your-org.okta.com/oauth2/default): Grafana's OAuth endpoint
+      URLs are derived as <issuer>/v1/authorize|token|userinfo, and the
+      groups claim used for role mapping is configured on the auth server.
+      Register the extra redirect URI
+      https://<GatewayFqdn>/grafana/login/generic_oauth on the Okta app.
+
+  HttpsProxyUrl:
+    Type: String
+    Default: ''
+    Description: >-
+      Same meaning as the gateway stack's HttpsProxyUrl, for the Grafana
+      task: its server-side OAuth calls to the Okta token/userinfo
+      endpoints are public egress, so in a proxy-mandated landing zone
+      Grafana needs the proxy too or SSO logins time out at the code
+      exchange. AWS API traffic (AMP queries) stays direct via NO_PROXY.
+
+  GrafanaOktaClientId:
+    Type: String
+    Description: >-
+      Okta OIDC client ID for Grafana. Reusing the gateway's Okta app (add
+      the /grafana/login/generic_oauth redirect URI to it) is fine; a
+      dedicated app gives independent secrets/offboarding.
+
+  GrafanaAdminGroup:
+    Type: String
+    Default: grafana-admins
+    Description: Okta group granted the Grafana Admin role.
+
+  GrafanaEditorGroup:
+    Type: String
+    Default: ''
+    Description: Optional Okta group granted the Editor role. Empty = no Editor mapping.
+
+  GrafanaViewerGroup:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional Okta group granted the Viewer role. Empty = no Viewer
+      mapping. Role mapping is STRICT - an Okta user in none of these
+      groups is denied login even after Okta authenticates them.
+
+  GrafanaDisableLoginForm:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Remove the username/password form so Okta SSO is the only login path.
+      Set false temporarily for break-glass access with the provisioned
+      'admin' account (password in Secrets Manager).
+
   ActivityLogWindowDays:
     Type: Number
     Default: 14
@@ -79,6 +144,7 @@ Parameters:
 
 Conditions:
   WantAmpEndpoint: !Equals [!Ref CreateAmpEndpoint, 'true']
+  HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
 
 Resources:
 
@@ -404,10 +470,22 @@ Resources:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub '${NamePrefix}/grafana-admin-password'
-      Description: Grafana admin password (user 'admin').
+      Description: >-
+        Grafana 'admin' password - BREAK-GLASS ONLY. Day-to-day access is
+        per-user Okta SSO; the login form is disabled unless
+        GrafanaDisableLoginForm=false.
       GenerateSecretString:
         PasswordLength: 24
         ExcludePunctuation: true
+
+  GrafanaOidcClientSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/grafana-oidc-client-secret'
+      Description: >-
+        Okta OIDC client secret for Grafana SSO. Placeholder at creation -
+        set the real value with scripts/set-grafana-oidc-secret.sh.
+      SecretString: 'REPLACE-ME-run-scripts-set-grafana-oidc-secret.sh'
 
   GrafanaLogGroup:
     Type: AWS::Logs::LogGroup
@@ -428,13 +506,15 @@ Resources:
       ManagedPolicyArns:
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
       Policies:
-        - PolicyName: read-admin-secret
+        - PolicyName: read-grafana-secrets
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource: !Ref GrafanaAdminSecret
+                Resource:
+                  - !Ref GrafanaAdminSecret
+                  - !Ref GrafanaOidcClientSecret
 
   GrafanaTaskRole:
     Type: AWS::IAM::Role
@@ -486,6 +566,23 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: grafana
           Environment:
+            # Egress proxy for Okta (token/userinfo calls). NO_PROXY keeps
+            # AMP queries on the AWS path, mirroring the gateway task.
+            - !If
+              - HaveProxy
+              - Name: HTTP_PROXY
+                Value: !Ref HttpsProxyUrl
+              - !Ref 'AWS::NoValue'
+            - !If
+              - HaveProxy
+              - Name: HTTPS_PROXY
+                Value: !Ref HttpsProxyUrl
+              - !Ref 'AWS::NoValue'
+            - !If
+              - HaveProxy
+              - Name: NO_PROXY
+                Value: 'localhost,127.0.0.1,169.254.169.254,169.254.170.2,.amazonaws.com'
+              - !Ref 'AWS::NoValue'
             - Name: GF_SERVER_ROOT_URL
               Value: !Sub 'https://${GatewayFqdn}/grafana'
             - Name: GF_SERVER_SERVE_FROM_SUB_PATH
@@ -496,6 +593,61 @@ Resources:
               Value: 'false'
             - Name: GF_ANALYTICS_CHECK_FOR_UPDATES
               Value: 'false'
+            # ---- Okta SSO (generic OAuth). Per-user accounts with real
+            # identity; access = Okta group membership, offboarding is
+            # automatic. Identity is authoritative in Okta, so the lack of a
+            # persistent Grafana volume only loses org-role tweaks made by
+            # hand - users and roles re-materialize at next login.
+            - Name: GF_AUTH_GENERIC_OAUTH_ENABLED
+              Value: 'true'
+            - Name: GF_AUTH_GENERIC_OAUTH_NAME
+              Value: Okta
+            - Name: GF_AUTH_GENERIC_OAUTH_CLIENT_ID
+              Value: !Ref GrafanaOktaClientId
+            - Name: GF_AUTH_GENERIC_OAUTH_SCOPES
+              Value: openid profile email groups
+            - Name: GF_AUTH_GENERIC_OAUTH_AUTH_URL
+              Value: !Sub '${OktaIssuer}/v1/authorize'
+            - Name: GF_AUTH_GENERIC_OAUTH_TOKEN_URL
+              Value: !Sub '${OktaIssuer}/v1/token'
+            - Name: GF_AUTH_GENERIC_OAUTH_API_URL
+              Value: !Sub '${OktaIssuer}/v1/userinfo'
+            - Name: GF_AUTH_GENERIC_OAUTH_USE_PKCE
+              Value: 'true'
+            # First Okta login creates the Grafana user (this is the OAuth
+            # sign-up switch, distinct from GF_USERS_ALLOW_SIGN_UP below).
+            - Name: GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP
+              Value: 'true'
+            # Okta group -> Grafana role. STRICT: no matching group, no login.
+            - Name: GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH
+              Value: !Sub >-
+                contains(groups[*], '${GrafanaAdminGroup}') && 'Admin' ||
+                contains(groups[*], '${GrafanaEditorGroup}') && 'Editor' ||
+                contains(groups[*], '${GrafanaViewerGroup}') && 'Viewer'
+            - Name: GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_STRICT
+              Value: 'true'
+            # SSO-only by default; 'false' re-enables the break-glass admin form.
+            - Name: GF_AUTH_DISABLE_LOGIN_FORM
+              Value: !Ref GrafanaDisableLoginForm
+            # ---- Hardening
+            - Name: GF_AUTH_ANONYMOUS_ENABLED
+              Value: 'false'
+            - Name: GF_USERS_ALLOW_SIGN_UP
+              Value: 'false'
+            # Gravatar phones home to gravatar.com with hashed user emails -
+            # an egress dependency and a PII leak in a controlled network.
+            - Name: GF_SECURITY_DISABLE_GRAVATAR
+              Value: 'true'
+            # TLS terminates at the ALB, so Grafana can't infer https itself.
+            - Name: GF_SECURITY_COOKIE_SECURE
+              Value: 'true'
+            - Name: GF_AUTH_LOGIN_MAXIMUM_INACTIVE_LIFETIME_DURATION
+              Value: 8h
+            - Name: GF_AUTH_LOGIN_MAXIMUM_LIFETIME_DURATION
+              Value: 24h
+            # External snapshots publish dashboard data to snapshots.raintank.io.
+            - Name: GF_SNAPSHOTS_EXTERNAL_ENABLED
+              Value: 'false'
             # Consumed by the provisioned AMP datasource (docker/grafana).
             - Name: AMP_QUERY_URL
               Value: !GetAtt Workspace.PrometheusEndpoint
@@ -504,6 +656,8 @@ Resources:
           Secrets:
             - Name: GF_SECURITY_ADMIN_PASSWORD
               ValueFrom: !Ref GrafanaAdminSecret
+            - Name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+              ValueFrom: !Ref GrafanaOidcClientSecret
 
   GrafanaTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -595,9 +749,19 @@ Outputs:
       (then redeploy 02 - ECS rolls the service automatically).
     Value: !Sub 'http://otel-collector.${NamePrefix}.internal:4318'
   GrafanaUrl:
-    Description: 'Dashboard URL (log in as admin; password in Secrets Manager).'
+    Description: Dashboard URL - sign in with Okta (role from Okta group membership).
     Value: !Sub 'https://${GatewayFqdn}/grafana'
+  GrafanaOidcRedirectUri:
+    Description: Register this redirect URI on the Okta app used for Grafana.
+    Value: !Sub 'https://${GatewayFqdn}/grafana/login/generic_oauth'
+  GrafanaOidcSecretArn:
+    Description: 'Set the real client secret: scripts/set-grafana-oidc-secret.sh'
+    Value: !Ref GrafanaOidcClientSecret
+  GrafanaServiceName:
+    Description: ECS service name (set-grafana-oidc-secret.sh rolls it after a secret change).
+    Value: !GetAtt GrafanaService.Name
   GrafanaAdminSecretArn:
+    Description: Break-glass local admin password (login form disabled unless GrafanaDisableLoginForm=false).
     Value: !Ref GrafanaAdminSecret
   ActivityLogGroupName:
     Description: >-

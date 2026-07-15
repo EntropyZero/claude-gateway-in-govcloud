@@ -41,6 +41,7 @@ be re-litigated — are in [Design decisions](#design-decisions) below.
 | `scripts/deploy-database.sh` | Deploy the database stack |
 | `scripts/deploy-gateway.sh` | Deploy the gateway stack |
 | `scripts/set-okta-secret.sh` | Set the real OIDC client secret and roll the service |
+| `scripts/set-grafana-oidc-secret.sh` | Set Grafana's Okta client secret and roll Grafana |
 | `scripts/stack-outputs.sh` | Print both stacks' outputs |
 | `scripts/verify-gateway.sh` | Post-deploy DNS / TLS / OAuth endpoint checks |
 
@@ -342,11 +343,15 @@ attributes: deploy them per fleet with the installer's `-CostCenter` /
 settings). The collector drops `session.id` to keep Prometheus cardinality
 bounded, and AMP retains metrics 150 days.
 
-Deploy order:
+Deploy order (see [Teardown & update order](#teardown--update-order) for why
+the gateway redeploy comes last):
 
 ```bash
+# One-time: mirror a pinned ADOT collector release into ECR and set
+# COLLECTOR_IMAGE (by digest) in deploy.env - there is no public default.
 ./scripts/build-and-push-grafana.sh        # image → ECR; writes GRAFANA_IMAGE to deploy.env
 ./scripts/deploy-observability.sh          # AMP + collector + Grafana; writes OBSERVABILITY_OTLP_URL
+./scripts/set-grafana-oidc-secret.sh       # Okta client secret for Grafana SSO
 ./scripts/deploy-gateway.sh                # picks up OBSERVABILITY_OTLP_URL, starts forwarding
 ```
 
@@ -370,13 +375,27 @@ and consider a customer-managed KMS key and SIEM subscription where policy
 requires it.
 
 Dashboard: `https://<GatewayFqdn>/grafana` (path-routed on the existing ALB
-and cert; user `admin`, password in Secrets Manager under
-`<NamePrefix>/grafana-admin-password`). The provisioned "Claude Code — Usage
-& Cost" dashboard has cost/tokens/sessions/active-users stats, cost by team,
-cost center, and Okta group, tokens by model and type, top users by cost,
-and lines-of-code/commit panels. For controlled networks, mirror the ADOT
-collector and Grafana base images into ECR (`COLLECTOR_IMAGE`,
-`GRAFANA_BASE_IMAGE`). Amazon Managed Grafana exists in GovCloud but has no
+and cert). **Sign-in is Okta SSO** — the same issuer as the gateway (a
+custom authorization server with a `groups` claim), with the extra redirect
+URI `https://<GatewayFqdn>/grafana/login/generic_oauth` registered on the
+Okta app. Grafana roles map from Okta groups (`GRAFANA_ADMIN_GROUP` →
+Admin, optional Editor/Viewer groups) and the mapping is **strict**: an
+Okta user in none of the groups is denied login. Access and offboarding are
+therefore Okta group membership; no shared credentials. The username/
+password form is disabled by default — the provisioned `admin` account
+(password in Secrets Manager under `<NamePrefix>/grafana-admin-password`)
+is break-glass only, reachable by redeploying with
+`GRAFANA_DISABLE_LOGIN_FORM=false`. Because identity is authoritative in
+Okta, Grafana's lack of a persistent volume only affects hand-made org-role
+tweaks (users re-materialize on next login; the dashboard and datasource
+are baked into the image).
+
+The provisioned "Claude Code — Usage & Cost" dashboard has
+cost/tokens/sessions/active-users stats, cost by team, cost center, and
+Okta group, tokens by model and type, top users by cost, and
+lines-of-code/commit panels. Mirror the ADOT collector (required —
+`COLLECTOR_IMAGE`, pin by digest) and Grafana base (`GRAFANA_BASE_IMAGE`)
+images into ECR. Amazon Managed Grafana exists in GovCloud but has no
 CloudFormation support, so the stack self-hosts Grafana OSS on the existing
 ECS cluster to stay fully code-driven — swap to AMG manually if preferred,
 pointing it at the same AMP workspace.
@@ -476,6 +495,13 @@ and then works through:
    confirm with `claude doctor` that the managed settings are picked up.
 7. Publish the certificate's SHA-256 fingerprint to developers (first-connect
    pinning prompt).
-8. Optional: deploy the observability stack, set `OBSERVABILITY_OTLP_URL`,
-   and decide the fleet's `-CostCenter`/`-Team` values for the installer so
-   the dashboard's grouping labels are populated from day one.
+8. Optional: deploy the observability stack (mirror the ADOT collector
+   image first; `OBSERVABILITY_OTLP_URL` persists automatically). For
+   Grafana SSO: create the `GRAFANA_ADMIN_GROUP` (and Editor/Viewer) groups
+   in Okta, add the `GrafanaOidcRedirectUri` output to the Okta app, set
+   `GRAFANA_OKTA_CLIENT_ID`, and run `scripts/set-grafana-oidc-secret.sh`.
+   Decide the fleet's `-CostCenter`/`-Team` values for the installer so the
+   dashboard's grouping labels are populated from day one.
+9. Walk the [ZPA & landing-zone prerequisites](#zpa--landing-zone-prerequisites)
+   checklist with the network/Zscaler teams (connector DNS, connector
+   source CIDRs, inspection allowlist, UNC app segment).
