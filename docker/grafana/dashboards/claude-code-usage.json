@@ -1,0 +1,226 @@
+{
+  "uid": "claude-code-usage",
+  "title": "Claude Code — Usage & Cost",
+  "description": "Usage and cost for Claude Code through the apps gateway. Group by Okta group (user_groups, stamped by the gateway JWT), team, or cost_center (workstation OTEL_RESOURCE_ATTRIBUTES).",
+  "schemaVersion": 39,
+  "editable": true,
+  "timezone": "browser",
+  "time": { "from": "now-7d", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "team",
+        "label": "Team",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "amp" },
+        "query": "label_values(claude_code_cost_usage, team)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 2
+      },
+      {
+        "name": "cost_center",
+        "label": "Cost center",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "amp" },
+        "query": "label_values(claude_code_cost_usage, cost_center)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 2
+      },
+      {
+        "name": "okta_group",
+        "label": "Okta group",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "amp" },
+        "query": "label_values(claude_code_cost_usage, user_groups)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Cost (selected range)",
+      "datasource": { "type": "prometheus", "uid": "amp" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]))"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Tokens (selected range)",
+      "datasource": { "type": "prometheus", "uid": "amp" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]))"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Sessions (selected range)",
+      "datasource": { "type": "prometheus", "uid": "amp" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(claude_code_session_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]))"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Active users (24h)",
+      "datasource": { "type": "prometheus", "uid": "amp" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(sum by (user_email) (increase(claude_code_session_count[24h])) > 0)"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Cost by team",
+      "datasource": { "type": "prometheus", "uid": "amp" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (team) (increase(claude_code_cost_usage{team=~\"$team\"}[1h]))",
+          "legendFormat": "{{team}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Cost by cost center",
+      "datasource": { "type": "prometheus", "uid": "amp" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (cost_center) (increase(claude_code_cost_usage{cost_center=~\"$cost_center\"}[1h]))",
+          "legendFormat": "{{cost_center}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Cost by Okta group",
+      "datasource": { "type": "prometheus", "uid": "amp" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (user_groups) (increase(claude_code_cost_usage{user_groups=~\"$okta_group\"}[1h]))",
+          "legendFormat": "{{user_groups}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Tokens by model",
+      "datasource": { "type": "prometheus", "uid": "amp" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model) (increase(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\"}[1h]))",
+          "legendFormat": "{{model}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Tokens by type (input / output / cache)",
+      "datasource": { "type": "prometheus", "uid": "amp" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (type) (increase(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\"}[1h]))",
+          "legendFormat": "{{type}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Top users by cost (selected range)",
+      "datasource": { "type": "prometheus", "uid": "amp" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2 }, "overrides": [] },
+      "options": { "sortBy": [{ "displayName": "Value", "desc": true }] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, sum by (user_email, team, cost_center) (increase(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Lines of code changed",
+      "datasource": { "type": "prometheus", "uid": "amp" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (team) (increase(claude_code_lines_of_code_count{team=~\"$team\"}[1h]))",
+          "legendFormat": "{{team}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Commits created",
+      "datasource": { "type": "prometheus", "uid": "amp" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (team) (increase(claude_code_commit_count{team=~\"$team\"}[1h]))",
+          "legendFormat": "{{team}}"
+        }
+      ]
+    }
+  ]
+}

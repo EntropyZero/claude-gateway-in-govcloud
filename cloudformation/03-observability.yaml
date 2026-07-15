@@ -1,0 +1,588 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Usage/cost observability for the Claude apps gateway: an Amazon Managed
+  Service for Prometheus (AMP) workspace, an ADOT collector that receives
+  the gateway's forwarded OTLP telemetry and remote-writes it to AMP, and a
+  Grafana instance (behind the existing ALB at /grafana) with a provisioned
+  usage-and-cost dashboard. Deploy after 02-gateway.yaml (same NamePrefix),
+  then set ObservabilityOtlpUrl on the gateway stack to this stack's
+  OtlpForwardUrl output.
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: claude-gw
+    Description: Must match the NamePrefix used by 01/02 (cross-stack imports).
+    AllowedPattern: '[a-z][a-z0-9-]{1,20}'
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets for the collector and Grafana tasks.
+
+  GatewayFqdn:
+    Type: String
+    Description: The corporate CNAME (Grafana is served at https://<GatewayFqdn>/grafana).
+    AllowedPattern: '^[a-z0-9.-]+\.[a-z]{2,}$'
+
+  CollectorImage:
+    Type: String
+    Default: public.ecr.aws/aws-observability/aws-otel-collector:latest
+    Description: >-
+      ADOT collector image. For offline/controlled networks, mirror it into
+      your ECR and pass that URI (docker pull / tag / push).
+
+  GrafanaImage:
+    Type: String
+    Description: >-
+      Grafana image built from docker/grafana/ (bakes the AMP datasource and
+      the Claude Code usage dashboard), pushed to your ECR.
+
+  CreateAmpEndpoint:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Create an aps-workspaces interface VPC endpoint so remote-write and
+      queries to AMP stay off the NAT/TGW path. Recommended alongside
+      CreateSupportingEndpoints in no-NAT VPCs.
+
+  ActivityLogWindowDays:
+    Type: Number
+    Default: 14
+    MinValue: 1
+    Description: >-
+      CloudWatch retention for the activity-log stream (the short
+      operational window). The durable copy lives in the S3 archive.
+
+  ActivityArchiveRetentionDays:
+    Type: Number
+    Default: 731
+    MinValue: 1
+    Description: Days to keep activity logs in the S3 archive before expiry.
+
+Conditions:
+  WantAmpEndpoint: !Equals [!Ref CreateAmpEndpoint, 'true']
+
+Resources:
+
+  # ------------------------------------------------------------------ AMP
+  Workspace:
+    Type: AWS::APS::Workspace
+    Properties:
+      Alias: !Sub '${NamePrefix}-usage'
+
+  # ------------------------------------------------- service discovery
+  # Deterministic private DNS so the gateway's telemetry.forward_to URL is
+  # known before this stack exists: http://otel-collector.<prefix>.internal:4318
+  Namespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: !Sub '${NamePrefix}.internal'
+      Vpc: !Ref VpcId
+
+  CollectorDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: otel-collector
+      NamespaceId: !Ref Namespace
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: 10
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+
+  # ------------------------------------------------------------ collector
+  CollectorSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} - OTLP collector'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 4317
+          ToPort: 4318
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub '${NamePrefix}-svc-sg'
+          Description: OTLP (grpc/http) from gateway tasks
+
+  CollectorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${NamePrefix}-otel'
+      RetentionInDays: 90
+
+  CollectorExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-otel-execution'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+
+  CollectorTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-otel-task'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: amp-remote-write
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: aps:RemoteWrite
+                Resource: !GetAtt Workspace.Arn
+        - PolicyName: activity-log-write
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                  - logs:PutRetentionPolicy
+                Resource: !Sub '${ActivityLogGroup.Arn}*'
+
+  CollectorTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${NamePrefix}-otel'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '512'
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt CollectorExecutionRole.Arn
+      TaskRoleArn: !GetAtt CollectorTaskRole.Arn
+      ContainerDefinitions:
+        - Name: otel-collector
+          Image: !Ref CollectorImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 4317
+              Protocol: tcp
+            - ContainerPort: 4318
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CollectorLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: otel
+          Environment:
+            # ADOT reads its full config from this env var. session.id is
+            # dropped from metrics (unbounded cardinality); resource
+            # attributes (team, cost_center, ...) are converted to metric
+            # labels so Prometheus can group by them. The logs pipeline sits
+            # idle until the gateway stack sets ForwardActivityLogs=true.
+            - Name: AOT_CONFIG_CONTENT
+              Value: !Sub |
+                extensions:
+                  sigv4auth:
+                    region: ${AWS::Region}
+                    service: aps
+                receivers:
+                  otlp:
+                    protocols:
+                      grpc:
+                        endpoint: 0.0.0.0:4317
+                      http:
+                        endpoint: 0.0.0.0:4318
+                processors:
+                  attributes/cardinality:
+                    actions:
+                      - key: session.id
+                        action: delete
+                  batch:
+                    timeout: 30s
+                exporters:
+                  prometheusremotewrite:
+                    endpoint: ${Workspace.PrometheusEndpoint}api/v1/remote_write
+                    auth:
+                      authenticator: sigv4auth
+                    # Keep metric names exactly as emitted (claude_code_cost_usage,
+                    # not ..._USD_total) so the provisioned dashboard queries match.
+                    add_metric_suffixes: false
+                    resource_to_telemetry_conversion:
+                      enabled: true
+                  awscloudwatchlogs:
+                    region: ${AWS::Region}
+                    log_group_name: ${ActivityLogGroup}
+                    log_stream_name: activity
+                service:
+                  extensions: [sigv4auth]
+                  pipelines:
+                    metrics:
+                      receivers: [otlp]
+                      processors: [attributes/cardinality, batch]
+                      exporters: [prometheusremotewrite]
+                    logs:
+                      receivers: [otlp]
+                      processors: [batch]
+                      exporters: [awscloudwatchlogs]
+
+  CollectorService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${NamePrefix}-otel'
+      Cluster:
+        Fn::ImportValue: !Sub '${NamePrefix}-cluster-arn'
+      LaunchType: FARGATE
+      DesiredCount: 1
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref CollectorSecurityGroup
+      ServiceRegistries:
+        - RegistryArn: !GetAtt CollectorDiscovery.Arn
+
+  # ------------------------------------------------------- activity logs
+  # AI activity audit stream (bash commands, tool inputs, file paths per
+  # user; prompt content stays redacted). Data flows only when the gateway
+  # stack sets ForwardActivityLogs=true - until then this chain is idle and
+  # costs nothing (Firehose DirectPut and S3 bill per GB only). Short
+  # CloudWatch window for operational queries; durable copy in S3.
+  ActivityLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/claude/${NamePrefix}/activity'
+      RetentionInDays: !Ref ActivityLogWindowDays
+
+  ActivityArchiveBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-activity-archive
+            Status: Enabled
+            ExpirationInDays: !Ref ActivityArchiveRetentionDays
+
+  ActivityFirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-activity-firehose'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: firehose.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-archive
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:PutObject
+                Resource:
+                  - !GetAtt ActivityArchiveBucket.Arn
+                  - !Sub '${ActivityArchiveBucket.Arn}/*'
+
+  ActivityDeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Sub '${NamePrefix}-activity-archive'
+      DeliveryStreamType: DirectPut
+      ExtendedS3DestinationConfiguration:
+        BucketARN: !GetAtt ActivityArchiveBucket.Arn
+        RoleARN: !GetAtt ActivityFirehoseRole.Arn
+        Prefix: 'activity/'
+        ErrorOutputPrefix: 'errors/'
+        BufferingHints:
+          IntervalInSeconds: 300
+          SizeInMBs: 64
+        # CloudWatch subscription payloads arrive gzip-compressed already.
+        CompressionFormat: UNCOMPRESSED
+
+  ActivitySubscriptionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-activity-subscription'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: logs.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: put-to-firehose
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - firehose:PutRecord
+                  - firehose:PutRecordBatch
+                Resource: !GetAtt ActivityDeliveryStream.Arn
+
+  ActivitySubscriptionFilter:
+    Type: AWS::Logs::SubscriptionFilter
+    Properties:
+      LogGroupName: !Ref ActivityLogGroup
+      FilterPattern: ''
+      DestinationArn: !GetAtt ActivityDeliveryStream.Arn
+      RoleArn: !GetAtt ActivitySubscriptionRole.Arn
+
+  # -------------------------------------------------------------- Grafana
+  GrafanaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} - Grafana'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub '${NamePrefix}-alb-sg'
+          Description: HTTP from the ALB only
+
+  GrafanaAdminSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/grafana-admin-password'
+      Description: Grafana admin password (user 'admin').
+      GenerateSecretString:
+        PasswordLength: 24
+        ExcludePunctuation: true
+
+  GrafanaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${NamePrefix}-grafana'
+      RetentionInDays: 90
+
+  GrafanaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-grafana-execution'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+      Policies:
+        - PolicyName: read-admin-secret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref GrafanaAdminSecret
+
+  GrafanaTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-grafana-task'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: amp-query
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aps:QueryMetrics
+                  - aps:GetSeries
+                  - aps:GetLabels
+                  - aps:GetMetricMetadata
+                Resource: !GetAtt Workspace.Arn
+
+  GrafanaTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${NamePrefix}-grafana'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '512'
+      Memory: '1024'
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt GrafanaExecutionRole.Arn
+      TaskRoleArn: !GetAtt GrafanaTaskRole.Arn
+      ContainerDefinitions:
+        - Name: grafana
+          Image: !Ref GrafanaImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref GrafanaLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: grafana
+          Environment:
+            - Name: GF_SERVER_ROOT_URL
+              Value: !Sub 'https://${GatewayFqdn}/grafana'
+            - Name: GF_SERVER_SERVE_FROM_SUB_PATH
+              Value: 'true'
+            - Name: GF_AUTH_SIGV4_AUTH_ENABLED
+              Value: 'true'
+            - Name: GF_ANALYTICS_REPORTING_ENABLED
+              Value: 'false'
+            - Name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              Value: 'false'
+            # Consumed by the provisioned AMP datasource (docker/grafana).
+            - Name: AMP_QUERY_URL
+              Value: !GetAtt Workspace.PrometheusEndpoint
+            - Name: AMP_REGION
+              Value: !Ref AWS::Region
+          Secrets:
+            - Name: GF_SECURITY_ADMIN_PASSWORD
+              ValueFrom: !Ref GrafanaAdminSecret
+
+  GrafanaTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${NamePrefix}-grafana'
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 3000
+      TargetType: ip
+      HealthCheckPath: /grafana/api/health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  GrafanaListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn:
+        Fn::ImportValue: !Sub '${NamePrefix}-https-listener'
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values: ['/grafana', '/grafana/*']
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref GrafanaTargetGroup
+
+  GrafanaService:
+    Type: AWS::ECS::Service
+    DependsOn: GrafanaListenerRule
+    Properties:
+      ServiceName: !Sub '${NamePrefix}-grafana'
+      Cluster:
+        Fn::ImportValue: !Sub '${NamePrefix}-cluster-arn'
+      LaunchType: FARGATE
+      DesiredCount: 1
+      HealthCheckGracePeriodSeconds: 60
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref GrafanaSecurityGroup
+      LoadBalancers:
+        - ContainerName: grafana
+          ContainerPort: 3000
+          TargetGroupArn: !Ref GrafanaTargetGroup
+
+  # ------------------------------------------------- optional VPC endpoint
+  AmpEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: WantAmpEndpoint
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} - aps-workspaces endpoint'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref CollectorSecurityGroup
+          Description: remote_write from the collector
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref GrafanaSecurityGroup
+          Description: queries from Grafana
+
+  AmpEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: WantAmpEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.aps-workspaces'
+      SubnetIds: !Ref PrivateSubnetIds
+      SecurityGroupIds:
+        - !Ref AmpEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+Outputs:
+  WorkspaceId:
+    Value: !GetAtt Workspace.WorkspaceId
+  WorkspacePrometheusEndpoint:
+    Value: !GetAtt Workspace.PrometheusEndpoint
+  OtlpForwardUrl:
+    Description: >-
+      Set the gateway stack's ObservabilityOtlpUrl parameter to this value
+      (then redeploy 02 - ECS rolls the service automatically).
+    Value: !Sub 'http://otel-collector.${NamePrefix}.internal:4318'
+  GrafanaUrl:
+    Description: 'Dashboard URL (log in as admin; password in Secrets Manager).'
+    Value: !Sub 'https://${GatewayFqdn}/grafana'
+  GrafanaAdminSecretArn:
+    Value: !Ref GrafanaAdminSecret
+  ActivityLogGroupName:
+    Description: >-
+      Short-window CloudWatch group for the activity stream (idle until the
+      gateway stack sets ForwardActivityLogs=true).
+    Value: !Ref ActivityLogGroup
+  ActivityArchiveBucketName:
+    Description: Durable S3 archive of the activity stream (expires per ActivityArchiveRetentionDays).
+    Value: !Ref ActivityArchiveBucket

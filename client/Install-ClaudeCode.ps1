@@ -43,6 +43,17 @@
   users on the version you distribute. DISABLE_AUTOUPDATER (background
   check only) is set alongside as defense in depth.
 
+.PARAMETER CostCenter
+  Optional cost-center tag stamped onto all telemetry this workstation
+  emits (OTEL_RESOURCE_ATTRIBUTES). Shows up as the 'cost_center' label in
+  the usage dashboard. No spaces or commas (use underscores).
+
+.PARAMETER Team
+  Optional team tag, same mechanism as CostCenter ('team' label in the
+  dashboard). Telemetry itself is enabled centrally by the gateway (it
+  pushes the OTLP env vars to every connected client) - these parameters
+  only add the grouping attributes.
+
 .PARAMETER RequiredMinimumVersion
   Managed-settings floor; the CLI refuses to start below it. The Claude apps
   gateway requires 2.1.195+.
@@ -57,6 +68,8 @@ param(
   [string]$Sha256,
   [string]$GatewayUrl,
   [switch]$DisableUpdates,
+  [ValidatePattern('^[^,\s]*$')][string]$CostCenter,
+  [ValidatePattern('^[^,\s]*$')][string]$Team,
   [string]$RequiredMinimumVersion = '2.1.195',
   [switch]$SkipSignatureCheck
 )
@@ -131,20 +144,31 @@ if (($env:Path -split ';') -notcontains $installDir) { $env:Path += ";$installDi
 #               Claude Code honors without elevation. forceLoginMethod /
 #               forceLoginGatewayUrl / requiredMinimumVersion are managed-only
 #               keys, so a plain user settings.json would NOT work here.
-if ($GatewayUrl -or $DisableUpdates) {
+if ($GatewayUrl -or $DisableUpdates -or $CostCenter -or $Team) {
   $settings = [ordered]@{}
   if ($GatewayUrl) {
     $settings['forceLoginMethod']     = 'gateway'
     $settings['forceLoginGatewayUrl'] = $GatewayUrl
   }
   if ($RequiredMinimumVersion) { $settings['requiredMinimumVersion'] = $RequiredMinimumVersion }
+  $envBlock = [ordered]@{}
   if ($DisableUpdates) {
     # DISABLE_UPDATES blocks ALL update paths (background + manual
     # 'claude update' / 'claude install') - required for self-distributed
     # pinned versions. DISABLE_AUTOUPDATER (background check only) is
     # added as defense in depth. See code.claude.com/docs/en/setup.
-    $settings['env'] = [ordered]@{ DISABLE_UPDATES = '1'; DISABLE_AUTOUPDATER = '1' }
+    $envBlock['DISABLE_UPDATES']     = '1'
+    $envBlock['DISABLE_AUTOUPDATER'] = '1'
   }
+  if ($CostCenter -or $Team) {
+    # Resource attributes stamped onto all OTLP telemetry (the gateway
+    # enables and routes telemetry itself; these are grouping labels).
+    $attrs = @()
+    if ($CostCenter) { $attrs += "cost_center=$CostCenter" }
+    if ($Team)       { $attrs += "team=$Team" }
+    $envBlock['OTEL_RESOURCE_ATTRIBUTES'] = ($attrs -join ',')
+  }
+  if ($envBlock.Count -gt 0) { $settings['env'] = $envBlock }
 
   $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
              ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)

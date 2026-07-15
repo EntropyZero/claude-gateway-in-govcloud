@@ -15,6 +15,13 @@ fi
 umask 077
 printf '%s' "$GATEWAY_CONFIG_B64" | base64 -d > /etc/claude/gateway.yaml
 
+# Optional telemetry block, rendered as a separate env var by CloudFormation
+# so the observability stack can be toggled without duplicating the config.
+if [ -n "${GATEWAY_TELEMETRY_B64:-}" ]; then
+  printf '\n' >> /etc/claude/gateway.yaml
+  printf '%s' "$GATEWAY_TELEMETRY_B64" | base64 -d >> /etc/claude/gateway.yaml
+fi
+
 # Percent-encode every byte that is not RFC 3986 'unreserved', so any
 # password RDS generates survives inside a postgres:// URL.
 urlencode() {
@@ -33,7 +40,7 @@ urlencode() {
 : "${PGHOST:?}" "${PGPORT:?}" "${PGDATABASE:?}" "${PGUSER:?}" "${PGPASSWORD:?}"
 GATEWAY_POSTGRES_URL="postgres://$(urlencode "$PGUSER"):$(urlencode "$PGPASSWORD")@${PGHOST}:${PGPORT}/${PGDATABASE}?sslmode=require"
 export GATEWAY_POSTGRES_URL
-unset PGPASSWORD GATEWAY_CONFIG_B64
+unset PGPASSWORD GATEWAY_CONFIG_B64 GATEWAY_TELEMETRY_B64
 
 echo "[entrypoint] starting claude gateway ($(claude --version 2>/dev/null || echo version-unknown))"
 exec claude gateway --config /etc/claude/gateway.yaml

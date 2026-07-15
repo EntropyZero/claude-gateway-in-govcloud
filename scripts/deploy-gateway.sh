@@ -41,6 +41,8 @@ aws cloudformation deploy \
       "CertExpiryAlarmDays=${CERT_EXPIRY_ALARM_DAYS:-30}" \
       "AlarmSnsTopicArn=${ALARM_SNS_TOPIC_ARN:-}" \
       "AlbLogRetentionDays=${ALB_LOG_RETENTION_DAYS:-90}" \
+      "ObservabilityOtlpUrl=${OBSERVABILITY_OTLP_URL:-}" \
+      "ForwardActivityLogs=${FORWARD_ACTIVITY_LOGS:-false}" \
       "OpusModelId=${OPUS_MODEL_ID:-claude-opus-4-8}" \
       "OpusBedrockModelId=${OPUS_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-opus-4-8}" \
       "SonnetModelId=${SONNET_MODEL_ID:-claude-sonnet-4-5}" \

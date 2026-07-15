@@ -159,6 +159,28 @@ Parameters:
       NO_PROXY (.amazonaws.com), so Bedrock still flows through the VPC
       endpoint either way.
 
+  ObservabilityOtlpUrl:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional OTLP endpoint the gateway forwards telemetry to (metrics from
+      the gateway plus relayed client metrics, stamped with user.id /
+      user.email / user.groups from the Okta JWT). Deploy
+      03-observability.yaml first, then set this to its OtlpForwardUrl
+      output (e.g. http://otel-collector.claude-gw.internal:4318). Empty
+      disables telemetry forwarding.
+
+  ForwardActivityLogs:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Also forward the ACTIVITY LOG stream (bash commands, tool inputs,
+      file paths per user - prompt content stays redacted). Highly
+      sensitive; enable only where an AI-activity audit trail is required.
+      Lands in a short CloudWatch window + S3 archive via the
+      observability stack. No effect unless ObservabilityOtlpUrl is set.
+
   OpusModelId:
     Type: String
     Default: claude-opus-4-8
@@ -196,6 +218,7 @@ Conditions:
   WantS3Endpoint: !Not [!Equals [!Join ['', !Ref PrivateRouteTableIds], '']]
   HaveAlarmTopic: !Not [!Equals [!Ref AlarmSnsTopicArn, '']]
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
+  HaveTelemetry: !Not [!Equals [!Ref ObservabilityOtlpUrl, '']]
 
 # Account IDs that Elastic Load Balancing uses to deliver access logs
 # (regions without a service-principal log-delivery path, incl. GovCloud).
@@ -532,6 +555,22 @@ Resources:
                   #       cli:
                   #         env: { DISABLE_UPDATES: "1" }
                   #         skipWebFetchPreflight: true
+            # Telemetry forwarding, appended to gateway.yaml by the
+            # entrypoint when set. The gateway also auto-pushes the OTLP
+            # enable env vars to every connected client via /managed/settings.
+            - !If
+              - HaveTelemetry
+              - Name: GATEWAY_TELEMETRY_B64
+                Value:
+                  Fn::Base64: !Sub
+                    - |
+                      telemetry:
+                        forward_to:
+                          - url: ${ObservabilityOtlpUrl}
+                            metrics: true
+                            logs: ${LogsFlag}
+                    - LogsFlag: !Ref ForwardActivityLogs
+              - !Ref 'AWS::NoValue'
           Secrets:
             - Name: OIDC_CLIENT_SECRET
               ValueFrom: !Ref OktaClientSecret
@@ -720,3 +759,24 @@ Outputs:
   AlbLogsBucketName:
     Description: S3 bucket receiving ALB access logs (expires per AlbLogRetentionDays).
     Value: !Ref AlbLogsBucket
+  # Cross-stack exports for 03-observability.yaml
+  ServiceSecurityGroupId:
+    Description: Gateway task SG - the collector allows OTLP ingress from it.
+    Value: !Ref ServiceSecurityGroup
+    Export:
+      Name: !Sub '${NamePrefix}-svc-sg'
+  AlbSecurityGroupId:
+    Description: ALB SG - Grafana allows ingress from it.
+    Value: !Ref AlbSecurityGroup
+    Export:
+      Name: !Sub '${NamePrefix}-alb-sg'
+  HttpsListenerArn:
+    Description: HTTPS listener - the observability stack attaches the /grafana rule to it.
+    Value: !Ref HttpsListener
+    Export:
+      Name: !Sub '${NamePrefix}-https-listener'
+  ClusterArnExport:
+    Description: ECS cluster shared with the observability services.
+    Value: !GetAtt Cluster.Arn
+    Export:
+      Name: !Sub '${NamePrefix}-cluster-arn'

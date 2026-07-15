@@ -27,13 +27,17 @@ be re-litigated — are in [Design decisions](#design-decisions) below.
 |---|---|
 | `cloudformation/01-database.yaml` | RDS PostgreSQL store, managed master secret, client security group |
 | `cloudformation/02-gateway.yaml` | ALB + TLS listener, ECS Fargate service, IAM, secrets, optional VPC endpoints, cert-expiry alarm, ALB access logs |
+| `cloudformation/03-observability.yaml` | AMP workspace, OTLP collector, Grafana usage/cost dashboard behind the ALB at `/grafana` |
 | `docker/Dockerfile` | Container around the pinned, verified `claude` binary |
 | `docker/entrypoint.sh` | Renders `gateway.yaml`, assembles the Postgres URL |
+| `docker/grafana/` | Grafana image: AMP datasource + provisioned Claude Code dashboard |
 | `client/mirror-claude-release.sh` | Egress-side: download + verify a pinned release |
 | `client/Install-ClaudeCode.ps1` | Offline Windows install — non-admin, Intune/SCCM, or manual |
 | `scripts/deploy.env.example` | Per-environment parameters (copy to `deploy.env`) |
 | `scripts/import-enterprise-cert.sh` | CSR generation, ACM import, fingerprint output |
 | `scripts/build-and-push-image.sh` | Build the gateway image and push to ECR |
+| `scripts/build-and-push-grafana.sh` | Build the provisioned Grafana image and push to ECR |
+| `scripts/deploy-observability.sh` | Deploy the observability stack |
 | `scripts/deploy-database.sh` | Deploy the database stack |
 | `scripts/deploy-gateway.sh` | Deploy the gateway stack |
 | `scripts/set-okta-secret.sh` | Set the real OIDC client secret and roll the service |
@@ -153,6 +157,7 @@ provide:
 | ECR image pull, CloudWatch Logs, Secrets Manager (Fargate's own dependencies) | Via NAT by default. For **fully-private subnets with no NAT**, set `CREATE_SUPPORTING_ENDPOINTS=true` to add `ecr.api`, `ecr.dkr`, `logs`, and `secretsmanager` interface endpoints |
 | S3 (ECR image layers are served from S3) | S3 **gateway** endpoint, created whenever `PRIVATE_ROUTE_TABLE_IDS` is set. Gateway endpoints are free — recommended in **every** VPC (keeps image pulls off NAT data-processing charges), and mandatory for pulls to work at all without NAT |
 | Okta OIDC | **Public SaaS — no VPC endpoint exists.** Via NAT where available; otherwise set `HTTPS_PROXY_URL` — the task gets `HTTP_PROXY`/`HTTPS_PROXY` plus a `NO_PROXY` covering `.amazonaws.com`, so AWS API calls (including Bedrock's private-DNS endpoint) and the database stay direct and never touch the proxy |
+| Amazon Managed Prometheus (observability stack) | `aps-workspaces` interface endpoint (`CREATE_AMP_ENDPOINT=true` on the observability stack) — keeps remote-write and Grafana queries off the NAT/TGW path |
 
 Interface endpoints bill per-AZ-hour, which is why the supporting set is
 opt-in — VPCs with NAT don't need them. The free S3 gateway endpoint has no
@@ -182,6 +187,69 @@ associated. The S3 **gateway** endpoint is the exception: it cannot be
 centralized over TGW, so create it locally in every case. And confirm TGW
 routes/SGs allow developer ranges to reach the ALB on 443
 (`CLIENT_INGRESS_CIDR`).
+
+## Usage & cost observability
+
+The optional observability stack gives admins a dashboard of usage and cost,
+groupable by **Okta group**, **team**, or **cost center**:
+
+```
+workstations --OTLP--> gateway (existing FQDN) --forward_to--> ADOT collector
+                                                                    | remote_write (SigV4)
+Grafana (https://<fqdn>/grafana) --SigV4 query--> Amazon Managed Prometheus
+```
+
+The gateway is the telemetry hub — no separate ingest endpoint is needed. It
+automatically pushes the OTLP enable env vars to every connected Claude Code
+client via `/managed/settings`, relays their metrics
+(`claude_code.cost.usage`, `claude_code.token.usage`, sessions, lines of
+code, commits), and stamps each export with `user.id` / `user.email` /
+**`user.groups` from the Okta JWT** — which is where the Okta-group grouping
+comes from. `team` and `cost_center` are workstation-level resource
+attributes: deploy them per fleet with the installer's `-CostCenter` /
+`-Team` parameters (they write `OTEL_RESOURCE_ATTRIBUTES` into managed
+settings). The collector drops `session.id` to keep Prometheus cardinality
+bounded, and AMP retains metrics 150 days.
+
+Deploy order:
+
+```bash
+./scripts/build-and-push-grafana.sh        # provisioned Grafana image → ECR
+./scripts/deploy-observability.sh          # AMP + collector + Grafana
+# set OBSERVABILITY_OTLP_URL in deploy.env to the OtlpForwardUrl output, then
+./scripts/deploy-gateway.sh                # gateway starts forwarding telemetry
+```
+
+**Activity audit logs (opt-in).** Beyond metrics, the gateway can forward
+the Claude Code *activity stream* — bash commands, tool inputs, and file
+paths per authenticated user (prompt content stays redacted). Set
+`FORWARD_ACTIVITY_LOGS=true` on the gateway stack and the stream lands in a
+short CloudWatch window (`ACTIVITY_LOG_WINDOW_DAYS`, default 14 — for
+operational queries) with a durable copy in a dedicated S3 archive via a
+CloudWatch subscription filter + Firehose (`ACTIVITY_ARCHIVE_RETENTION_DAYS`,
+default 731; bucket retained on stack deletion). The delivery chain is
+provisioned unconditionally but bills per-GB only, so it costs nothing until
+the switch is flipped. Note the archive's object format: subscription-filter
+deliveries are gzip-compressed CloudWatch envelopes (`logEvents[]` wrapped in
+`messageType`/`logGroup` metadata — the Firehose stream deliberately sets
+`UNCOMPRESSED` to avoid double-gzip), so tools reading the archive (Athena,
+scripts) must gunzip and unwrap that envelope; querying inside the CloudWatch
+window with Logs Insights needs no unwrapping. **Treat this data as highly sensitive** — it reflects
+everything developers work on; restrict access to the log group and bucket,
+and consider a customer-managed KMS key and SIEM subscription where policy
+requires it.
+
+Dashboard: `https://<GatewayFqdn>/grafana` (path-routed on the existing ALB
+and cert; user `admin`, password in Secrets Manager under
+`<NamePrefix>/grafana-admin-password`). The provisioned "Claude Code — Usage
+& Cost" dashboard has cost/tokens/sessions/active-users stats, cost by team,
+cost center, and Okta group, tokens by model and type, top users by cost,
+and lines-of-code/commit panels. For controlled networks, mirror the ADOT
+collector and Grafana base images into ECR (`COLLECTOR_IMAGE`,
+`GRAFANA_BASE_IMAGE`). Amazon Managed Grafana exists in GovCloud but has no
+CloudFormation support, so the stack self-hosts Grafana OSS on the existing
+ECS cluster to stay fully code-driven — swap to AMG manually if preferred,
+pointing it at the same AMP workspace.
 
 ## Design decisions
 
@@ -278,3 +346,6 @@ and then works through:
    confirm with `claude doctor` that the managed settings are picked up.
 7. Publish the certificate's SHA-256 fingerprint to developers (first-connect
    pinning prompt).
+8. Optional: deploy the observability stack, set `OBSERVABILITY_OTLP_URL`,
+   and decide the fleet's `-CostCenter`/`-Team` values for the installer so
+   the dashboard's grouping labels are populated from day one.
