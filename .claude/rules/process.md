@@ -1,5 +1,13 @@
 # Rules — working process
 
+- **All tests pass before moving to the next task.** Run `make test` (or at
+  least the affected suite) and get it **green** before starting the next unit
+  of work or committing. A red suite blocks progress — fix it or revert; never
+  stack new work on a failing base. New behavior ships with a test in the
+  matching suite (`tests/lambda` pytest, `tests/bash` bats, `tests/cfn`
+  cfn-lint+cfn-guard, `tests/powershell` Pester). A gate that can't fail is not
+  a test — when adding one, confirm it goes red on a real violation.
+
 - **Self-review before committing nontrivial infra changes.** For any change
   to CloudFormation, deploy scripts, or the db-admin Lambda, run a multi-agent
   review of the diff before committing: independent finder angles (line-by-line,

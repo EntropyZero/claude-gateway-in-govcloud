@@ -47,6 +47,27 @@ be re-litigated — are in [Design decisions](#design-decisions) below.
 | `scripts/set-grafana-oidc-secret.sh` | Set Grafana's Okta client secret and roll Grafana |
 | `scripts/stack-outputs.sh` | Print both stacks' outputs |
 | `scripts/verify-gateway.sh` | Post-deploy DNS / TLS / OAuth endpoint checks |
+| `tests/` + `Makefile` | Test suites (`make test`); CI in `.github/workflows/tests.yml` |
+
+## Testing
+
+`make test` runs four fast suites (CI runs the same commands per job on
+`ubuntu-latest`, on every push and PR — see `.github/workflows/tests.yml`):
+
+| Suite | Tooling | Covers |
+|---|---|---|
+| `tests/lambda` | pytest + moto | The db-admin rotation/bootstrap Lambda: alternating-user secret flip, rotation idempotency, error propagation, CFN-response handling |
+| `tests/bash` | bats | `scripts/common.sh` helpers — `proxy_port` (incl. credentialed URLs), `set_env_var`, `require_vars` |
+| `tests/cfn` | cfn-lint + cfn-guard | Template validity, and **policy gates** encoding the security rules — CMK on log groups & secrets, explicit SG egress, HTTPS target-group health-check protocol, RDS/S3/ALB posture |
+| `tests/powershell` | Pester | `Install-ClaudeCode.ps1` managed-settings assembly (gateway login, update lockdown, telemetry attrs, `NODE_EXTRA_CA_CERTS`) |
+
+Install the toolchain (all standard): `pip install -r tests/requirements-test.txt`,
+`npm i -g bats`, cfn-guard via its
+[install script](https://github.com/aws-cloudformation/cloudformation-guard#installation),
+and `pwsh` + `Install-Module Pester`. Then `make test`, or a single suite with
+`make test-lambda` / `test-bash` / `test-cfn` / `test-powershell`. These are
+**unit** tests (no AWS calls, no deploy); the live end-to-end validation is the
+[test-run runbook](docs/test-run-runbook.md).
 
 ## Quick start
 

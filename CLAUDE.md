@@ -47,6 +47,7 @@ plaintext-but-SG-scoped; the TLS recipe is documented on the collector task).
 | `docs/security-review-2026-07.md` | finding-by-finding status; the source of truth for what's done |
 | `docs/test-run-runbook.md` | the deploy runbook |
 | `docs/networking-request-email.md` | cert/DNS/Zscaler request template |
+| `tests/` + `Makefile` | test suites (`make test`); CI in `.github/workflows/tests.yml` |
 
 ## Deploy model (details in the runbook)
 
@@ -64,8 +65,26 @@ reverse (03 → 02 → 01).
   web-checks AWS/Postgres/Grafana semantics). This has repeatedly caught
   deploy-breaking bugs that syntax checks and docs missed. It is the single
   highest-value habit in this repo.
-- Validate locally before commit: `bash -n` every script, YAML-parse the
-  templates, `python3 -m py_compile docker/db-admin/app.py`.
+- **Run `make test` and keep it green before moving on / committing** (it's a
+  rule — see `.claude/rules/process.md`). Four fast suites:
+  - `tests/lambda` — pytest for the db-admin rotation/bootstrap Lambda (moto
+    Secrets Manager + faked pg/ECS): alternating-user flip, idempotency
+    guards, error propagation. **The code with real bug history — extend it
+    when you touch `docker/db-admin/app.py`.**
+  - `tests/bash` — bats for `common.sh` helpers (`proxy_port`, `set_env_var`,
+    `require_vars`).
+  - `tests/cfn` — `cfn-lint` + a **cfn-guard** ruleset encoding the security
+    rules as gates (CMK on log groups/secrets, explicit SG egress, HTTPS
+    target-group health-check protocol, RDS/S3/ALB posture). A template
+    change that violates a rule fails CI.
+  - `tests/powershell` — Pester for `Install-ClaudeCode.ps1`'s
+    `Build-ManagedSettings` (dot-sourced via the `CLAUDE_INSTALLER_DOTSOURCE`
+    guard); runs on Linux pwsh.
+  Toolchain is pip/npm/tarball-installable (pytest+moto+pg8000, `bats`,
+  `cfn-lint`, `cfn-guard`, `pwsh`+Pester); CI runs the same commands per job
+  on `ubuntu-latest`.
+- Cheap extra checks outside the tested surface: `bash -n` each changed
+  script, YAML-parse changed templates, `py_compile` the Lambda.
 - Diagrams are hand-laid-out SVGs from `docs/diagrams/generate.py`; **rasterize
   and look at them** (cairosvg) before committing. Never use Mermaid — its
   auto-layout produced unreadable, sometimes non-rendering output here.

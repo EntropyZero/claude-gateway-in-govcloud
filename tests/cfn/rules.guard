@@ -1,0 +1,80 @@
+#
+# Policy-as-code gates for the Claude gateway templates.
+# Encodes the hard rules in .claude/rules/cloudformation.md + security.md.
+# Each rule is guarded by `when ... !empty` so it simply skips templates that
+# don't contain the resource type (one ruleset runs against all three stacks).
+#
+
+# Every CloudWatch log group is CMK-encrypted (C1 / SC-28).
+rule log_groups_use_cmk {
+    let groups = Resources.*[ Type == 'AWS::Logs::LogGroup' ]
+    when %groups !empty {
+        %groups.Properties.KmsKeyId exists
+        <<Every AWS::Logs::LogGroup must set KmsKeyId (customer-managed key).>>
+    }
+}
+
+# Every Secrets Manager secret is CMK-encrypted.
+rule secrets_use_cmk {
+    let secrets = Resources.*[ Type == 'AWS::SecretsManager::Secret' ]
+    when %secrets !empty {
+        %secrets.Properties.KmsKeyId exists
+        <<Every AWS::SecretsManager::Secret must set KmsKeyId.>>
+    }
+}
+
+# No SG relies on default allow-all egress: an explicit SecurityGroupEgress
+# must be present (C10 / SC-7). (0.0.0.0/0 on 443 is allowed and intentional;
+# the rule is that egress is declared, not defaulted.)
+rule sgs_have_explicit_egress {
+    let sgs = Resources.*[ Type == 'AWS::EC2::SecurityGroup' ]
+    when %sgs !empty {
+        %sgs.Properties.SecurityGroupEgress exists
+        <<Every security group must declare SecurityGroupEgress (no default allow-all).>>
+    }
+}
+
+# HTTPS target groups must set HealthCheckProtocol HTTPS — ALB health checks
+# default to HTTP even on an HTTPS target group, so omitting it means no
+# target ever becomes healthy.
+rule https_target_groups_healthcheck_https {
+    let tgs = Resources.*[ Type == 'AWS::ElasticLoadBalancingV2::TargetGroup' ]
+    when %tgs !empty {
+        when %tgs.Properties.Protocol == 'HTTPS' {
+            %tgs.Properties.HealthCheckProtocol == 'HTTPS'
+            <<An HTTPS target group must set HealthCheckProtocol: HTTPS.>>
+        }
+    }
+}
+
+# RDS storage is encrypted with a CMK.
+rule rds_storage_encrypted_cmk {
+    let dbs = Resources.*[ Type == 'AWS::RDS::DBInstance' ]
+    when %dbs !empty {
+        %dbs.Properties.StorageEncrypted == true
+        %dbs.Properties.KmsKeyId exists
+        <<RDS must set StorageEncrypted: true and a KmsKeyId.>>
+    }
+}
+
+# S3 buckets block all public access.
+rule s3_blocks_public_access {
+    let buckets = Resources.*[ Type == 'AWS::S3::Bucket' ]
+    when %buckets !empty {
+        %buckets.Properties.PublicAccessBlockConfiguration.BlockPublicAcls == true
+        %buckets.Properties.PublicAccessBlockConfiguration.BlockPublicPolicy == true
+        %buckets.Properties.PublicAccessBlockConfiguration.IgnorePublicAcls == true
+        %buckets.Properties.PublicAccessBlockConfiguration.RestrictPublicBuckets == true
+        <<Every S3 bucket must block all public access.>>
+    }
+}
+
+# The internal ALB stays internal + IPv4-only (dual-stack breaks /login).
+rule alb_internal_ipv4 {
+    let albs = Resources.*[ Type == 'AWS::ElasticLoadBalancingV2::LoadBalancer' ]
+    when %albs !empty {
+        %albs.Properties.Scheme == 'internal'
+        %albs.Properties.IpAddressType == 'ipv4'
+        <<The ALB must be internal and IPv4-only.>>
+    }
+}

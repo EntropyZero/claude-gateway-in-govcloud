@@ -1,0 +1,6 @@
+# Python test dependencies (pip install -r tests/requirements-test.txt)
+pytest>=8
+boto3>=1.34
+moto[secretsmanager]>=5
+pg8000>=1.31
+cfn-lint>=1

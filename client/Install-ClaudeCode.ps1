@@ -104,6 +104,58 @@ $ErrorActionPreference = 'Stop'
 
 function Write-Step([string]$m) { Write-Host "==> $m" -ForegroundColor Cyan }
 
+# Assemble the managed-settings object (gateway login + update lockdown +
+# telemetry attributes + enterprise CA trust). Pure: returns an ordered
+# hashtable, or $null when there is nothing to write. Kept as a function so
+# it can be unit-tested (see tests/powershell/).
+function Build-ManagedSettings {
+  param(
+    [string]$GatewayUrl,
+    [switch]$DisableUpdates,
+    [string]$CostCenter,
+    [string]$Team,
+    [string]$ExtraCaCertPath,
+    [string]$RequiredMinimumVersion
+  )
+  if (-not ($GatewayUrl -or $DisableUpdates -or $CostCenter -or $Team -or $ExtraCaCertPath)) {
+    return $null
+  }
+  $settings = [ordered]@{}
+  if ($GatewayUrl) {
+    $settings['forceLoginMethod']     = 'gateway'
+    $settings['forceLoginGatewayUrl'] = $GatewayUrl
+  }
+  if ($RequiredMinimumVersion) { $settings['requiredMinimumVersion'] = $RequiredMinimumVersion }
+  $envBlock = [ordered]@{}
+  if ($DisableUpdates) {
+    # DISABLE_UPDATES blocks ALL update paths (background + manual
+    # 'claude update' / 'claude install') - required for self-distributed
+    # pinned versions. DISABLE_AUTOUPDATER (background check only) is
+    # added as defense in depth. See code.claude.com/docs/en/setup.
+    $envBlock['DISABLE_UPDATES']     = '1'
+    $envBlock['DISABLE_AUTOUPDATER'] = '1'
+  }
+  if ($CostCenter -or $Team) {
+    # Resource attributes stamped onto all OTLP telemetry (the gateway
+    # enables and routes telemetry itself; these are grouping labels).
+    $attrs = @()
+    if ($CostCenter) { $attrs += "cost_center=$CostCenter" }
+    if ($Team)       { $attrs += "team=$Team" }
+    $envBlock['OTEL_RESOURCE_ATTRIBUTES'] = ($attrs -join ',')
+  }
+  if ($ExtraCaCertPath) {
+    # Enterprise CA trust for the gateway's TLS chain; the precompiled
+    # claude.exe honors NODE_EXTRA_CA_CERTS.
+    $envBlock['NODE_EXTRA_CA_CERTS'] = $ExtraCaCertPath
+  }
+  if ($envBlock.Count -gt 0) { $settings['env'] = $envBlock }
+  return $settings
+}
+
+# Tests dot-source this file for the functions above without running the
+# installer body.
+if ($env:CLAUDE_INSTALLER_DOTSOURCE) { return }
+
 # --- 0. Preconditions -------------------------------------------------------
 # A SYSTEM-context run (Intune/SCCM device push) would install the binary
 # into SYSTEM's own profile and PATH - developers would never get claude.exe.
@@ -223,37 +275,10 @@ if (($env:Path -split ';') -notcontains $installDir) { $env:Path += ";$installDi
 #               Claude Code honors without elevation. forceLoginMethod /
 #               forceLoginGatewayUrl / requiredMinimumVersion are managed-only
 #               keys, so a plain user settings.json would NOT work here.
-if ($GatewayUrl -or $DisableUpdates -or $CostCenter -or $Team -or $ExtraCaCertPath) {
-  $settings = [ordered]@{}
-  if ($GatewayUrl) {
-    $settings['forceLoginMethod']     = 'gateway'
-    $settings['forceLoginGatewayUrl'] = $GatewayUrl
-  }
-  if ($RequiredMinimumVersion) { $settings['requiredMinimumVersion'] = $RequiredMinimumVersion }
-  $envBlock = [ordered]@{}
-  if ($DisableUpdates) {
-    # DISABLE_UPDATES blocks ALL update paths (background + manual
-    # 'claude update' / 'claude install') - required for self-distributed
-    # pinned versions. DISABLE_AUTOUPDATER (background check only) is
-    # added as defense in depth. See code.claude.com/docs/en/setup.
-    $envBlock['DISABLE_UPDATES']     = '1'
-    $envBlock['DISABLE_AUTOUPDATER'] = '1'
-  }
-  if ($CostCenter -or $Team) {
-    # Resource attributes stamped onto all OTLP telemetry (the gateway
-    # enables and routes telemetry itself; these are grouping labels).
-    $attrs = @()
-    if ($CostCenter) { $attrs += "cost_center=$CostCenter" }
-    if ($Team)       { $attrs += "team=$Team" }
-    $envBlock['OTEL_RESOURCE_ATTRIBUTES'] = ($attrs -join ',')
-  }
-  if ($ExtraCaCertPath) {
-    # Enterprise CA trust for the gateway's TLS chain; the precompiled
-    # claude.exe honors NODE_EXTRA_CA_CERTS.
-    $envBlock['NODE_EXTRA_CA_CERTS'] = $ExtraCaCertPath
-  }
-  if ($envBlock.Count -gt 0) { $settings['env'] = $envBlock }
-
+$settings = Build-ManagedSettings -GatewayUrl $GatewayUrl -DisableUpdates:$DisableUpdates `
+  -CostCenter $CostCenter -Team $Team -ExtraCaCertPath $ExtraCaCertPath `
+  -RequiredMinimumVersion $RequiredMinimumVersion
+if ($settings) {
   $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
              ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 

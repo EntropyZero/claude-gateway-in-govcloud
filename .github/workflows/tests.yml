@@ -1,0 +1,60 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lambda:
+    name: Lambda (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r tests/requirements-test.txt
+      - run: python -m pytest tests/lambda -q
+
+  bash:
+    name: Shell helpers (bats)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y bats
+      - run: bats tests/bash
+
+  cloudformation:
+    name: CloudFormation (cfn-lint + cfn-guard)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install cfn-lint
+      - run: cfn-lint cloudformation/*.yaml
+      - name: Install cfn-guard
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/aws-cloudformation/cloudformation-guard/main/install-guard.sh | sh
+          echo "$HOME/.guard/bin" >> "$GITHUB_PATH"
+      - name: cfn-guard policy gates
+        run: |
+          for t in cloudformation/*.yaml; do
+            echo "== $t =="
+            cfn-guard validate -d "$t" -r tests/cfn/rules.guard --show-summary fail
+          done
+
+  powershell:
+    name: Installer (Pester)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module Pester -Force -SkipPublisherCheck -MinimumVersion 5.0.0
+      - name: Run Pester
+        shell: pwsh
+        run: ./tests/run-pester.ps1

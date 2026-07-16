@@ -19,3 +19,7 @@ __pycache__/
 
 # Playwright MCP scratch
 .playwright-mcp/
+
+# Test artifacts
+.pytest_cache/
+tests/**/__pycache__/
