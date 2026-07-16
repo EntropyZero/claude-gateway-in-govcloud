@@ -145,6 +145,15 @@ for `NODE_TLS_REJECT_UNAUTHORIZED=0`.
 
 ## 2. Database stack (01) — FIRST
 
+*If it fails with "version 16.x does not exist for postgres", the template's
+default minor version isn't offered in this region. List available ones and
+set `DB_ENGINE_VERSION` in `deploy.env`, then re-run:*
+```bash
+aws rds describe-db-engine-versions --engine postgres --region "$AWS_REGION" \
+  --query "DBEngineVersions[?starts_with(EngineVersion,'16.')].EngineVersion" --output text
+```
+
+
 Creates the KMS CMK, RDS (Multi-AZ, pgaudit), and persists `KMS_KEY_ARN`
 so the ECR repos built next are born CMK-encrypted.
 
