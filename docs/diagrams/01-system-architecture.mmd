@@ -1,0 +1,55 @@
+flowchart TB
+    subgraph FLEET["Managed Windows fleet (ZPA)"]
+        DEV["Developer laptop<br/>Claude Code (precompiled binary)<br/>managed settings: forced gateway login,<br/>updates disabled, version floor"]
+        ZCC["Zscaler Client Connector<br/>(synthetic CGNAT DNS answers)"]
+        DEV --- ZCC
+    end
+
+    subgraph CORP["Corporate network"]
+        ZAC["ZPA App Connector<br/>(real DNS resolution + source IP<br/>seen by the ALB)"]
+        ADDNS["AD DNS<br/>claude-gateway.example.com<br/>CNAME → internal ALB name"]
+        PROXY["Egress proxy (optional)<br/>HTTPS_PROXY_URL"]
+        ZAC --- ADDNS
+    end
+
+    subgraph AWSVPC["AWS GovCloud VPC (spoke, private subnets only)"]
+        ALB["Internal ALB :443<br/>enterprise-CA cert (ACM import)<br/>IPv4-only, deletion-protected,<br/>stack-policy locked"]
+        GW["Gateway ECS Fargate ×2<br/>claude gateway (pinned binary)<br/>TLS listener :8080 (per-task cert)"]
+        RDS[("RDS PostgreSQL 16<br/>Multi-AZ, CMK, pgaudit<br/>stack-policy locked")]
+        OTEL["ADOT collector ×2<br/>OTLP :4317/:4318"]
+        GRAF["Grafana OSS<br/>TLS :3000 (per-task cert)<br/>Okta SSO only"]
+        DBL["db-admin Lambdas<br/>bootstrap + rotation<br/>(VPC-attached)"]
+        VPCE["Interface endpoints + policies:<br/>bedrock-runtime · ecr.api · ecr.dkr<br/>logs · secretsmanager · ecs · aps<br/>+ S3 gateway endpoint"]
+    end
+
+    subgraph AWSSVC["AWS services (regional, via endpoints / AWS backbone)"]
+        BR["Amazon Bedrock<br/>Claude Opus 4.8 / Sonnet 4.5<br/>us-gov inference profiles only"]
+        AMP["Amazon Managed Prometheus<br/>(usage/cost metrics, CMK)"]
+        SM["Secrets Manager (CMK)"]
+        KMS["KMS CMK<br/>alias/&lt;prefix&gt;"]
+        S3A[("S3: activity archive<br/>SSE-KMS")]
+        S3L[("S3: ALB access logs<br/>SSE-S3 — ELB limitation")]
+        CW["CloudWatch Logs (CMK)"]
+        FH["Kinesis Firehose"]
+    end
+
+    OKTA["Okta (public SaaS)<br/>custom authorization server<br/>groups claim"]
+
+    ZCC -->|"ZPA tunnel"| ZAC
+    ZAC -->|"TLS :443 (no inspection)"| ALB
+    ALB -->|"TLS re-encrypt :8080"| GW
+    ALB -->|"TLS re-encrypt :3000 /grafana"| GRAF
+    GW -->|"TLS verify-full :5432"| RDS
+    GW -->|"SigV4 TLS via endpoint"| BR
+    GW -->|"OTLP :4318 (SG-scoped)"| OTEL
+    OTEL -->|"SigV4 remote_write"| AMP
+    OTEL --> CW --> FH --> S3A
+    GRAF -->|"SigV4 query"| AMP
+    GW -->|"OIDC (TGW egress or proxy)"| OKTA
+    GRAF -->|"OAuth code exchange"| OKTA
+    DEV -.->|"browser SSO redirect"| OKTA
+    DBL -->|"TLS verify-full :5432"| RDS
+    DBL --> SM
+    GW --> VPCE
+    ALB --> S3L
+    PROXY -.->|"when mandated"| OKTA

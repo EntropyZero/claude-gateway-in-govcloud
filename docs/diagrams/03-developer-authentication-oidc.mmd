@@ -1,0 +1,25 @@
+sequenceDiagram
+    autonumber
+    participant CLI as Claude Code (laptop)
+    participant B as Browser (laptop)
+    participant ALB as Internal ALB
+    participant GW as Gateway
+    participant OK as Okta (custom auth server)
+
+    Note over CLI: managed settings force<br/>forceLoginMethod=gateway,<br/>forceLoginGatewayUrl
+    CLI->>ALB: /login → device authorization (TLS, pinned cert)
+    ALB->>GW: re-encrypted
+    GW-->>CLI: verification URL + user code
+    CLI->>B: open browser to gateway auth URL
+    B->>ALB: GET /oauth/... (via ZPA)
+    GW->>B: 302 → Okta /v1/authorize
+    B->>OK: authenticate (Okta MFA / policy)
+    OK->>B: 302 → https://fqdn/oauth/callback?code=...
+    B->>ALB: callback (via ZPA)
+    ALB->>GW: code
+    GW->>OK: code → token exchange (server-side,<br/>client_secret from Secrets Manager;<br/>via TGW egress or corporate proxy)
+    OK-->>GW: id_token (email, groups)
+    Note over GW: allowed_email_domains check;<br/>session JWT signed with jwt-secret,<br/>TTL = SessionTtlHours
+    GW-->>CLI: gateway session established
+    CLI->>GW: inference requests w/ session JWT
+    GW->>GW: stamp user.id / user.email /<br/>user.groups onto telemetry

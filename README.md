@@ -25,6 +25,7 @@ be re-litigated — are in [Design decisions](#design-decisions) below.
 
 | Path | Purpose |
 |---|---|
+| `docs/architecture.md` | Review package: architecture, data-flow, credential & network diagrams (+ `docs/diagrams/*.mmd` sources) |
 | `cloudformation/01-database.yaml` | RDS PostgreSQL store, managed master secret, client security group |
 | `cloudformation/02-gateway.yaml` | ALB + TLS listener, ECS Fargate service, IAM, secrets, optional VPC endpoints, cert-expiry alarm, ALB access logs |
 | `cloudformation/03-observability.yaml` | AMP workspace, OTLP collector, Grafana usage/cost dashboard behind the ALB at `/grafana` |
