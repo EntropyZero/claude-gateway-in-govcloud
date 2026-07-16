@@ -428,10 +428,15 @@ and consider a customer-managed KMS key and SIEM subscription where policy
 requires it.
 
 Dashboard: `https://<GatewayFqdn>/grafana` (path-routed on the existing ALB
-and cert). **Sign-in is Okta SSO** — the same issuer as the gateway (a
-custom authorization server with a `groups` claim), with the extra redirect
-URI `https://<GatewayFqdn>/grafana/login/generic_oauth` registered on the
-Okta app. Grafana roles map from Okta groups (`GRAFANA_ADMIN_GROUP` →
+and cert). **Sign-in is Okta SSO** — the same issuer as the gateway, with
+the extra redirect URI `https://<GatewayFqdn>/grafana/login/generic_oauth`
+registered on the Okta app. Grafana does no OIDC discovery, so its endpoint
+URLs are built from `OKTA_ISSUER` + `OKTA_AUTH_SERVER_TYPE`: set `org` for
+the built-in org server (bare-domain issuer; endpoints under
+`/oauth2/v1/...`; the org server's built-in `groups` scope returns groups)
+or `custom` for a custom authorization server (issuer ends in `/oauth2/<id>`;
+configure a groups scope + claim on it). Either way Grafana requests the
+`groups` scope for role mapping. Grafana roles map from Okta groups (`GRAFANA_ADMIN_GROUP` →
 Admin, optional Editor/Viewer groups) and the mapping is **strict**: an
 Okta user in none of the groups is denied login. Access and offboarding are
 therefore Okta group membership; no shared credentials. The username/
@@ -465,7 +470,7 @@ obvious alternative?" question — revisit only with a concrete reason.
 | TLS | Enterprise-CA-signed certificate, SAN = the corporate CNAME, imported into ACM. Public certs are impossible for `*.elb.amazonaws.com`, and the corporate name survives ALB recreation. Imported certs do **not** auto-renew — alarm on expiry; rotation re-triggers the client fingerprint prompt, so publish the new fingerprint first. |
 | DNS | Corporate-DNS CNAME → the ALB's default DNS name; resolves to private IPs, passing the `/login` check. No Route 53 private hosted zone required. |
 | Zscaler | The gateway FQDN is bypassed: ZIA SSL-inspection exemption + app bypass (TLS inspection breaks certificate fingerprint pinning; public proxy egress IPs fail `/login`), or a ZPA app segment (ZPA's synthetic CGNAT answers pass the check and ZPA doesn't intercept TLS). Add the FQDN to `NO_PROXY` on laptops if a PAC/explicit proxy is in use. |
-| IdP | Okta OIDC; a custom authorization server is preferred, and `userinfo_fallback: true` is set so the org server also works. Redirect URI is `https://<GatewayFqdn>/oauth/callback`. |
+| IdP | Okta OIDC. The gateway works with either the org server (`userinfo_fallback: true` fetches email/groups) or a custom auth server. Grafana works with either too via `OKTA_AUTH_SERVER_TYPE` (org → endpoints under `/oauth2/v1/...`, built-in `groups` scope; custom → `<issuer>/v1/...`). Redirect URIs `https://<GatewayFqdn>/oauth/callback` and `.../grafana/login/generic_oauth`. |
 | Store | RDS PostgreSQL 16 with `rds.force_ssl` + **pgaudit**, client-side `sslmode=verify-full` (RDS CA bundle baked into the image), and SG-to-SG access only. The gateway connects as a **least-privilege application user** (created by a bootstrap Lambda; owns only the gateway schema via a shared owner role — no CREATEROLE, no `rds_superuser`, cannot tamper with pgaudit). The RDS master secret is **break-glass only**, still auto-rotated by RDS. Multi-AZ is on by default because a lost store loses spend tracking and caps, not just re-logins. |
 | Encryption at rest | One customer-managed KMS key (created by the DB stack or bring-your-own via `KMS_KEY_ARN`) covers RDS, all secrets, CloudWatch log groups, the activity archive, and AMP. Exception: the ALB access-logs bucket stays SSE-S3 — ELB log delivery does not support KMS. |
 | Network egress | Every security group has explicit egress (no default allow-all); all VPC endpoints carry resource policies scoped to this account/workload. Bedrock IAM + endpoint policies allow exactly the two configured models. |

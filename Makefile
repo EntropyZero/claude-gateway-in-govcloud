@@ -8,7 +8,7 @@ test: test-lambda test-bash test-cfn test-powershell
 	@echo "All test suites passed."
 
 test-lambda:
-	python3 -m pytest tests/lambda -q
+	python3 -m pytest tests/lambda tests/templates -q
 
 test-bash:
 	bats tests/bash

@@ -35,10 +35,16 @@ Legend: ☐ = do it · 🔎 = checkpoint, confirm before moving on.
   `us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`).
 
 **Okta** (see the "two client secrets" note in the deploy.env comments)
-- ☐ **Custom** authorization server (`.../oauth2/default` or similar) — the
-  org-server issuer will NOT work for Grafana (the obs stack enforces the
-  `/oauth2/` shape via AllowedPattern).
-- ☐ The auth server emits a **`groups` claim**.
+- ☐ Decide the authorization server and set `OKTA_AUTH_SERVER_TYPE`:
+  - **org** (this deployment): `OKTA_ISSUER` is the bare domain
+    (`https://customerlogin.thecustomer.gov`, no trailing slash). The org
+    server's built-in `groups` scope returns groups — no custom server or
+    claim config needed. Grafana requests the `groups` scope automatically.
+  - **custom**: `OKTA_ISSUER` ends in `/oauth2/<id>`; configure a `groups`
+    scope + claim on that server (see the Okta notes in the project docs).
+- ☐ Confirm groups actually come back: use the Okta app's token/preview (or
+  a real login) for a user in the admins group and check a `groups` array is
+  present. Discovery metadata does NOT list it — verify from a token.
 - ☐ OIDC web app with **both** redirect URIs registered:
   `https://<FQDN>/oauth/callback` and
   `https://<FQDN>/grafana/login/generic_oauth`

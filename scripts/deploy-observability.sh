@@ -29,6 +29,7 @@ aws cloudformation deploy \
       "CollectorImage=${COLLECTOR_IMAGE}" \
       "CollectorDesiredCount=${COLLECTOR_DESIRED_COUNT:-2}" \
       "OktaIssuer=${OKTA_ISSUER}" \
+      "OktaAuthServerType=${OKTA_AUTH_SERVER_TYPE:-custom}" \
       "GrafanaOktaClientId=${GRAFANA_OKTA_CLIENT_ID}" \
       "GrafanaAdminGroup=${GRAFANA_ADMIN_GROUP}" \
       "GrafanaEditorGroup=${GRAFANA_EDITOR_GROUP:-}" \

@@ -66,23 +66,34 @@ Parameters:
   # ----- Grafana auth: Okta SSO (per-user accounts, no shared admin) -----
   OktaIssuer:
     Type: String
-    # The gateway accepts the org-server issuer (userinfo_fallback), but
-    # Grafana derives its OAuth URLs as <issuer>/v1/... - the custom-auth-
-    # server layout. Enforce the /oauth2/ path here so the mismatch fails at
-    # deploy time, not as a 404 at first login with the login form disabled.
-    AllowedPattern: '^https://.+/oauth2/.+$'
+    # Grafana's generic_oauth does no OIDC discovery, so its endpoint URLs
+    # are built here from the issuer + OktaAuthServerType. Accepts either the
+    # org-server issuer (bare domain, no trailing slash) or a custom
+    # authorization server (.../oauth2/<id>); the pattern rejects a trailing
+    # slash so the derived URLs don't get a double slash.
+    AllowedPattern: '^https://[a-zA-Z0-9.-]+(/oauth2/[a-zA-Z0-9._-]+)?$'
     ConstraintDescription: >-
-      Must be a custom Okta authorization server URL, e.g.
-      https://your-org.okta.com/oauth2/default (the org-server issuer form
-      https://your-org.okta.com does not work for Grafana SSO).
+      Must be an https Okta issuer with no trailing slash - either the org
+      server (https://your-org.okta.com) or a custom authorization server
+      (https://your-org.okta.com/oauth2/default). Set OktaAuthServerType to
+      match.
     Description: >-
       Okta issuer for Grafana SSO - usually the same value as the gateway
-      stack's OktaIssuer, but it MUST be a custom authorization server
-      (https://your-org.okta.com/oauth2/default): Grafana's OAuth endpoint
-      URLs are derived as <issuer>/v1/authorize|token|userinfo, and the
-      groups claim used for role mapping is configured on the auth server.
-      Register the extra redirect URI
+      stack's OktaIssuer. Register the extra redirect URI
       https://<GatewayFqdn>/grafana/login/generic_oauth on the Okta app.
+
+  OktaAuthServerType:
+    Type: String
+    Default: custom
+    AllowedValues: ['org', 'custom']
+    Description: >-
+      Which Okta authorization server OktaIssuer points at. 'org' = the
+      built-in org server (issuer is the bare domain; endpoints live under
+      /oauth2/v1/... and the org server has a built-in 'groups' scope).
+      'custom' = a custom authorization server (issuer already contains
+      /oauth2/<id>; endpoints are <issuer>/v1/..., and you configure the
+      groups claim/scope on it). Grafana's OAuth URLs are derived
+      accordingly.
 
   HttpsProxyUrl:
     Type: String
@@ -166,6 +177,8 @@ Conditions:
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
   HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
   WantAmpCmk: !Equals [!Ref EncryptAmpWithCmk, 'true']
+  # Org server: endpoints are <issuer>/oauth2/v1/...; custom: <issuer>/v1/...
+  OrgAuthServer: !Equals [!Ref OktaAuthServerType, 'org']
 
 Resources:
 
@@ -718,14 +731,20 @@ Resources:
               Value: Okta
             - Name: GF_AUTH_GENERIC_OAUTH_CLIENT_ID
               Value: !Ref GrafanaOktaClientId
+            # The org server's built-in 'groups' scope returns the user's
+            # groups; on a custom server you define a matching groups scope.
             - Name: GF_AUTH_GENERIC_OAUTH_SCOPES
               Value: openid profile email groups
+            # Endpoint URLs differ by server type: org lives under
+            # /oauth2/v1/..., custom under <issuer>/v1/... . The token 'iss'
+            # is the issuer as given, so GF_AUTH..._API_URL and the derived
+            # endpoints stay consistent for Grafana's iss validation.
             - Name: GF_AUTH_GENERIC_OAUTH_AUTH_URL
-              Value: !Sub '${OktaIssuer}/v1/authorize'
+              Value: !If [OrgAuthServer, !Sub '${OktaIssuer}/oauth2/v1/authorize', !Sub '${OktaIssuer}/v1/authorize']
             - Name: GF_AUTH_GENERIC_OAUTH_TOKEN_URL
-              Value: !Sub '${OktaIssuer}/v1/token'
+              Value: !If [OrgAuthServer, !Sub '${OktaIssuer}/oauth2/v1/token', !Sub '${OktaIssuer}/v1/token']
             - Name: GF_AUTH_GENERIC_OAUTH_API_URL
-              Value: !Sub '${OktaIssuer}/v1/userinfo'
+              Value: !If [OrgAuthServer, !Sub '${OktaIssuer}/oauth2/v1/userinfo', !Sub '${OktaIssuer}/v1/userinfo']
             - Name: GF_AUTH_GENERIC_OAUTH_USE_PKCE
               Value: 'true'
             # First Okta login creates the Grafana user (this is the OAuth

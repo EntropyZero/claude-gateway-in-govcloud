@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r tests/requirements-test.txt
-      - run: python -m pytest tests/lambda -q
+      - run: python -m pytest tests/lambda tests/templates -q
 
   bash:
     name: Shell helpers (bats)
