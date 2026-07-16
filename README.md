@@ -159,14 +159,22 @@ depth) are written to whichever managed-settings source the run can reach:
 
 Ensure your enterprise root CA is in the Windows certificate store (on
 domain-joined machines it normally already is, via GPO — no admin needed at
-install time) so the ALB cert validates. The distributed `claude.exe` is the
-**precompiled native build** (this deployment does not use the Node/npm
-distribution); if it does not pick up the Windows store for the gateway's
-enterprise-CA chain — `/login` fails TLS before the fingerprint prompt —
-deploy a PEM bundle of your CA chain alongside the binary and pass
-`-ExtraCaCertPath C:\path\to\ca-bundle.pem`, which sets
-`NODE_EXTRA_CA_CERTS` (honored by the precompiled build) in managed
-settings. Verify once against the pinned version on a test laptop.
+install time) so the ALB cert validates. Claude Code validates the TLS
+**chain first, then does the fingerprint pin** — both are enforced and
+independent, so an untrusted chain fails (`SSL certificate verification
+failed`) *before* the fingerprint prompt; pinning does not substitute for
+CA trust. The distributed `claude.exe` is the **precompiled native build**
+(no Node/npm distribution), and it **consults the OS certificate store
+automatically** (Node ≥ 22.15, which the pinned version bundles) — so the
+Windows-store CA is trusted with no extra config. The `-ExtraCaCertPath`
+fallback (which sets `NODE_EXTRA_CA_CERTS` in managed settings to a PEM you
+deploy alongside the binary) is for cases where the store isn't consulted —
+e.g. an older pinned CLI, or when you'd rather ship the trust anchor with
+the installer than rely on the store. `CLAUDE_CODE_CERT_STORE`
+(default `bundled,system`) controls which stores are trusted if you ever
+need to narrow it. Verify once against the pinned version on a test laptop.
+(Do **not** use `NODE_TLS_REJECT_UNAUTHORIZED=0` — it disables validation
+entirely and defeats the point.)
 
 **Intune/SCCM device-context (SYSTEM) pushes need two phases.** A SYSTEM run
 would install `claude.exe` into SYSTEM's own `%USERPROFILE%` and PATH — the

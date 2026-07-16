@@ -91,9 +91,55 @@ Legend: ☐ = do it · 🔎 = checkpoint, confirm before moving on.
 🔎 It prints `CertificateArn:` and persists `CERTIFICATE_ARN` into deploy.env,
 plus the **SHA-256 fingerprint** — save that; it's what developers pin.
 
-*(Test-account shortcut: if you don't have the enterprise CA in the loop yet,
-you can self-sign a leaf for the FQDN and import it — the TLS path will work;
-just don't publish that fingerprint as production-trusted.)*
+### Test-account shortcut — self-signed ALB cert
+
+If the enterprise CA isn't in the loop yet, self-sign a cert for the FQDN.
+The full TLS + fingerprint-pin path works exactly as production (Claude Code
+validates the chain first, then pins), so this exercises the real trust flow
+— you just have to make the test laptop trust the cert. **Don't publish this
+fingerprint as production-trusted.**
+
+```bash
+source scripts/deploy.env        # for AWS_REGION
+FQDN="$GATEWAY_FQDN"
+
+# 1. Self-signed cert for the FQDN (EC P-256, serverAuth, SAN = FQDN)
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+  -keyout "${FQDN}.key.pem" -out "${FQDN}.crt.pem" -days 90 \
+  -subj "/CN=${FQDN}" \
+  -addext "subjectAltName=DNS:${FQDN}" \
+  -addext "keyUsage=digitalSignature,keyEncipherment" \
+  -addext "extendedKeyUsage=serverAuth"
+
+# 2. Import into ACM (no chain for a self-signed cert) and record the ARN
+ARN=$(aws acm import-certificate --region "$AWS_REGION" \
+  --certificate "fileb://${FQDN}.crt.pem" \
+  --private-key  "fileb://${FQDN}.key.pem" \
+  --query CertificateArn --output text)
+echo "CERTIFICATE_ARN=$ARN"
+sed -i "s#^export CERTIFICATE_ARN=.*#export CERTIFICATE_ARN=\"$ARN\"#" scripts/deploy.env
+
+# 3. The fingerprint developers compare at the /login prompt
+openssl x509 -in "${FQDN}.crt.pem" -noout -fingerprint -sha256
+```
+
+**Then trust it on the test laptop** (chain validation happens before the
+pin, so an untrusted self-signed cert fails TLS before you ever see the
+fingerprint prompt). Either:
+- **Windows cert store** (per-user, no admin) — copy `${FQDN}.crt.pem` over and:
+  ```powershell
+  Import-Certificate -FilePath .\claude-gateway.crt.pem `
+    -CertStoreLocation Cert:\CurrentUser\Root
+  ```
+  (or `Cert:\LocalMachine\Root` with admin, for all users), **or**
+- **`-ExtraCaCertPath`** on the installer — ship `${FQDN}.crt.pem` to the
+  laptop and pass `-ExtraCaCertPath C:\path\to\claude-gateway.crt.pem`
+  (writes `NODE_EXTRA_CA_CERTS`). This is the same mechanism you'll use for
+  the real enterprise CA, so it's worth testing this path.
+
+A self-signed leaf *is* its own trust anchor, so the leaf cert itself is what
+goes in the store / PEM — there's no separate CA to import. Do **not** reach
+for `NODE_TLS_REJECT_UNAUTHORIZED=0`.
 
 ---
 
