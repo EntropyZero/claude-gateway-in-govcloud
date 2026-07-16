@@ -101,12 +101,15 @@ C10, C11 implemented; C2 implemented for ALB→gateway and ALB→Grafana
 (per-task self-signed certs, ALB re-encrypt), with the gateway→collector
 OTLP hop documented as an SSP-scoped option (the gateway validates
 telemetry TLS against the system trust store only — no custom-CA setting).
-A new latent bug was found and fixed during C11: the RDS-managed master
-secret auto-rotates every 7 days while ECS injects PGPASSWORD at task
-start — tasks older than a rotation would fail new DB connections. An
-EventBridge (CloudTrail `RotationSucceeded`) → Lambda hook now rolls the
-gateway service on each rotation. See the C-batch header below for the
-item-by-item mapping.
+A new latent bug was found during C11: the RDS-managed master secret
+auto-rotates every 7 days while ECS injects PGPASSWORD at task start —
+tasks older than a rotation would fail new DB connections. The interim
+fix (an EventBridge/CloudTrail → Lambda roll hook) was superseded the
+same day by **C12** (user-raised): the gateway now connects as a
+least-privilege application user whose secret is rotated by the stack's
+own Lambda, with the service roll built into the rotation itself; the
+master secret became break-glass and its rotation affects no running
+task. See the C-batch header below for the item-by-item mapping.
 
 **What remains (open work):**
 - **Deploy-time verification** — nothing has been deployed since any of
@@ -127,10 +130,22 @@ item-by-item mapping.
   replaces the workspace and orphans metric history). ECR repos created
   before 01 existed stay SSE-S3 forever (encryption fixed at creation) —
   recreate them if CMK coverage is mandatory.
-- **Post-deploy verification of the rotation hook**: the EventBridge
-  SecretId match is observed behavior, not a documented contract — force a
-  rotation once (`aws secretsmanager rotate-secret`) and confirm the roll;
-  consider alarming on zero RotationRollFunction invocations per period.
+- **First rotation check** (C12): the app-secret rotation fires
+  immediately at stack creation but is ASYNCHRONOUS — the stack goes green
+  either way. Confirm the secret flipped to `gateway_app_clone` and the
+  service rolled (db-rotation Lambda logs; the
+  `<prefix>-db-rotation-errors` alarm catches persistent failures). No
+  CloudTrail/EventBridge dependency remains. Note: at long cadences the
+  image Lambda is Inactive when rotation fires — one failed invoke while
+  Lambda re-optimizes is expected; Secrets Manager retries complete it.
+- **GovCloud endpoint-policy support pre-check**: before the first deploy
+  with `CREATE_SUPPORTING_ENDPOINTS=true`, confirm the `logs` endpoint
+  supports policies in the target region (the `ecs` endpoint policy was
+  deliberately omitted for this reason):
+  `aws ec2 describe-vpc-endpoint-services --region us-gov-west-1
+  --service-names com.amazonaws.us-gov-west-1.logs
+  --query 'ServiceDetails[].VpcEndpointPolicySupported'` — if false, drop
+  that endpoint's PolicyDocument (IAM-side scoping remains).
 - C2 OTLP-hop TLS if the SSP requires it; C9 Object Lock stays deferred.
 
 **Also-durable context** lives in project memory
@@ -325,8 +340,29 @@ the gateway segment.
 >   allow-all; standalone rules where inline would cycle; 03 attaches
 >   ALB→Grafana and gateway→collector rules to the imported SGs; proxy
 >   port derived by the deploy scripts).
-> - C11 → RDS master secret auto-rotates (7d) + NEW: rotation→service-roll
->   hook (stale-PGPASSWORD bug); JWT/Okta/Grafana runbooks in README.
+> - C11 → superseded by C12 below: the app DB secret rotates via the
+>   stack's own Lambda (roll built into finishSecret); the master secret
+>   became break-glass, so its RDS-managed weekly rotation affects no
+>   running task. The interim EventBridge/CloudTrail roll hook was
+>   removed. JWT/Okta/Grafana runbooks in README.
+
+**C12 (new, user-raised 2026-07-15). Gateway connected as the RDS master
+user (AC-6).** The application held `rds_superuser`-adjacent power: it
+could create roles, reach any database on the instance, and quiet its own
+pgaudit trail (AU-9). IAM database auth doesn't fit (the gateway takes one
+static postgres URL; IAM tokens are 15-minute, per-connection).
+**Implemented:** a `docker/db-admin/` Lambda container image (pg8000 +
+RDS CA bundle) provides (a) a CloudFormation custom resource that
+bootstraps `gateway_owner` (NOLOGIN, owns the schema) plus
+`gateway_app`/`gateway_app_clone` (LOGIN, `SET role` to the owner at
+login, no instance-wide powers), and (b) an alternating-users rotation
+function for the new `<prefix>/db-app-user` secret that force-rolls the
+gateway service in `finishSecret` (Secrets Manager retries the step; the
+label move is idempotent). Tasks inject only the app secret; the master
+secret is break-glass. An `ecs` interface endpoint joined the supporting
+set (the VPC-attached rotation Lambda needs the ECS API in no-NAT
+spokes). First rotation fires at stack creation as an automatic
+end-to-end validation.
 
 **C1. No customer-managed KMS keys anywhere.** RDS (`StorageEncrypted: true`,
 no `KmsKeyId`), Secrets Manager (RDS master, Okta, JWT, Grafana admin secrets),

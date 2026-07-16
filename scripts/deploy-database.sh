@@ -18,6 +18,22 @@ aws cloudformation deploy \
       "PgauditLogClasses=${PGAUDIT_LOG_CLASSES:-ddl,role,write}" \
       "KmsKeyArn=${KMS_KEY_ARN:-}"
 
+# Same protection pattern as the ALB: never let a routine update replace
+# or delete the database (replacement = a NEW EMPTY instance, not a
+# restore). DeletionProtection on the instance guards deletes; this guards
+# CloudFormation-driven replacement.
+log "Locking the database against replacement/deletion (stack policy)"
+aws cloudformation set-stack-policy \
+  --region "$AWS_REGION" \
+  --stack-name "$DB_STACK_NAME" \
+  --stack-policy-body '{
+    "Statement": [
+      {"Effect": "Allow", "Action": "Update:*", "Principal": "*", "Resource": "*"},
+      {"Effect": "Deny", "Action": ["Update:Replace", "Update:Delete"],
+       "Principal": "*", "Resource": "LogicalResourceId/Database"}
+    ]
+  }'
+
 log "Stack outputs"
 aws cloudformation describe-stacks --region "$AWS_REGION" \
   --stack-name "$DB_STACK_NAME" \

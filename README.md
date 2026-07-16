@@ -31,12 +31,14 @@ be re-litigated — are in [Design decisions](#design-decisions) below.
 | `docker/Dockerfile` | Container around the pinned, verified `claude` binary |
 | `docker/entrypoint.sh` | Renders `gateway.yaml`, assembles the Postgres URL |
 | `docker/grafana/` | Grafana image: AMP datasource + provisioned Claude Code dashboard |
+| `docker/db-admin/` | Lambda image: app DB user bootstrap + alternating-users secret rotation |
 | `client/mirror-claude-release.sh` | Egress-side: download + verify a pinned release |
 | `client/Install-ClaudeCode.ps1` | Offline Windows install — non-admin, Intune/SCCM, or manual |
 | `scripts/deploy.env.example` | Per-environment parameters (copy to `deploy.env`) |
 | `scripts/import-enterprise-cert.sh` | CSR generation, ACM import, fingerprint output |
 | `scripts/build-and-push-image.sh` | Build the gateway image and push to ECR |
 | `scripts/build-and-push-grafana.sh` | Build the provisioned Grafana image and push to ECR |
+| `scripts/build-and-push-dbadmin.sh` | Build the DB admin Lambda image and push to ECR |
 | `scripts/deploy-observability.sh` | Deploy the observability stack |
 | `scripts/deploy-database.sh` | Deploy the database stack |
 | `scripts/deploy-gateway.sh` | Deploy the gateway stack |
@@ -77,6 +79,7 @@ cp scripts/deploy.env.example scripts/deploy.env   # fill in VPC, Okta, network 
 ./client/mirror-claude-release.sh 2.1.207
 cp mirror/2.1.207/claude docker/claude
 ./scripts/build-and-push-image.sh          # writes IMAGE_URI back into deploy.env
+./scripts/build-and-push-dbadmin.sh        # writes DBADMIN_IMAGE (DB user bootstrap + rotation)
 
 # 4. Gateway stack
 ./scripts/deploy-gateway.sh
@@ -333,6 +336,13 @@ The observability stack imports the gateway stack's exports (`svc-sg`,
   with the fixed instance identifier) cannot be applied in place; it
   requires tearing down 03 and 02 first and restoring data manually from a
   snapshot. Encrypt-at-rest choices are effectively day-one decisions.
+- **Teardown quirks:** the db-admin Lambdas' VPC ENIs can linger up to
+  ~20 minutes after stack deletion and are attached to the 01 stack's
+  db-client security group — if a 01 delete right after a 02 delete fails
+  with a dependency violation on that SG, wait and retry. Named Secrets
+  Manager secrets enter a 7–30 day recovery window on deletion; redeploying
+  the same `NAME_PREFIX` within it fails at secret creation unless you
+  `delete-secret --force-delete-without-recovery` first.
 - **HTTP→HTTPS target-group migration (one-time, existing deployments):**
   the internal-TLS change replaces both target groups. Push the rebuilt
   images **first** (the new entrypoints generate the TLS certs the task
@@ -434,7 +444,7 @@ obvious alternative?" question — revisit only with a concrete reason.
 | DNS | Corporate-DNS CNAME → the ALB's default DNS name; resolves to private IPs, passing the `/login` check. No Route 53 private hosted zone required. |
 | Zscaler | The gateway FQDN is bypassed: ZIA SSL-inspection exemption + app bypass (TLS inspection breaks certificate fingerprint pinning; public proxy egress IPs fail `/login`), or a ZPA app segment (ZPA's synthetic CGNAT answers pass the check and ZPA doesn't intercept TLS). Add the FQDN to `NO_PROXY` on laptops if a PAC/explicit proxy is in use. |
 | IdP | Okta OIDC; a custom authorization server is preferred, and `userinfo_fallback: true` is set so the org server also works. Redirect URI is `https://<GatewayFqdn>/oauth/callback`. |
-| Store | RDS PostgreSQL 16 with `rds.force_ssl` + **pgaudit**, client-side `sslmode=verify-full` (RDS CA bundle baked into the image), an RDS-managed master secret, and SG-to-SG access only. The master secret **auto-rotates every 7 days**; an EventBridge→Lambda hook rolls the gateway service on each rotation so tasks never hold a stale password. Multi-AZ is on by default because a lost store loses spend tracking and caps, not just re-logins. |
+| Store | RDS PostgreSQL 16 with `rds.force_ssl` + **pgaudit**, client-side `sslmode=verify-full` (RDS CA bundle baked into the image), and SG-to-SG access only. The gateway connects as a **least-privilege application user** (created by a bootstrap Lambda; owns only the gateway schema via a shared owner role — no CREATEROLE, no `rds_superuser`, cannot tamper with pgaudit). The RDS master secret is **break-glass only**, still auto-rotated by RDS. Multi-AZ is on by default because a lost store loses spend tracking and caps, not just re-logins. |
 | Encryption at rest | One customer-managed KMS key (created by the DB stack or bring-your-own via `KMS_KEY_ARN`) covers RDS, all secrets, CloudWatch log groups, the activity archive, and AMP. Exception: the ALB access-logs bucket stays SSE-S3 — ELB log delivery does not support KMS. |
 | Network egress | Every security group has explicit egress (no default allow-all); all VPC endpoints carry resource policies scoped to this account/workload. Bedrock IAM + endpoint policies allow exactly the two configured models. |
 | Client install | Fully offline: pinned binary mirrored from Anthropic's release bucket and verified before distribution; managed settings force gateway login, pin a minimum version, and block **all** update paths (`DISABLE_UPDATES=1`). Works for non-admin users (per-user install + HKCU managed-policy source). |
@@ -442,10 +452,20 @@ obvious alternative?" question — revisit only with a concrete reason.
 
 ### Gotchas — do not re-litigate
 
-- **The ALB must stay IPv4-only** (see above). Deletion protection is enabled
-  because the ALB's default DNS name changes on recreation; the cert, CNAME,
-  and Okta redirect URI all reference the corporate FQDN precisely to absorb
-  that event.
+- **The ALB must stay IPv4-only** (see above). The ALB's default DNS name
+  changes on recreation — which means re-submitting the CNAME target to
+  the client's DNS team — so it is protected **three ways**: the
+  `deletion_protection.enabled` attribute (blocks deletes, including
+  stack deletes, until switched off), the fixed ALB name (a
+  create-before-delete replacement collides with itself and fails before
+  touching the live ALB), and a **CloudFormation stack policy** set by
+  `deploy-gateway.sh` on every run that denies `Update:Replace` and
+  `Update:Delete` on the `LoadBalancer` resource — a template change that
+  would replace the ALB fails fast with an explicit policy denial instead
+  of proceeding. The database stack gets the same treatment (`Database`
+  resource). The cert, CNAME, and Okta redirect URI all reference the
+  corporate FQDN precisely to absorb a deliberate recreation if one is
+  ever needed.
 - **There is no service-token flow.** CI/CD authenticates to Bedrock directly
   with IAM — it does not go through the gateway.
 - **The target group health-checks `/healthz` (liveness) deliberately**, so
@@ -476,12 +496,18 @@ obvious alternative?" question — revisit only with a concrete reason.
 
 ### Secret rotation posture
 
-- **RDS master secret** — RDS-managed, auto-rotates every 7 days (not
-  configurable). Because ECS injects `PGPASSWORD` at task start, the stack
-  includes an EventBridge rule + Lambda that force a new gateway deployment
-  on every successful rotation (zero-downtime roll). Prerequisite: a
-  CloudTrail trail with management events — standard in any landing zone —
-  since `RotationSucceeded` reaches EventBridge via CloudTrail.
+- **Application DB secret** (`<prefix>/db-app-user`) — rotated by the
+  stack's own Lambda on `APP_SECRET_ROTATION_DAYS` (default 90) using the
+  **alternating-users** strategy: each rotation flips to the other user
+  (`gateway_app` ⇄ `gateway_app_clone`) with a fresh password, so the
+  previous credential stays valid until the *next* rotation — running
+  tasks never hold a dead credential. The rotation's final step also
+  force-rolls the gateway service so new tasks pick up the new value;
+  Secrets Manager retries that step on failure. The first rotation fires
+  automatically at stack creation, which end-to-end validates the chain.
+- **RDS master secret** — break-glass only; no task injects it. RDS keeps
+  auto-rotating it every 7 days, which now affects nobody at runtime —
+  read it live (console/CLI) when human DB access is genuinely needed.
 - **JWT session secret** — manual, prepend → roll → remove (see above).
   Set a calendar cadence per your SSP (e.g. 90 days).
 - **Okta client secrets (gateway + Grafana)** — rotate in Okta, then run

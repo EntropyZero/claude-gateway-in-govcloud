@@ -231,6 +231,25 @@ Parameters:
       Lands in a short CloudWatch window + S3 archive via the
       observability stack. No effect unless ObservabilityOtlpUrl is set.
 
+  DbAdminLambdaImage:
+    Type: String
+    Description: >-
+      ECR image URI built from docker/db-admin/ by
+      scripts/build-and-push-dbadmin.sh. Runs the one-time bootstrap that
+      creates the least-privilege application DB users (the gateway never
+      connects as the RDS master user) and the alternating-users secret
+      rotation, which also rolls the service so tasks pick up the new
+      credential.
+
+  AppSecretRotationDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: >-
+      Rotation cadence for the application DB user secret. Alternating
+      users: the previous credential stays valid until the NEXT rotation,
+      so a rotation is never time-critical for running tasks.
+
   OpusModelId:
     Type: String
     Default: claude-opus-4-8
@@ -334,6 +353,21 @@ Resources:
       GenerateSecretString:
         PasswordLength: 48
         ExcludePunctuation: true
+
+  # Application DB credential (least privilege - AC-6). The DbBootstrap
+  # custom resource writes the real value (username/password/host/...);
+  # rotation alternates between gateway_app and gateway_app_clone. The RDS
+  # master secret is break-glass only - no task ever injects it.
+  DbAppUserSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/db-app-user'
+      Description: >-
+        Application DB user for the gateway (alternating-users rotation;
+        managed by the db-admin Lambda - do not edit by hand).
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+      SecretString: '{"bootstrap": "pending"}'
 
   # ------------------------------------------------------------ load balancer
   # SG egress is scoped everywhere (SC-7): inline lists replace the default
@@ -548,12 +582,14 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
+              # App-scoped DB credential only - tasks never read the RDS
+              # master secret (break-glass, humans only).
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource:
                   - !Ref OktaClientSecret
                   - !Ref JwtSecret
-                  - Fn::ImportValue: !Sub '${NamePrefix}-db-secret-arn'
+                  - !Ref DbAppUserSecret
               # The secrets are CMK-encrypted; decrypt rides IAM (the key
               # policy delegates to IAM via the account-root statement).
               - Effect: Allow
@@ -745,20 +781,17 @@ Resources:
               ValueFrom: !Ref OktaClientSecret
             - Name: GATEWAY_JWT_SECRET
               ValueFrom: !Ref JwtSecret
+            # The APP user (created by DbBootstrap), never the master.
             - Name: PGUSER
-              ValueFrom: !Sub
-                - '${SecretArn}:username::'
-                - SecretArn:
-                    Fn::ImportValue: !Sub '${NamePrefix}-db-secret-arn'
+              ValueFrom: !Sub '${DbAppUserSecret}:username::'
             - Name: PGPASSWORD
-              ValueFrom: !Sub
-                - '${SecretArn}:password::'
-                - SecretArn:
-                    Fn::ImportValue: !Sub '${NamePrefix}-db-secret-arn'
+              ValueFrom: !Sub '${DbAppUserSecret}:password::'
 
   Service:
     Type: AWS::ECS::Service
-    DependsOn: HttpsListener
+    # DbBootstrap: tasks inject username/password keys from the app secret,
+    # which only exist after the bootstrap has written the real value.
+    DependsOn: [HttpsListener, DbBootstrap]
     Properties:
       ServiceName: !Sub '${NamePrefix}-gateway'
       Cluster: !Ref Cluster
@@ -780,24 +813,25 @@ Resources:
           ContainerPort: 8080
           TargetGroupArn: !Ref TargetGroup
 
-  # ------------------------------------------- secret-rotation service roll
-  # The RDS-managed master secret auto-rotates (default every 7 days;
-  # adjustable via RotateSecret), but ECS injects PGPASSWORD at task start -
-  # tasks older than the last rotation hold a stale password and NEW
-  # database connections fail. Roll the service on every successful
-  # rotation (zero-downtime: MinimumHealthyPercent is 100).
-  # Prerequisites/caveats:
-  # - A CloudTrail trail with management events (standard in any landing
-  #   zone) - RotationSucceeded reaches EventBridge via CloudTrail.
-  # - The additionalEventData.SecretId match is observed behavior, not a
-  #   documented contract. VERIFY once after deploy: run
-  #   `aws secretsmanager rotate-secret --secret-id <rds! secret arn>` and
-  #   confirm the function fired (its log group) and the service rolled.
-  #   Consider alarming on zero function invocations per rotation period.
-  RotationRollRole:
+  # ----------------------------------------- app DB user (AC-6) + rotation
+  # The gateway connects as gateway_app / gateway_app_clone - LOGIN roles
+  # that assume a NOLOGIN owner role at login, so every object has one
+  # owner regardless of which user ran the migration. They hold no
+  # CREATEROLE / rds_superuser powers (a compromised gateway cannot mint
+  # users or quiet pgaudit). The RDS master secret is break-glass only:
+  # RDS keeps auto-rotating it weekly, and since no task injects it,
+  # nothing goes stale.
+  #
+  # Rotation is a custom Lambda (same image as the bootstrap) using the
+  # ALTERNATING-USERS strategy: each rotation flips the secret to the
+  # other user with a fresh password, so the previous credential stays
+  # valid until the NEXT rotation - and finishSecret force-rolls the
+  # service so tasks re-fetch credentials. A failed roll fails the step;
+  # Secrets Manager retries it (the label move is idempotent).
+  DbAdminLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${NamePrefix}-rotation-roll'
+      RoleName: !Sub '${NamePrefix}-db-admin'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -805,64 +839,156 @@ Resources:
             Principal: { Service: lambda.amazonaws.com }
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
       Policies:
-        - PolicyName: roll-gateway-service
+        - PolicyName: db-admin
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
+              - Sid: ReadMasterSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  Fn::ImportValue: !Sub '${NamePrefix}-db-secret-arn'
+              - Sid: ManageAppSecret
+                Effect: Allow
+                Action:
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:UpdateSecretVersionStage
+                Resource: !Ref DbAppUserSecret
+              - Sid: RandomPassword
+                Effect: Allow
+                Action: secretsmanager:GetRandomPassword
+                Resource: '*'
+              - Sid: CmkForSecrets
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource:
+                  Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+              - Sid: RollGatewayService
+                Effect: Allow
                 Action: ecs:UpdateService
                 Resource: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${Cluster}/${NamePrefix}-gateway'
 
-  RotationRollFunction:
+  DbBootstrapFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub '${NamePrefix}-rotation-roll'
-      Description: Force a new gateway deployment after the DB master secret rotates.
-      Runtime: python3.12
-      Handler: index.handler
-      Timeout: 30
-      Role: !GetAtt RotationRollRole.Arn
+      FunctionName: !Sub '${NamePrefix}-db-bootstrap'
+      Description: One-time creation of the least-privilege application DB users.
+      PackageType: Image
+      Code:
+        ImageUri: !Ref DbAdminLambdaImage
+      ImageConfig:
+        Command: [app.bootstrap_handler]
+      Timeout: 120
+      MemorySize: 256
+      Role: !GetAtt DbAdminLambdaRole.Arn
+      VpcConfig:
+        SubnetIds: !Ref PrivateSubnetIds
+        SecurityGroupIds:
+          - !Ref DbAdminLambdaSecurityGroup
+          - Fn::ImportValue: !Sub '${NamePrefix}-db-client-sg'
       Environment:
         Variables:
-          CLUSTER: !Ref Cluster
-          SERVICE: !GetAtt Service.Name
-      Code:
-        ZipFile: |
-          import boto3, os
-          def handler(event, context):
-              boto3.client('ecs').update_service(
-                  cluster=os.environ['CLUSTER'],
-                  service=os.environ['SERVICE'],
-                  forceNewDeployment=True)
-              print('rolled %s after secret rotation' % os.environ['SERVICE'])
+          MASTER_SECRET_ARN:
+            Fn::ImportValue: !Sub '${NamePrefix}-db-secret-arn'
+          APP_SECRET_ARN: !Ref DbAppUserSecret
+          PGHOST:
+            Fn::ImportValue: !Sub '${NamePrefix}-db-endpoint'
+          PGPORT:
+            Fn::ImportValue: !Sub '${NamePrefix}-db-port'
+          PGDATABASE:
+            Fn::ImportValue: !Sub '${NamePrefix}-db-name'
 
-  RotationRollRule:
-    Type: AWS::Events::Rule
+  DbBootstrap:
+    Type: Custom::DbAppUserBootstrap
     Properties:
-      Description: !Sub 'Roll ${NamePrefix}-gateway when the RDS master secret rotates'
-      EventPattern:
-        source: [aws.secretsmanager]
-        detail-type: [AWS Service Event via CloudTrail]
-        detail:
-          eventName: [RotationSucceeded]
-          additionalEventData:
-            SecretId:
-              - Fn::ImportValue: !Sub '${NamePrefix}-db-secret-arn'
-      Targets:
-        - Arn: !GetAtt RotationRollFunction.Arn
-          Id: roll-gateway
+      ServiceToken: !GetAtt DbBootstrapFunction.Arn
+      # Bump to force a re-run (idempotent: converges roles/grants, never
+      # resets live passwords).
+      ConfigVersion: '1'
 
-  RotationRollPermission:
+  DbRotationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${NamePrefix}-db-rotation'
+      Description: Alternating-users rotation for the app DB secret; rolls the gateway service.
+      PackageType: Image
+      Code:
+        ImageUri: !Ref DbAdminLambdaImage
+      ImageConfig:
+        Command: [app.rotate_handler]
+      Timeout: 120
+      MemorySize: 256
+      Role: !GetAtt DbAdminLambdaRole.Arn
+      VpcConfig:
+        SubnetIds: !Ref PrivateSubnetIds
+        SecurityGroupIds:
+          - !Ref DbAdminLambdaSecurityGroup
+          - Fn::ImportValue: !Sub '${NamePrefix}-db-client-sg'
+      Environment:
+        Variables:
+          MASTER_SECRET_ARN:
+            Fn::ImportValue: !Sub '${NamePrefix}-db-secret-arn'
+          APP_SECRET_ARN: !Ref DbAppUserSecret
+          PGHOST:
+            Fn::ImportValue: !Sub '${NamePrefix}-db-endpoint'
+          PGPORT:
+            Fn::ImportValue: !Sub '${NamePrefix}-db-port'
+          PGDATABASE:
+            Fn::ImportValue: !Sub '${NamePrefix}-db-name'
+          ECS_CLUSTER: !Ref Cluster
+          ECS_SERVICE: !GetAtt Service.Name
+
+  DbRotationInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref RotationRollFunction
+      FunctionName: !Ref DbRotationFunction
       Action: lambda:InvokeFunction
-      Principal: events.amazonaws.com
-      SourceArn: !GetAtt RotationRollRule.Arn
+      Principal: secretsmanager.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+  DbAppSecretRotation:
+    Type: AWS::SecretsManager::RotationSchedule
+    # Service (and therefore DbBootstrap) must exist: schedule creation
+    # triggers an immediate first rotation, which flips to the clone user
+    # and rolls the service. Rotation is ASYNCHRONOUS - the stack goes
+    # green regardless of the first rotation's outcome, so check the
+    # db-rotation log group (or the alarm below) after first deploy. At a
+    # 90-day cadence the image Lambda will be Inactive when each rotation
+    # fires; the first invoke fails while Lambda re-optimizes the image
+    # and Secrets Manager's own retries then complete the rotation.
+    DependsOn: [Service, DbRotationInvokePermission]
+    Properties:
+      SecretId: !Ref DbAppUserSecret
+      RotationLambdaARN: !GetAtt DbRotationFunction.Arn
+      RotateImmediatelyOnUpdate: true
+      RotationRules:
+        ScheduleExpression: !Sub 'rate(${AppSecretRotationDays} days)'
 
   # -------------------------------------------------- optional VPC endpoints
+  # The db-admin Lambda (bootstrap + rotation) lives in the VPC to reach
+  # Postgres; it also calls Secrets Manager and ECS (via the endpoints in
+  # a no-NAT spoke, or NAT otherwise).
+  DbAdminLambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} - db-admin Lambda (bootstrap + rotation)'
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Secrets Manager + ECS APIs
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-db-admin'
+
   EndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Condition: WantAnyInterfaceEndpoint
@@ -875,6 +1001,11 @@ Resources:
           ToPort: 443
           SourceSecurityGroupId: !Ref ServiceSecurityGroup
           Description: TLS from gateway tasks
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref DbAdminLambdaSecurityGroup
+          Description: TLS from the db-admin Lambda
       # Endpoint ENIs never initiate connections.
       SecurityGroupEgress:
         - IpProtocol: '-1'
@@ -1016,12 +1147,40 @@ Resources:
           - Sid: GatewaySecretsOnly
             Effect: Allow
             Principal: '*'
-            Action: secretsmanager:GetSecretValue
-            # This stack's named secrets plus the RDS-managed master secret
-            # (random rds! name).
+            # Tasks read; the db-admin Lambda also describes, writes, and
+            # re-stages during rotation. Scoped to this stack's named
+            # secrets plus the RDS-managed master secret (random rds! name).
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+              - secretsmanager:PutSecretValue
+              - secretsmanager:UpdateSecretVersionStage
             Resource:
               - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}/*'
               - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:rds!*'
+          - Sid: RandomPasswordHasNoResource
+            Effect: Allow
+            Principal: '*'
+            Action: secretsmanager:GetRandomPassword
+            Resource: '*'
+
+  # ECS control-plane API - needed by the db-admin rotation Lambda's
+  # UpdateService call from inside a no-NAT spoke (Fargate tasks themselves
+  # do not need it on platform 1.4). Deliberately NO PolicyDocument: not
+  # every GovCloud endpoint supports policies and an unsupported one fails
+  # the whole stack; the equivalent scoping already lives on
+  # DbAdminLambdaRole (ecs:UpdateService on the one service ARN).
+  EcsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: WantSupportingEndpoints
+    Properties:
+      VpcId: !Ref VpcId
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecs'
+      SubnetIds: !Ref PrivateSubnetIds
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
 
   S3GatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -1041,6 +1200,15 @@ Resources:
             Principal: '*'
             Action: s3:GetObject
             Resource: !Sub 'arn:${AWS::Partition}:s3:::prod-${AWS::Region}-starport-layer-bucket/*'
+          # CloudFormation custom resources respond via a presigned PUT to
+          # an AWS-owned bucket; the gateway-endpoint route captures that
+          # traffic, and blocking it hangs every DbBootstrap create/delete
+          # for ~an hour.
+          - Sid: CfnCustomResourceResponses
+            Effect: Allow
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::cloudformation-custom-resource-response-*/*'
           - Sid: ThisAccountBucketsOnly
             Effect: Allow
             Principal: '*'
@@ -1049,6 +1217,31 @@ Resources:
             Condition:
               StringEquals:
                 aws:ResourceAccount: !Ref AWS::AccountId
+
+  # Rotation failures are otherwise silent (rotation is asynchronous and
+  # retried; nothing else surfaces a permanently failing rotation). The
+  # threshold tolerates the expected single Inactive-state error per
+  # scheduled rotation (see DbAppSecretRotation comment).
+  DbRotationFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${NamePrefix}-db-rotation-errors'
+      AlarmDescription: >-
+        The app DB secret rotation Lambda is erroring repeatedly. Check
+        its log group; if rotation stays wedged, tasks keep working on the
+        current credential but the rotation SLA is not being met.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DbRotationFunction
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HaveAlarmTopic, [!Ref AlarmSnsTopicArn], !Ref 'AWS::NoValue']
 
   # ------------------------------------------------------------------ alarms
   # Imported ACM certificates do NOT auto-renew; ACM publishes DaysToExpiry

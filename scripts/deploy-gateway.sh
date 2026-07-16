@@ -6,7 +6,7 @@ source "$(dirname "$0")/common.sh"
 
 require_vars VPC_ID VPC_CIDR PRIVATE_SUBNET_IDS CLIENT_INGRESS_CIDR \
              CERTIFICATE_ARN GATEWAY_FQDN OKTA_ISSUER OKTA_CLIENT_ID \
-             ALLOWED_EMAIL_DOMAINS
+             ALLOWED_EMAIL_DOMAINS DBADMIN_IMAGE
 
 if [ -z "${IMAGE_URI:-}" ]; then
   IMAGE_URI="$(account_id).dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${CLAUDE_VERSION}"
@@ -59,6 +59,8 @@ aws cloudformation deploy \
       "CertificateArn=${CERTIFICATE_ARN}" \
       "GatewayFqdn=${GATEWAY_FQDN}" \
       "ContainerImage=${IMAGE_URI}" \
+      "DbAdminLambdaImage=${DBADMIN_IMAGE}" \
+      "AppSecretRotationDays=${APP_SECRET_ROTATION_DAYS:-90}" \
       "DesiredCount=${DESIRED_COUNT:-2}" \
       "TaskCpu=${TASK_CPU:-1024}" \
       "TaskMemory=${TASK_MEMORY:-2048}" \
@@ -83,6 +85,26 @@ aws cloudformation deploy \
       "OpusBedrockModelId=${OPUS_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-opus-4-8}" \
       "SonnetModelId=${SONNET_MODEL_ID:-claude-sonnet-4-5}" \
       "SonnetBedrockModelId=${SONNET_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0}"
+
+# Stack policy: refuse any future update that would REPLACE or DELETE the
+# ALB. Its default DNS name is the corporate CNAME target - recreation
+# means re-submitting DNS to the client and re-publishing the fingerprint.
+# Layered with deletion_protection.enabled and the fixed ALB name (a
+# create-before-delete replacement collides with itself). Remove the
+# policy deliberately if an ALB replacement is ever truly intended:
+#   aws cloudformation set-stack-policy --stack-name <stack> \
+#     --stack-policy-body '{"Statement":[{"Effect":"Allow","Action":"Update:*","Principal":"*","Resource":"*"}]}'
+log "Locking the ALB against replacement/deletion (stack policy)"
+aws cloudformation set-stack-policy \
+  --region "$AWS_REGION" \
+  --stack-name "$GATEWAY_STACK_NAME" \
+  --stack-policy-body '{
+    "Statement": [
+      {"Effect": "Allow", "Action": "Update:*", "Principal": "*", "Resource": "*"},
+      {"Effect": "Deny", "Action": ["Update:Replace", "Update:Delete"],
+       "Principal": "*", "Resource": "LogicalResourceId/LoadBalancer"}
+    ]
+  }'
 
 log "Stack outputs"
 aws cloudformation describe-stacks --region "$AWS_REGION" \

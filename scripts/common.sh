@@ -104,13 +104,17 @@ put_secret_and_roll() {
   log "Watch rollout: aws ecs wait services-stable --region $AWS_REGION --cluster $cluster --services $service"
 }
 
-# ensure_ecr_repo REPO-NAME - create the repository if missing (scan on
-# push, CMK-encrypted when KMS_KEY_ARN is set - encryption is fixed at
-# creation and cannot be changed on an existing repo), and enforce
-# IMMUTABLE tags either way, so repos created by older script versions get
-# back-filled instead of silently staying mutable.
+# ensure_ecr_repo REPO-NAME [lambda] - create the repository if missing
+# (scan on push, CMK-encrypted when KMS_KEY_ARN is set - encryption is
+# fixed at creation and cannot be changed on an existing repo), and
+# enforce IMMUTABLE tags either way, so repos created by older script
+# versions get back-filled instead of silently staying mutable.
+# Pass 'lambda' to grant lambda.amazonaws.com image pull on the repo -
+# container-image Lambdas need it via the repo policy, and relying on
+# Lambda's "add it automatically" behavior breaks under scoped operator
+# roles that lack ecr:SetRepositoryPolicy.
 ensure_ecr_repo() {
-  local repo="$1" enc=()
+  local repo="$1" allow_lambda="${2:-}" enc=()
   [ -n "${KMS_KEY_ARN:-}" ] && enc=(--encryption-configuration "encryptionType=KMS,kmsKey=${KMS_KEY_ARN}")
   log "Ensuring ECR repository ${repo} exists (immutable tags)"
   aws ecr describe-repositories --region "$AWS_REGION" \
@@ -123,6 +127,11 @@ ensure_ecr_repo() {
   aws ecr put-image-tag-mutability --region "$AWS_REGION" \
     --repository-name "$repo" \
     --image-tag-mutability IMMUTABLE >/dev/null
+  if [ "$allow_lambda" = "lambda" ]; then
+    aws ecr set-repository-policy --region "$AWS_REGION" \
+      --repository-name "$repo" \
+      --policy-text "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"LambdaImagePull\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"lambda.amazonaws.com\"},\"Action\":[\"ecr:BatchGetImage\",\"ecr:GetDownloadUrlForLayer\"],\"Condition\":{\"StringEquals\":{\"aws:SourceAccount\":\"$(account_id)\"}}}]}" >/dev/null
+  fi
 }
 
 # ecr_login - docker login to this account's ECR registry; prints the
