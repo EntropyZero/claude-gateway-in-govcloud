@@ -84,15 +84,15 @@ Parameters:
 
   OktaAuthServerType:
     Type: String
-    Default: custom
+    Default: org
     AllowedValues: ['org', 'custom']
     Description: >-
-      Which Okta authorization server OktaIssuer points at. 'org' = the
-      built-in org server (issuer is the bare domain; endpoints live under
-      /oauth2/v1/... and the org server has a built-in 'groups' scope).
-      'custom' = a custom authorization server (issuer already contains
-      /oauth2/<id>; endpoints are <issuer>/v1/..., and you configure the
-      groups claim/scope on it). Grafana's OAuth URLs are derived
+      Which Okta authorization server OktaIssuer points at (default 'org').
+      'org' = the built-in org server (issuer is the bare domain; endpoints
+      live under /oauth2/v1/... and the org server has a built-in 'groups'
+      scope). 'custom' = a custom authorization server (issuer already
+      contains /oauth2/<id>; endpoints are <issuer>/v1/..., and you configure
+      the groups claim/scope on it). Grafana's OAuth URLs are derived
       accordingly.
 
   HttpsProxyUrl:

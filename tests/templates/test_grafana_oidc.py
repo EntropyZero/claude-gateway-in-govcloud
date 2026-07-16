@@ -30,6 +30,12 @@ def test_endpoint_choice_keys_off_the_mode_condition():
     assert "!If [OrgAuthServer" in t
 
 
+def test_org_is_the_default_auth_server_type():
+    t = _text()
+    block = t[t.index("OktaAuthServerType:"):][:300]
+    assert "Default: org" in block, "OktaAuthServerType default should be org"
+
+
 def test_groups_scope_is_requested():
     # role mapping needs groups in the token; the org server returns them
     # only when the scope is requested.
