@@ -272,19 +272,28 @@ HTTPS_PROXY_URL=""                         # only if a central proxy is mandated
 
 Two landing-zone checks: if shared services already provide **centralized
 interface endpoints** (a common landing-zone pattern — endpoints in a shared
-VPC with private hosted zones associated to spoke VPCs), leave
-`CREATE_SUPPORTING_ENDPOINTS=false` and use those — creating local endpoints
-with private DNS fails when a PHZ for the same service domain is already
-associated. **This applies to all three endpoint sets**: the supporting
-endpoints, the Bedrock endpoint (set `BEDROCK_PRIVATE_DNS=false` if a
-centralized `bedrock-runtime` endpoint's PHZ covers this VPC — traffic then
-follows the shared PHZ to the central endpoint, so apply the Claude-only
-endpoint policy *there*, or the model guardrail at the network layer is
-silently lost), and the AMP endpoint (`CREATE_AMP_ENDPOINT` on the
-observability stack). The S3 **gateway** endpoint is the exception: it
-cannot be centralized over TGW, so create it locally in every case. And
-confirm TGW routes/SGs allow the ZPA App Connector / VPN ranges to reach the
-ALB on 443 (`CLIENT_INGRESS_CIDR`).
+VPC with private hosted zones associated to spoke VPCs), creating a local
+endpoint with private DNS for the same service **fails the stack** with a
+"conflicting DNS name" error. Find which services are centralized —
+`aws route53 list-hosted-zones-by-vpc --vpc-id <vpc> --vpc-region <region>
+--query 'HostedZoneSummaries[].Name'` — and skip exactly those:
+
+- **Supporting endpoints** are individually toggleable: keep
+  `CREATE_SUPPORTING_ENDPOINTS=true` for the ones you need locally and set
+  `CREATE_LOGS_ENDPOINT=false` (or `CREATE_ECR_API_ENDPOINT`,
+  `CREATE_ECR_DKR_ENDPOINT`, `CREATE_SECRETSMANAGER_ENDPOINT`,
+  `CREATE_ECS_ENDPOINT`) for any the landing zone centralizes. If *all* are
+  centralized, just `CREATE_SUPPORTING_ENDPOINTS=false`.
+- **Bedrock:** set `BEDROCK_PRIVATE_DNS=false` if a centralized
+  `bedrock-runtime` endpoint's PHZ covers this VPC — traffic then follows the
+  shared PHZ to the central endpoint, so apply the Claude-only endpoint
+  policy *there*, or the model guardrail at the network layer is silently
+  lost.
+- **AMP:** `CREATE_AMP_ENDPOINT=false` on the observability stack if centralized.
+
+The S3 **gateway** endpoint is the exception: it cannot be centralized over
+TGW, so create it locally in every case. And confirm TGW routes/SGs allow the
+ZPA App Connector / VPN ranges to reach the ALB on 443 (`CLIENT_INGRESS_CIDR`).
 
 ## ZPA & landing-zone prerequisites
 

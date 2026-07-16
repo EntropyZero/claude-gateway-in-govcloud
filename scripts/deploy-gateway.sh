@@ -77,6 +77,11 @@ aws cloudformation deploy \
       "CreateBedrockEndpoint=${CREATE_BEDROCK_ENDPOINT:-true}" \
       "BedrockPrivateDns=${BEDROCK_PRIVATE_DNS:-true}" \
       "CreateSupportingEndpoints=${CREATE_SUPPORTING_ENDPOINTS:-false}" \
+      "CreateEcrApiEndpoint=${CREATE_ECR_API_ENDPOINT:-true}" \
+      "CreateEcrDkrEndpoint=${CREATE_ECR_DKR_ENDPOINT:-true}" \
+      "CreateLogsEndpoint=${CREATE_LOGS_ENDPOINT:-true}" \
+      "CreateSecretsManagerEndpoint=${CREATE_SECRETSMANAGER_ENDPOINT:-true}" \
+      "CreateEcsEndpoint=${CREATE_ECS_ENDPOINT:-true}" \
       "PrivateRouteTableIds=${PRIVATE_ROUTE_TABLE_IDS:-}" \
       "HttpsProxyUrl=${HTTPS_PROXY_URL:-}" \
       "HttpsProxyPort=$(proxy_port "${HTTPS_PROXY_URL:-}")" \

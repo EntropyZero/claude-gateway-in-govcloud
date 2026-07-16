@@ -146,13 +146,47 @@ Parameters:
     Default: 'false'
     AllowedValues: ['true', 'false']
     Description: >-
-      Create the interface VPC endpoints Fargate itself depends on - ecr.api,
-      ecr.dkr, logs, secretsmanager (billed per AZ-hour). Pair with
-      PrivateRouteTableIds for the free S3 gateway endpoint - without it,
-      no-NAT image pulls still fail (ECR layers are served from S3). Leave
-      false when the private subnets already have NAT egress. Note the
-      gateway still needs an egress path to the Okta issuer for OIDC either
-      way - no VPC endpoint can provide that.
+      Master switch for the interface VPC endpoints Fargate itself depends on
+      - ecr.api, ecr.dkr, logs, secretsmanager, ecs (billed per AZ-hour).
+      Pair with PrivateRouteTableIds for the free S3 gateway endpoint -
+      without it, no-NAT image pulls still fail (ECR layers are served from
+      S3). Leave false when the private subnets already have NAT egress. Note
+      the gateway still needs an egress path to the Okta issuer for OIDC
+      either way - no VPC endpoint can provide that. Use the per-endpoint
+      toggles below to SKIP any service the landing zone already centralizes
+      (a shared endpoint with a private hosted zone associated to this VPC) -
+      creating a local private-DNS endpoint for the same service otherwise
+      fails with a "conflicting DNS" error.
+
+  CreateEcrApiEndpoint:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Create the local ecr.api endpoint (false if centralized). Only applies when CreateSupportingEndpoints=true.
+
+  CreateEcrDkrEndpoint:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Create the local ecr.dkr endpoint (false if centralized). Only applies when CreateSupportingEndpoints=true.
+
+  CreateLogsEndpoint:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Create the local logs endpoint (false if centralized). Only applies when CreateSupportingEndpoints=true.
+
+  CreateSecretsManagerEndpoint:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Create the local secretsmanager endpoint (false if centralized). Only applies when CreateSupportingEndpoints=true.
+
+  CreateEcsEndpoint:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Create the local ecs endpoint (false if centralized). Only applies when CreateSupportingEndpoints=true.
 
   PrivateRouteTableIds:
     Type: CommaDelimitedList
@@ -312,6 +346,11 @@ Conditions:
   WantBedrockEndpoint: !Equals [!Ref CreateBedrockEndpoint, 'true']
   WantBedrockPrivateDns: !Equals [!Ref BedrockPrivateDns, 'true']
   WantSupportingEndpoints: !Equals [!Ref CreateSupportingEndpoints, 'true']
+  WantEcrApiEndpoint: !And [!Condition WantSupportingEndpoints, !Equals [!Ref CreateEcrApiEndpoint, 'true']]
+  WantEcrDkrEndpoint: !And [!Condition WantSupportingEndpoints, !Equals [!Ref CreateEcrDkrEndpoint, 'true']]
+  WantLogsEndpoint: !And [!Condition WantSupportingEndpoints, !Equals [!Ref CreateLogsEndpoint, 'true']]
+  WantSecretsManagerEndpoint: !And [!Condition WantSupportingEndpoints, !Equals [!Ref CreateSecretsManagerEndpoint, 'true']]
+  WantEcsEndpoint: !And [!Condition WantSupportingEndpoints, !Equals [!Ref CreateEcsEndpoint, 'true']]
   WantAnyInterfaceEndpoint: !Or [!Condition WantBedrockEndpoint, !Condition WantSupportingEndpoints]
   WantS3Endpoint: !Not [!Equals [!Join ['', !Ref PrivateRouteTableIds], '']]
   HaveAlarmTopic: !Not [!Equals [!Ref AlarmSnsTopicArn, '']]
@@ -1052,7 +1091,7 @@ Resources:
   # ever over-broadened.
   EcrApiEndpoint:
     Type: AWS::EC2::VPCEndpoint
-    Condition: WantSupportingEndpoints
+    Condition: WantEcrApiEndpoint
     Properties:
       VpcId: !Ref VpcId
       VpcEndpointType: Interface
@@ -1080,7 +1119,7 @@ Resources:
 
   EcrDkrEndpoint:
     Type: AWS::EC2::VPCEndpoint
-    Condition: WantSupportingEndpoints
+    Condition: WantEcrDkrEndpoint
     Properties:
       VpcId: !Ref VpcId
       VpcEndpointType: Interface
@@ -1108,7 +1147,7 @@ Resources:
 
   LogsEndpoint:
     Type: AWS::EC2::VPCEndpoint
-    Condition: WantSupportingEndpoints
+    Condition: WantLogsEndpoint
     Properties:
       VpcId: !Ref VpcId
       VpcEndpointType: Interface
@@ -1132,7 +1171,7 @@ Resources:
 
   SecretsManagerEndpoint:
     Type: AWS::EC2::VPCEndpoint
-    Condition: WantSupportingEndpoints
+    Condition: WantSecretsManagerEndpoint
     Properties:
       VpcId: !Ref VpcId
       VpcEndpointType: Interface
@@ -1172,7 +1211,7 @@ Resources:
   # DbAdminLambdaRole (ecs:UpdateService on the one service ARN).
   EcsEndpoint:
     Type: AWS::EC2::VPCEndpoint
-    Condition: WantSupportingEndpoints
+    Condition: WantEcsEndpoint
     Properties:
       VpcId: !Ref VpcId
       VpcEndpointType: Interface
