@@ -43,11 +43,15 @@ if [ -n "${OBSERVABILITY_OTLP_URL:-}" ]; then
   esac
 fi
 
+ARTIFACTS_BUCKET="$(ensure_artifacts_bucket)"
+
 log "Deploying ${GATEWAY_STACK_NAME} (ALB + ECS Fargate) in ${AWS_REGION}"
 aws cloudformation deploy \
   --region "$AWS_REGION" \
   --stack-name "$GATEWAY_STACK_NAME" \
   --template-file "${REPO_ROOT}/cloudformation/02-gateway.yaml" \
+  --s3-bucket "$ARTIFACTS_BUCKET" \
+  --s3-prefix "$GATEWAY_STACK_NAME" \
   --capabilities CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset \
   --parameter-overrides \

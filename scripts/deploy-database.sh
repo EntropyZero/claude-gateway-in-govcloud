@@ -20,11 +20,15 @@ PARAMS=(
 )
 [ -n "${DB_ENGINE_VERSION:-}" ] && PARAMS+=("DBEngineVersion=${DB_ENGINE_VERSION}")
 
+ARTIFACTS_BUCKET="$(ensure_artifacts_bucket)"
+
 log "Deploying ${DB_STACK_NAME} (RDS PostgreSQL) in ${AWS_REGION}"
 aws cloudformation deploy \
   --region "$AWS_REGION" \
   --stack-name "$DB_STACK_NAME" \
   --template-file "${REPO_ROOT}/cloudformation/01-database.yaml" \
+  --s3-bucket "$ARTIFACTS_BUCKET" \
+  --s3-prefix "$DB_STACK_NAME" \
   --no-fail-on-empty-changeset \
   --parameter-overrides "${PARAMS[@]}"
 

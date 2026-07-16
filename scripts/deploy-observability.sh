@@ -14,10 +14,13 @@ require_vars VPC_ID PRIVATE_SUBNET_IDS GATEWAY_FQDN GRAFANA_IMAGE COLLECTOR_IMAG
 OBS_STACK_NAME="${OBS_STACK_NAME:-${NAME_PREFIX}-obs}"
 
 log "Deploying ${OBS_STACK_NAME} (AMP + collector + Grafana) in ${AWS_REGION}"
+ARTIFACTS_BUCKET="$(ensure_artifacts_bucket)"
 aws cloudformation deploy \
   --region "$AWS_REGION" \
   --stack-name "$OBS_STACK_NAME" \
   --template-file "${REPO_ROOT}/cloudformation/03-observability.yaml" \
+  --s3-bucket "$ARTIFACTS_BUCKET" \
+  --s3-prefix "$OBS_STACK_NAME" \
   --capabilities CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset \
   --parameter-overrides \

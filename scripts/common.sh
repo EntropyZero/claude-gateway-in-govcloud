@@ -134,6 +134,27 @@ ensure_ecr_repo() {
   fi
 }
 
+# ensure_artifacts_bucket - name (on stdout) of a regional bucket for
+# CloudFormation template uploads. Templates over 51,200 bytes must deploy
+# via S3 (aws cloudformation deploy --s3-bucket), which uploads the template
+# and references it by URL. Creates the bucket (SSE-S3, public access
+# blocked) if missing. Override the name with DEPLOY_ARTIFACTS_BUCKET.
+ensure_artifacts_bucket() {
+  local bucket="${DEPLOY_ARTIFACTS_BUCKET:-${NAME_PREFIX}-cfn-artifacts-$(account_id)-${AWS_REGION}}"
+  if ! aws s3api head-bucket --bucket "$bucket" --region "$AWS_REGION" >/dev/null 2>&1; then
+    log "Creating CloudFormation artifacts bucket ${bucket}" >&2
+    aws s3api create-bucket --bucket "$bucket" --region "$AWS_REGION" \
+      --create-bucket-configuration "LocationConstraint=${AWS_REGION}" >/dev/null
+    aws s3api put-public-access-block --bucket "$bucket" \
+      --public-access-block-configuration \
+      BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true >/dev/null
+    aws s3api put-bucket-encryption --bucket "$bucket" \
+      --server-side-encryption-configuration \
+      '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}' >/dev/null
+  fi
+  printf '%s' "$bucket"
+}
+
 # ecr_login - docker login to this account's ECR registry; prints the
 # registry hostname on stdout.
 ecr_login() {
