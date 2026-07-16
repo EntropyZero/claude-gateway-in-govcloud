@@ -222,7 +222,7 @@ def d1():
     s.arrow([(470, 330), (452, 330), (452, 830), (1180, 830), (1180, 802)])
     s.chip(800, 830, "OIDC login + token exchange (TGW egress or proxy)", RED)
     # Grafana -> Okta
-    s.arrow([(940, 226), (940, 274), (1096, 274), (1096, 744)])
+    s.arrow([(940, 226), (940, 274), (1096, 274), (1096, 760), (1148, 760)])
     s.chip(1096, 690, "OAuth code exchange", RED)
     # optional proxy path
     s.arrow([(356, 587), (410, 587), (410, 862), (1240, 862), (1240, 820)],
@@ -540,5 +540,169 @@ def d6():
     s.write("06-stack-dependencies-deploy-order.svg")
 
 
+# =====================================================================
+# 1a. Access & network path (split view)
+# =====================================================================
+def d1a():
+    s = SVG(1500, 760, "Access & network path",
+            "how requests reach the gateway and how the two OIDC flows leave — every arrow is TLS")
+
+    s.zone(40, 96, 340, 216, "Managed Windows fleet", BLUE, BLUE_T, "Zscaler ZPA")
+    s.node(64, 138, 292, 74, "Developer laptop — Claude Code",
+           ["precompiled binary, mirrored install",
+            "managed settings: forced gateway login,", "updates disabled"],
+           border=BLUE)
+    s.node(64, 232, 292, 58, "Zscaler Client Connector",
+           ["answers DNS with synthetic CGNAT IPs"], border=BLUE)
+
+    s.zone(40, 360, 340, 300, "Corporate network", AMBER, AMBER_T)
+    s.node(64, 402, 292, 58, "ZPA App Connector",
+           ["real DNS lookup + the source IP", "the ALB actually sees"],
+           border=AMBER)
+    s.node(64, 480, 292, 58, "AD DNS",
+           ["claude-gateway.example.com", "CNAME → internal ALB name"],
+           border=AMBER)
+    s.node(64, 558, 292, 58, "Egress proxy (optional)",
+           ["HTTPS_PROXY_URL — only when the", "landing zone mandates it"],
+           border=AMBER, dashed=True)
+
+    s.zone(440, 96, 600, 560, "AWS GovCloud VPC", GREEN, GREEN_T,
+           "spoke · private subnets only")
+    s.node(480, 160, 250, 80, "Internal ALB  :443",
+           ["enterprise-CA cert (ACM import)", "IPv4-only · deletion-protected",
+            "stack-policy locked"], border=GREEN)
+    s.node(760, 160, 250, 80, "Grafana  :3000 TLS",
+           ["per-task self-signed cert", "Okta SSO only, no local login"],
+           border=GREEN)
+    s.node(480, 320, 250, 80, "Gateway — ECS Fargate ×2",
+           ["claude gateway (pinned binary)", "TLS listener :8080, per-task cert"],
+           border=GREEN)
+    s.node(480, 480, 250, 90, "RDS PostgreSQL 16",
+           ["Multi-AZ · CMK · pgaudit", "app-user login only"],
+           border=GREEN, cyl=True)
+    s.text(760, 500, "All AWS-service traffic (Bedrock,", size=10.5, color=GREEN)
+    s.text(760, 516, "telemetry, secrets, archives) exits via", size=10.5, color=GREEN)
+    s.text(760, 532, "VPC endpoints — see the services view.", size=10.5, color=GREEN)
+
+    s.zone(1120, 360, 340, 160, "External SaaS — only public dependency",
+           RED, RED_T)
+    s.node(1144, 410, 292, 76, "Okta",
+           ["custom authorization server", "with groups claim · user MFA"],
+           border=RED)
+
+    # ingress path
+    s.arrow([(210, 212), (210, 232)])
+    s.arrow([(210, 290), (210, 360)])
+    s.chip(210, 336, "ZPA tunnel", BLUE)
+    s.arrow([(356, 431), (420, 431), (420, 200), (480, 200)])
+    s.chip(420, 300, "TLS :443", GREEN, weight="bold")
+    s.chip(420, 322, "fingerprint-pinned", GREEN)
+    s.arrow([(730, 200), (760, 200)])
+    s.chip(745, 148, ":3000", GREEN)
+    s.arrow([(605, 240), (605, 320)])
+    s.chip(605, 280, ":8080 re-encrypt", GREEN)
+    s.arrow([(605, 400), (605, 480)])
+    s.chip(605, 440, ":5432 verify-full", GREEN)
+    # OIDC flows out
+    s.arrow([(730, 352), (900, 352), (900, 430), (1144, 430)])
+    s.chip(1000, 418, "OIDC token exchange (TGW egress or proxy)", RED)
+    s.arrow([(890, 240), (890, 468), (1144, 468)])
+    s.chip(1000, 456, "OAuth code exchange", RED)
+    # browser SSO redirect (top corridor)
+    s.arrow([(300, 138), (300, 84), (1290, 84), (1290, 360)], dashed=True)
+    s.chip(840, 84, "browser SSO redirect (via ZPA) — user MFA at Okta", RED)
+    # proxy path (routed below the VPC zone)
+    s.arrow([(356, 587), (410, 587), (410, 682), (1250, 682), (1250, 520)],
+            dashed=True)
+    s.chip(800, 682, "proxy path when mandated", AMBER)
+
+    s.text(36, 716, "No public ingress: the ALB is internal — reachable only "
+           "through the ZPA app segment from allow-listed connector source "
+           "CIDRs. The Okta issuer is the single internet-bound flow, "
+           "port-scoped by security groups.", size=11.5, color=SLATE)
+    s.write("01a-access-network-path.svg")
+
+
+# =====================================================================
+# 1b. Workload & data services (split view)
+# =====================================================================
+def d1b():
+    s = SVG(1500, 830, "Workloads & AWS data services",
+            "inference, telemetry, secrets and encryption — developer access path is in the access view")
+
+    s.zone(40, 96, 660, 570, "AWS GovCloud VPC", GREEN, GREEN_T,
+           "spoke · private subnets only")
+    s.node(76, 150, 260, 80, "Gateway — ECS Fargate ×2",
+           ["reached via the internal ALB", "(see access view)"], border=GREEN)
+    s.node(400, 150, 260, 70, "ADOT collector ×2",
+           ["OTLP :4317 / :4318"], border=GREEN)
+    s.node(76, 300, 260, 90, "RDS PostgreSQL 16",
+           ["Multi-AZ · CMK · pgaudit", "app-user login only"],
+           border=GREEN, cyl=True)
+    s.node(400, 300, 260, 80, "db-admin Lambdas",
+           ["bootstrap app DB users +", "rotate secret & roll service"],
+           border=GREEN)
+    s.node(400, 440, 260, 70, "Grafana",
+           ["Okta SSO · usage dashboard"], border=GREEN)
+    s.node(76, 560, 584, 80, "Interface VPC endpoints — each with a resource policy",
+           ["bedrock-runtime (2 approved models only) · ecr.api · ecr.dkr · logs",
+            "secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint"],
+           border=GREEN)
+
+    s.zone(780, 96, 680, 570, "AWS regional services", VIOLET, VIOLET_T,
+           "reached via the endpoints / AWS backbone")
+    s.node(810, 150, 300, 66, "Amazon Bedrock",
+           ["Claude Opus 4.8 · Sonnet 4.5", "us-gov inference profiles only"],
+           border=VIOLET)
+    s.node(810, 240, 300, 56, "Managed Prometheus (AMP)",
+           ["usage/cost metrics · CMK · 150 d"], border=VIOLET)
+    s.node(810, 316, 300, 56, "CloudWatch Logs → Firehose",
+           ["activity window (CMK), 14 d"], border=VIOLET)
+    s.node(810, 400, 300, 60, "S3: activity archive",
+           ["SSE-KMS · 731-day retention"], border=VIOLET, cyl=True)
+    s.node(810, 490, 300, 56, "Secrets Manager (CMK)",
+           ["all credentials — see §6 inventory"], border=VIOLET)
+    s.node(810, 570, 300, 76, "S3: ALB access logs",
+           ["SSE-S3 · delivered by the ALB", "(see access view)"],
+           border=VIOLET, cyl=True)
+    s.node(1150, 150, 286, 120, "KMS CMK  alias/<prefix>",
+           ["one customer-managed key,", "rotation enabled — encrypts RDS,",
+            "secrets, log groups, activity", "archive, AMP, ECR"],
+           border=VIOLET)
+
+    # inference (corridor above both zones, entering Bedrock's top edge
+    # to the right of the zone labels)
+    s.arrow([(280, 150), (280, 86), (1040, 86), (1040, 150)])
+    s.chip(640, 86, "inference — SigV4 via bedrock-runtime endpoint · 2 approved models", VIOLET)
+    # gateway -> collector (plaintext)
+    s.arrow([(336, 190), (400, 190)])
+    s.chip(368, 166, ":4318", RED)
+    s.chip(368, 246, "plaintext · SG-scoped", RED, border=RED)
+    # collector -> AMP (enter top) and -> CloudWatch
+    s.arrow([(660, 185), (740, 185), (740, 240)])
+    s.chip(700, 185, "SigV4 remote_write", VIOLET)
+    s.arrow([(660, 205), (788, 205), (788, 344), (810, 344)])
+    s.chip(715, 216, "activity stream (opt-in)", VIOLET)
+    # CloudWatch -> S3 archive
+    s.arrow([(960, 372), (960, 400)])
+    # Grafana -> AMP
+    s.arrow([(660, 470), (770, 470), (770, 292), (810, 292)])
+    s.chip(770, 440, "SigV4 query", VIOLET)
+    # gateway -> RDS, db-admin -> RDS / Secrets Manager
+    s.arrow([(206, 230), (206, 300)])
+    s.chip(206, 266, ":5432 verify-full", GREEN)
+    s.arrow([(400, 345), (336, 345)])
+    s.arrow([(660, 330), (750, 330), (750, 518), (810, 518)])
+    s.chip(750, 540, "manage app secret", VIOLET)
+
+    s.text(36, 726, "The gateway→collector OTLP hop is the only unencrypted "
+           "flow (SG-to-SG scoped — accepted risk §10). Okta egress and the "
+           "developer path are on the access view.", size=11.5, color=SLATE)
+    s.text(36, 748, "Secrets are injected into tasks at launch by ECS "
+           "(execution roles hold GetSecretValue + kms:Decrypt on exactly "
+           "their own secrets — see §6).", size=11.5, color=SLATE_LT)
+    s.write("01b-workloads-data-services.svg")
+
+
 if __name__ == "__main__":
-    d1(); d2(); d3(); d4(); d5(); d6()
+    d1(); d1a(); d1b(); d2(); d3(); d4(); d5(); d6()

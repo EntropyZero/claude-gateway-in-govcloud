@@ -24,6 +24,7 @@ Contents:
 8. [Stack dependencies & deploy order](#8-stack-dependencies--deploy-order)
 9. [Data-at-rest encryption map](#9-data-at-rest-encryption-map)
 10. [Known accepted risks / review notes](#10-known-accepted-risks--review-notes)
+11. [Appendix — combined system view](#appendix--combined-system-view)
 
 ---
 
@@ -33,9 +34,18 @@ Four trust zones: the managed Windows fleet (Zscaler ZPA), the corporate
 network (App Connectors + AD DNS + egress proxy), the AWS GovCloud VPC
 (all workload components), and external SaaS (Okta — the single public
 dependency; Bedrock and all other AWS services are reached over private
-endpoints or the AWS backbone).
+endpoints or the AWS backbone). Two complementary views; the combined
+single-page version is in the [appendix](#appendix--combined-system-view).
 
-![System architecture & trust boundaries](diagrams/01-system-architecture.svg)
+**Access & network path** — how requests reach the gateway and how the
+OIDC flows leave:
+
+![Access & network path](diagrams/01a-access-network-path.svg)
+
+**Workloads & AWS data services** — inference, telemetry, secrets and
+encryption inside AWS:
+
+![Workloads & AWS data services](diagrams/01b-workloads-data-services.svg)
 
 Key boundary statements for the reviewer:
 
@@ -223,3 +233,12 @@ Items a reviewer should see up front, with rationale (full history in
 6. **First app-secret rotation is asynchronous** — the stack goes green
    regardless; verify via the db-rotation log group / errors alarm after
    first deploy.
+
+---
+
+## Appendix — combined system view
+
+Everything from §1 on a single page — denser than the split views above,
+useful when a reviewer wants the whole system at a glance.
+
+![System architecture & trust boundaries — combined](diagrams/01-system-architecture.svg)

@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="830" viewBox="0 0 1500 830">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker></defs>
+<rect x="0.5" y="0.5" width="1499" height="829" rx="14" fill="#FFFFFF" stroke="#E2E8F0"/>
+<text x="36" y="46" font-family="Helvetica, Arial, sans-serif" font-size="20" fill="#0F172A" font-weight="bold" text-anchor="start" >Workloads &amp; AWS data services</text>
+<text x="36" y="68" font-family="Helvetica, Arial, sans-serif" font-size="12.5" fill="#64748B" font-weight="normal" text-anchor="start" >inference, telemetry, secrets and encryption — developer access path is in the access view</text>
+<rect x="40" y="96" width="660" height="570" rx="12" fill="#ECFDF5" stroke="#047857" stroke-width="1.5"/>
+<text x="56" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#047857" font-weight="bold" text-anchor="start" letter-spacing="0.06em">AWS GOVCLOUD VPC</text>
+<text x="56" y="139" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="start" >spoke · private subnets only</text>
+<rect x="76" y="150" width="260" height="80" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="206.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway — ECS Fargate ×2</text>
+<text x="206.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >reached via the internal ALB</text>
+<text x="206.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >(see access view)</text>
+<rect x="400" y="150" width="260" height="70" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="530.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >ADOT collector ×2</text>
+<text x="530.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >OTLP :4317 / :4318</text>
+<path d="M76 309 a 130.0 9 0 0 1 260 0 v 72 a 130.0 9 0 0 1 -260 0 Z" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<path d="M76 309 a 130.0 9 0 0 0 260 0" fill="none" stroke="#047857" stroke-width="1.4"/>
+<text x="206.0" y="331" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >RDS PostgreSQL 16</text>
+<text x="206.0" y="347" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Multi-AZ · CMK · pgaudit</text>
+<text x="206.0" y="361" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >app-user login only</text>
+<rect x="400" y="300" width="260" height="80" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="530.0" y="321" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >db-admin Lambdas</text>
+<text x="530.0" y="337" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bootstrap app DB users +</text>
+<text x="530.0" y="351" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >rotate secret &amp; roll service</text>
+<rect x="400" y="440" width="260" height="70" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="530.0" y="461" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Grafana</text>
+<text x="530.0" y="477" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Okta SSO · usage dashboard</text>
+<rect x="76" y="560" width="584" height="80" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="368.0" y="581" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Interface VPC endpoints — each with a resource policy</text>
+<text x="368.0" y="597" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bedrock-runtime (2 approved models only) · ecr.api · ecr.dkr · logs</text>
+<text x="368.0" y="611" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint</text>
+<rect x="780" y="96" width="680" height="570" rx="12" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.5"/>
+<text x="796" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#6D28D9" font-weight="bold" text-anchor="start" letter-spacing="0.06em">AWS REGIONAL SERVICES</text>
+<text x="796" y="139" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="start" >reached via the endpoints / AWS backbone</text>
+<rect x="810" y="150" width="300" height="66" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="960.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Amazon Bedrock</text>
+<text x="960.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Claude Opus 4.8 · Sonnet 4.5</text>
+<text x="960.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >us-gov inference profiles only</text>
+<rect x="810" y="240" width="300" height="56" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="960.0" y="261" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Managed Prometheus (AMP)</text>
+<text x="960.0" y="277" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >usage/cost metrics · CMK · 150 d</text>
+<rect x="810" y="316" width="300" height="56" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="960.0" y="337" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >CloudWatch Logs → Firehose</text>
+<text x="960.0" y="353" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >activity window (CMK), 14 d</text>
+<path d="M810 409 a 150.0 9 0 0 1 300 0 v 42 a 150.0 9 0 0 1 -300 0 Z" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<path d="M810 409 a 150.0 9 0 0 0 300 0" fill="none" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="960.0" y="431" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >S3: activity archive</text>
+<text x="960.0" y="447" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SSE-KMS · 731-day retention</text>
+<rect x="810" y="490" width="300" height="56" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="960.0" y="511" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Secrets Manager (CMK)</text>
+<text x="960.0" y="527" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >all credentials — see §6 inventory</text>
+<path d="M810 579 a 150.0 9 0 0 1 300 0 v 58 a 150.0 9 0 0 1 -300 0 Z" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<path d="M810 579 a 150.0 9 0 0 0 300 0" fill="none" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="960.0" y="601" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >S3: ALB access logs</text>
+<text x="960.0" y="617" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SSE-S3 · delivered by the ALB</text>
+<text x="960.0" y="631" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >(see access view)</text>
+<rect x="1150" y="150" width="286" height="120" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1293.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >KMS CMK  alias/&lt;prefix&gt;</text>
+<text x="1293.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >one customer-managed key,</text>
+<text x="1293.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >rotation enabled — encrypts RDS,</text>
+<text x="1293.0" y="215" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >secrets, log groups, activity</text>
+<text x="1293.0" y="229" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >archive, AMP, ECR</text>
+<path d="M280 150 L280 86 L1040 86 L1040 150" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="424.1" y="76" width="431.8" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="640" y="89.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >inference — SigV4 via bedrock-runtime endpoint · 2 approved models</text>
+<path d="M336 190 L400 190" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="344.25" y="156" width="47.5" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="368" y="169.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >:4318</text>
+<rect x="293.85" y="236" width="148.29999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#B91C1C"/>
+<text x="368" y="249.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >plaintext · SG-scoped</text>
+<path d="M660 185 L740 185 L740 240" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="635.3" y="175" width="129.39999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="700" y="188.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 remote_write</text>
+<path d="M660 205 L788 205 L788 344 L810 344" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="631.4" y="206" width="167.2" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="715" y="219.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >activity stream (opt-in)</text>
+<path d="M960 372 L960 400" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M660 470 L770 470 L770 292 L810 292" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="727.35" y="430" width="85.3" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="770" y="443.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 query</text>
+<path d="M206 230 L206 300" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="144.45" y="256" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="206" y="269.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >:5432 verify-full</text>
+<path d="M400 345 L336 345" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M660 330 L750 330 L750 518 L810 518" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="688.45" y="530" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="750" y="543.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >manage app secret</text>
+<text x="36" y="726" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#334155" font-weight="normal" text-anchor="start" >The gateway→collector OTLP hop is the only unencrypted flow (SG-to-SG scoped — accepted risk §10). Okta egress and the developer path are on the access view.</text>
+<text x="36" y="748" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748B" font-weight="normal" text-anchor="start" >Secrets are injected into tasks at launch by ECS (execution roles hold GetSecretValue + kms:Decrypt on exactly their own secrets — see §6).</text>
+</svg>

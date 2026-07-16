@@ -134,7 +134,7 @@
 <path d="M470 330 L452 330 L452 830 L1180 830 L1180 802" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="637.65" y="820" width="324.7" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="800" y="833.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >OIDC login + token exchange (TGW egress or proxy)</text>
-<path d="M940 226 L940 274 L1096 274 L1096 744" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M940 226 L940 274 L1096 274 L1096 760 L1148 760" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="1028.15" y="680" width="135.7" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="1096" y="693.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >OAuth code exchange</text>
 <path d="M356 587 L410 587 L410 862 L1240 862 L1240 820" fill="none" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
