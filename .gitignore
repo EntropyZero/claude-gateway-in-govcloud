@@ -23,3 +23,6 @@ __pycache__/
 # Test artifacts
 .pytest_cache/
 tests/**/__pycache__/
+
+# Generated Grafana TLS cert (built per-run by build-and-push-grafana.sh)
+docker/grafana/tls/

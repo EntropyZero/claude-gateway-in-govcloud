@@ -33,7 +33,7 @@ secrets, security-group, and encryption inventories — see
 | `cloudformation/01-database.yaml` | RDS PostgreSQL store, managed master secret, client security group |
 | `cloudformation/02-gateway.yaml` | ALB + TLS listener, ECS Fargate service, IAM, secrets, optional VPC endpoints, cert-expiry alarm, ALB access logs |
 | `cloudformation/03-observability.yaml` | AMP workspace, OTLP collector, Grafana usage/cost dashboard behind the ALB at `/grafana` |
-| `docker/Dockerfile` | Container around the pinned, verified `claude` binary |
+| `docker/Dockerfile` | Gateway container (Amazon Linux 2023 base) around the pinned, verified `claude` binary |
 | `docker/entrypoint.sh` | Renders `gateway.yaml`, assembles the Postgres URL |
 | `docker/grafana/` | Grafana image: AMP datasource + provisioned Claude Code dashboard |
 | `docker/db-admin/` | Lambda image: app DB user bootstrap + alternating-users secret rotation |
@@ -112,6 +112,7 @@ cp mirror/2.1.207/claude docker/claude
 
 # 5. Finish: Okta secret, corporate DNS CNAME, Zscaler bypass, then verify
 ./scripts/set-okta-secret.sh
+
 ./scripts/verify-gateway.sh
 ```
 
@@ -121,6 +122,16 @@ forward URL — so there are no manual copy-paste steps between runs. Values
 that flow between the CloudFormation stacks (security-group IDs, the DB
 endpoint, the ALB listener) travel as stack exports and never touch
 `deploy.env`.
+
+**Controlled-network image builds.** The three images are built to need no
+package-repo access at build time — only the base images do, which you mirror
+into your registry (`GATEWAY_BASE_IMAGE`, `GRAFANA_BASE_IMAGE`,
+`LAMBDA_BASE_IMAGE`, and the ADOT `COLLECTOR_IMAGE`, each pinnable by digest):
+the gateway is Amazon Linux 2023 (glibc; packages from Amazon's in-region
+repos, not `deb.debian.org`); the db-admin image installs `pg8000` from
+vendored wheels in `docker/db-admin/vendor/` (`--no-index`, no PyPI); and the
+Grafana TLS cert is generated on the build host, so its Alpine image needs no
+`apk` install. All three verified building with networking disabled.
 
 ## Windows client rollout (offline)
 

@@ -16,12 +16,12 @@ FROM ${GRAFANA_BASE_IMAGE}
 COPY provisioning/ /etc/grafana/provisioning/
 COPY dashboards/ /var/lib/grafana/dashboards/
 
-# TLS entrypoint: generates a per-task self-signed cert and serves HTTPS
-# (the ALB re-encrypts to the target). openssl via apk - grafana-oss
-# images are Alpine-based; adjust if your mirrored base differs.
-USER root
-RUN apk add --no-cache openssl
-COPY entrypoint-tls.sh /entrypoint-tls.sh
-RUN chmod 0755 /entrypoint-tls.sh
-USER 472
-ENTRYPOINT ["/entrypoint-tls.sh"]
+# Serve HTTPS on the ALB->Grafana hop (SC-8). The self-signed leaf in tls/ is
+# generated on the BUILD HOST by build-and-push-grafana.sh - so this Alpine
+# image needs no openssl and the build has no external package dependency
+# (works on an AWS-only build host). The ALB re-encrypts and does not
+# validate the target cert. Regenerated each build; not committed.
+COPY --chown=472:472 tls/ /etc/grafana/tls/
+ENV GF_SERVER_PROTOCOL=https \
+    GF_SERVER_CERT_FILE=/etc/grafana/tls/server.crt \
+    GF_SERVER_CERT_KEY=/etc/grafana/tls/server.key
