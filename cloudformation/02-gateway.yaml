@@ -78,10 +78,18 @@ Parameters:
 
   OktaIssuer:
     Type: String
+    AllowedPattern: 'https://[A-Za-z0-9.-]+(:[0-9]+)?(/.*)?'
+    ConstraintDescription: >-
+      Must be a full https:// URL. The gateway rejects a scheme-less or
+      non-https oidc.issuer at startup ("must be an http(s) URL"). Org server:
+      https://<your-org-domain> with NO trailing slash. Custom server:
+      https://<your-org-domain>/oauth2/<id>.
     Description: >-
-      Okta issuer URL. A custom authorization server is recommended
+      Okta issuer URL - INCLUDE the https:// scheme (a bare domain crash-loops
+      the task). A custom authorization server is recommended
       (https://your-org.okta.com/oauth2/default); the org server
-      (https://your-org.okta.com) also works because userinfo_fallback is enabled.
+      (https://your-org.okta.com, no trailing slash) also works because
+      userinfo_fallback is enabled.
 
   OktaClientId:
     Type: String
