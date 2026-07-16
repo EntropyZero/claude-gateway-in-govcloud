@@ -15,6 +15,14 @@ if [ ! -f "$BINARY" ]; then
   exit 1
 fi
 
+# RDS CA trust bundle, baked into the image so the gateway can connect with
+# sslmode=verify-full (validates the DB server cert, not just encrypts).
+# GovCloud has its own truststore domain; for commercial regions override:
+#   RDS_CA_BUNDLE_URL=https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+RDS_CA_BUNDLE_URL="${RDS_CA_BUNDLE_URL:-https://truststore.pki.us-gov-west-1.rds.amazonaws.com/global/global-bundle.pem}"
+log "Fetching RDS CA trust bundle"
+curl -fsSL "$RDS_CA_BUNDLE_URL" -o "${REPO_ROOT}/docker/rds-ca-bundle.pem"
+
 ensure_ecr_repo "$ECR_REPO_NAME"
 REGISTRY="$(ecr_login)"
 IMAGE="${REGISTRY}/${ECR_REPO_NAME}:${CLAUDE_VERSION}"

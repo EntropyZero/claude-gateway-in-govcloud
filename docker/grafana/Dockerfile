@@ -15,3 +15,13 @@ FROM ${GRAFANA_BASE_IMAGE}
 # AMP_REGION from the environment (set by the ECS task definition).
 COPY provisioning/ /etc/grafana/provisioning/
 COPY dashboards/ /var/lib/grafana/dashboards/
+
+# TLS entrypoint: generates a per-task self-signed cert and serves HTTPS
+# (the ALB re-encrypts to the target). openssl via apk - grafana-oss
+# images are Alpine-based; adjust if your mirrored base differs.
+USER root
+RUN apk add --no-cache openssl
+COPY entrypoint-tls.sh /entrypoint-tls.sh
+RUN chmod 0755 /entrypoint-tls.sh
+USER 472
+ENTRYPOINT ["/entrypoint-tls.sh"]

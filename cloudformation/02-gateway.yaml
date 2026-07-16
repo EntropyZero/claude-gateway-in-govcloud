@@ -2,9 +2,11 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   Claude apps gateway on ECS Fargate behind an internal IPv4-only ALB
   (AWS GovCloud). TLS terminates at the ALB with a certificate signed by
-  your enterprise CA (imported into ACM; pass its ARN). Developers reach
-  the gateway via a corporate-DNS CNAME that points at the ALB's default
-  DNS name. Deploy 01-database.yaml first with the same NamePrefix.
+  your enterprise CA (imported into ACM; pass its ARN) and is re-encrypted
+  to the tasks (per-task self-signed certs - SC-8 on the internal hop).
+  Developers reach the gateway via a corporate-DNS CNAME that points at
+  the ALB's default DNS name. Deploy 01-database.yaml first with the same
+  NamePrefix.
 
 Parameters:
   NamePrefix:
@@ -197,6 +199,16 @@ Parameters:
       NO_PROXY (.amazonaws.com), so Bedrock still flows through the VPC
       endpoint either way.
 
+  HttpsProxyPort:
+    Type: String
+    Default: ''
+    AllowedPattern: '^[0-9]*$'
+    Description: >-
+      Port of HttpsProxyUrl. Task egress is scoped to tcp/443 plus this
+      port, so a non-443 proxy needs it opened here (deploy-gateway.sh
+      derives it from HTTPS_PROXY_URL automatically). Leave empty when no
+      proxy, or when the proxy listens on 443.
+
   ObservabilityOtlpUrl:
     Type: String
     Default: ''
@@ -285,6 +297,7 @@ Conditions:
   WantS3Endpoint: !Not [!Equals [!Join ['', !Ref PrivateRouteTableIds], '']]
   HaveAlarmTopic: !Not [!Equals [!Ref AlarmSnsTopicArn, '']]
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
+  HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
   HaveTelemetry: !Not [!Equals [!Ref ObservabilityOtlpUrl, '']]
 
 # Account IDs that Elastic Load Balancing uses to deliver access logs
@@ -301,11 +314,14 @@ Mappings:
 Resources:
 
   # ------------------------------------------------------------------ secrets
+  # All encrypted with the CMK exported by 01-database.yaml (C1/SC-28).
   OktaClientSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub '${NamePrefix}/oidc-client-secret'
       Description: Okta OIDC client secret. Placeholder at creation - set the real value after deploy.
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
       SecretString: 'REPLACE-ME-run-aws-secretsmanager-put-secret-value'
 
   JwtSecret:
@@ -313,11 +329,19 @@ Resources:
     Properties:
       Name: !Sub '${NamePrefix}/jwt-secret'
       Description: Gateway session-signing secret (rotate per the runbook - prepend new value, roll, remove old).
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
       GenerateSecretString:
         PasswordLength: 48
         ExcludePunctuation: true
 
   # ------------------------------------------------------------ load balancer
+  # SG egress is scoped everywhere (SC-7): inline lists replace the default
+  # allow-all; 127.0.0.1/32 is the CFN idiom for "nothing beyond the
+  # explicit standalone rules". The ALB->tasks rule is standalone to break
+  # the reference cycle with ServiceSecurityGroup's ingress; the tasks'
+  # 5432 comes from the attached db-client SG (01-database.yaml), and
+  # OTLP 4317-4318 to the collector is attached by 03-observability.yaml.
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -329,9 +353,23 @@ Resources:
           ToPort: 443
           CidrIp: !Ref ClientIngressCidr
           Description: HTTPS from developer/VPN/ZPA-connector networks
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: no egress except explicit standalone rules
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}-alb'
+
+  AlbToServiceEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref AlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      DestinationSecurityGroupId: !Ref ServiceSecurityGroup
+      Description: Forward/health-check to gateway tasks
 
   ServiceSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -343,13 +381,32 @@ Resources:
           FromPort: 8080
           ToPort: 8080
           SourceSecurityGroupId: !Ref AlbSecurityGroup
-          Description: Plain HTTP from the ALB only
+          Description: TLS (ALB re-encrypt) from the ALB only
+      SecurityGroupEgress:
+        # Okta (public), ECR/S3/logs/Secrets Manager/Bedrock/AMP - all TLS,
+        # whether via VPC endpoints, NAT, or TGW central egress. The
+        # database (5432) rides the attached db-client SG from 01.
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS to Okta and AWS services
+        - !If
+          - HaveProxyPort
+          - IpProtocol: tcp
+            FromPort: !Ref HttpsProxyPort
+            ToPort: !Ref HttpsProxyPort
+            CidrIp: 0.0.0.0/0
+            Description: Egress proxy port
+          - !Ref 'AWS::NoValue'
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}-svc'
 
-  # ALB access logs land here (ELB requires SSE-S3; delivery is via the
-  # regional ELB account, granted in the bucket policy below).
+  # ALB access logs land here. This bucket deliberately stays SSE-S3
+  # (AES256): ELB access-log delivery does NOT support SSE-KMS - the one
+  # store in the deployment that cannot use the CMK. Delivery is via the
+  # regional ELB account, granted in the bucket policy below.
   AlbLogsBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -417,14 +474,21 @@ Resources:
         - Key: access_logs.s3.bucket
           Value: !Ref AlbLogsBucket
 
+  # No Name: the HTTP->HTTPS protocol change (and any future protocol
+  # change) replaces the target group, and a fixed name would collide with
+  # itself mid-update. HTTPS to the target = the ALB re-encrypts; target
+  # certs are not validated by ALBs, so the per-task self-signed cert works.
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Sub '${NamePrefix}-tg'
       VpcId: !Ref VpcId
-      Protocol: HTTP
+      Protocol: HTTPS
       Port: 8080
       TargetType: ip
+      # Explicit: ALB health checks default to HTTP regardless of the
+      # target-group protocol - without this the probe hits the TLS
+      # listener in plaintext and no target ever goes healthy.
+      HealthCheckProtocol: HTTPS
       # /healthz (liveness) keeps signed-in developers working through a
       # Postgres outage; use /readyz instead to pull replicas when the store is down.
       HealthCheckPath: /healthz
@@ -464,6 +528,8 @@ Resources:
     Properties:
       LogGroupName: !Sub '/ecs/${NamePrefix}'
       RetentionInDays: 365
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
 
   ExecutionRole:
     Type: AWS::IAM::Role
@@ -488,6 +554,12 @@ Resources:
                   - !Ref OktaClientSecret
                   - !Ref JwtSecret
                   - Fn::ImportValue: !Sub '${NamePrefix}-db-secret-arn'
+              # The secrets are CMK-encrypted; decrypt rides IAM (the key
+              # policy delegates to IAM via the account-root statement).
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource:
+                  Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
 
   TaskRole:
     Type: AWS::IAM::Role
@@ -509,9 +581,21 @@ Resources:
                 Action:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
+                # Exactly the two configured models, not anthropic.* - the
+                # inference profiles in-region, plus their underlying
+                # foundation models (profile ID minus the 'us-gov.' geo
+                # prefix). Foundation-model region stays * because geo
+                # profiles fan out across us-gov regions at invocation.
+                # Switching models is still a parameter-only change.
                 Resource:
-                  - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/anthropic.*'
-                  - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us-gov.anthropic.*'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${OpusBedrockModelId}'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${SonnetBedrockModelId}'
+                  - !Sub
+                    - 'arn:${AWS::Partition}:bedrock:*::foundation-model/${Model}'
+                    - Model: !Join ['', !Split ['us-gov.', !Ref OpusBedrockModelId]]
+                  - !Sub
+                    - 'arn:${AWS::Partition}:bedrock:*::foundation-model/${Model}'
+                    - Model: !Join ['', !Split ['us-gov.', !Ref SonnetBedrockModelId]]
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -589,6 +673,12 @@ Resources:
                     host: 0.0.0.0
                     port: 8080
                     public_url: https://${GatewayFqdn}
+                    # Serve TLS on the task itself (SC-8) - the ALB
+                    # re-encrypts to the target. Cert/key are generated
+                    # per-task by the entrypoint at these paths.
+                    tls:
+                      cert: /etc/claude/tls/server.crt
+                      key: /etc/claude/tls/server.key
                     trusted_proxies: ["${VpcCidr}"]
 
                   oidc:
@@ -690,6 +780,88 @@ Resources:
           ContainerPort: 8080
           TargetGroupArn: !Ref TargetGroup
 
+  # ------------------------------------------- secret-rotation service roll
+  # The RDS-managed master secret auto-rotates (default every 7 days;
+  # adjustable via RotateSecret), but ECS injects PGPASSWORD at task start -
+  # tasks older than the last rotation hold a stale password and NEW
+  # database connections fail. Roll the service on every successful
+  # rotation (zero-downtime: MinimumHealthyPercent is 100).
+  # Prerequisites/caveats:
+  # - A CloudTrail trail with management events (standard in any landing
+  #   zone) - RotationSucceeded reaches EventBridge via CloudTrail.
+  # - The additionalEventData.SecretId match is observed behavior, not a
+  #   documented contract. VERIFY once after deploy: run
+  #   `aws secretsmanager rotate-secret --secret-id <rds! secret arn>` and
+  #   confirm the function fired (its log group) and the service rolled.
+  #   Consider alarming on zero function invocations per rotation period.
+  RotationRollRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-rotation-roll'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: roll-gateway-service
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecs:UpdateService
+                Resource: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${Cluster}/${NamePrefix}-gateway'
+
+  RotationRollFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${NamePrefix}-rotation-roll'
+      Description: Force a new gateway deployment after the DB master secret rotates.
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 30
+      Role: !GetAtt RotationRollRole.Arn
+      Environment:
+        Variables:
+          CLUSTER: !Ref Cluster
+          SERVICE: !GetAtt Service.Name
+      Code:
+        ZipFile: |
+          import boto3, os
+          def handler(event, context):
+              boto3.client('ecs').update_service(
+                  cluster=os.environ['CLUSTER'],
+                  service=os.environ['SERVICE'],
+                  forceNewDeployment=True)
+              print('rolled %s after secret rotation' % os.environ['SERVICE'])
+
+  RotationRollRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub 'Roll ${NamePrefix}-gateway when the RDS master secret rotates'
+      EventPattern:
+        source: [aws.secretsmanager]
+        detail-type: [AWS Service Event via CloudTrail]
+        detail:
+          eventName: [RotationSucceeded]
+          additionalEventData:
+            SecretId:
+              - Fn::ImportValue: !Sub '${NamePrefix}-db-secret-arn'
+      Targets:
+        - Arn: !GetAtt RotationRollFunction.Arn
+          Id: roll-gateway
+
+  RotationRollPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RotationRollFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt RotationRollRule.Arn
+
   # -------------------------------------------------- optional VPC endpoints
   EndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -703,6 +875,11 @@ Resources:
           ToPort: 443
           SourceSecurityGroupId: !Ref ServiceSecurityGroup
           Description: TLS from gateway tasks
+      # Endpoint ENIs never initiate connections.
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: no egress
 
   BedrockRuntimeEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -724,14 +901,24 @@ Resources:
             Action:
               - bedrock:InvokeModel
               - bedrock:InvokeModelWithResponseStream
+            # Mirrors the task-role scoping: the two configured models only.
             Resource:
-              - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/anthropic.*'
-              - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us-gov.anthropic.*'
+              - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${OpusBedrockModelId}'
+              - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${SonnetBedrockModelId}'
+              - !Sub
+                - 'arn:${AWS::Partition}:bedrock:*::foundation-model/${Model}'
+                - Model: !Join ['', !Split ['us-gov.', !Ref OpusBedrockModelId]]
+              - !Sub
+                - 'arn:${AWS::Partition}:bedrock:*::foundation-model/${Model}'
+                - Model: !Join ['', !Split ['us-gov.', !Ref SonnetBedrockModelId]]
 
   # Endpoints Fargate itself depends on when the private subnets have no NAT:
   # image pull (ecr.api + ecr.dkr + S3 for layer blobs), awslogs (logs), and
   # task secret injection (secretsmanager). RDS needs no endpoint - the DB is
   # in-VPC. Okta remains an external HTTPS dependency no endpoint can cover.
+  # Every endpoint carries a policy (SC-7 defense-in-depth): the network
+  # path enforces "this account's resources only" even if an IAM policy is
+  # ever over-broadened.
   EcrApiEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Condition: WantSupportingEndpoints
@@ -743,6 +930,22 @@ Resources:
       SecurityGroupIds:
         - !Ref EndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AuthTokenHasNoResource
+            Effect: Allow
+            Principal: '*'
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+          - Sid: ThisAccountRepositoriesOnly
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+            Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/*'
 
   EcrDkrEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -755,6 +958,22 @@ Resources:
       SecurityGroupIds:
         - !Ref EndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AuthTokenHasNoResource
+            Effect: Allow
+            Principal: '*'
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+          - Sid: ThisAccountRepositoriesOnly
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+            Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/*'
 
   LogsEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -767,6 +986,18 @@ Resources:
       SecurityGroupIds:
         - !Ref EndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ThisAccountLogGroupsOnly
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - logs:DescribeLogStreams
+              - logs:PutRetentionPolicy
+            Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'
 
   SecretsManagerEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -779,6 +1010,18 @@ Resources:
       SecurityGroupIds:
         - !Ref EndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: GatewaySecretsOnly
+            Effect: Allow
+            Principal: '*'
+            Action: secretsmanager:GetSecretValue
+            # This stack's named secrets plus the RDS-managed master secret
+            # (random rds! name).
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}/*'
+              - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:rds!*'
 
   S3GatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -788,6 +1031,24 @@ Resources:
       VpcEndpointType: Gateway
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
       RouteTableIds: !Ref PrivateRouteTableIds
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # ECR serves image layers from this AWS-owned regional bucket -
+          # without it, pulls fail with a misleading auth error.
+          - Sid: EcrLayerBucket
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::prod-${AWS::Region}-starport-layer-bucket/*'
+          - Sid: ThisAccountBucketsOnly
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:ResourceAccount: !Ref AWS::AccountId
 
   # ------------------------------------------------------------------ alarms
   # Imported ACM certificates do NOT auto-renew; ACM publishes DaysToExpiry

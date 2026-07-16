@@ -53,17 +53,111 @@ Parameters:
     MinValue: 1
     MaxValue: 35
 
+  KmsKeyArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Customer-managed KMS key ARN used across all three stacks (RDS
+      storage, the RDS-managed master secret, Secrets Manager secrets,
+      CloudWatch log groups, the activity archive, AMP). Landing zones
+      that centralize key management pass their key here; leave empty and
+      this stack creates one (rotation enabled) and exports it either way
+      as <prefix>-kms-key-arn. A supplied key's policy must allow the
+      CloudWatch Logs service principal (logs.<region>.amazonaws.com) to
+      use the key with the aws:logs encryption context - see the KmsKey
+      resource in this template for the exact statement.
+      NOTE: the storage key is CREATE-TIME ONLY for RDS. On an EXISTING
+      deployment a plain stack update CANNOT adopt it: replacement
+      collides with the fixed DBInstanceIdentifier and with the
+      db-endpoint/db-secret exports imported by the gateway stack. The
+      real migration is: snapshot -> tear down 03 and 02 -> delete/rename
+      the instance -> update 01 -> restore data manually -> redeploy
+      02/03. See README "Teardown & update order".
+
+  PgauditLogClasses:
+    Type: String
+    Default: 'ddl,role,write'
+    Description: >-
+      pgaudit statement classes captured in the exported postgresql log
+      (AU-2/AU-3/AU-12). 'ddl,role,write' records schema changes,
+      role/permission changes, and data modifications on the session/spend
+      store; add 'read' for SELECT auditing at a real log-volume cost.
+
+Conditions:
+  CreateKmsKey: !Equals [!Ref KmsKeyArn, '']
+
 Resources:
+  # Customer-managed key (C1/SC-28): created only when KmsKeyArn is not
+  # supplied. Key policy: account root retains admin (so IAM policies and
+  # AWS service grants work normally), plus the CloudWatch Logs service
+  # principal, which cannot use a key through IAM policies alone.
+  KmsKey:
+    Type: AWS::KMS::Key
+    Condition: CreateKmsKey
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub '${NamePrefix} - data-at-rest key (RDS, secrets, logs, archives, AMP)'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccountAdminViaIam
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: CloudWatchLogsUse
+            Effect: Allow
+            Principal:
+              Service: !Sub 'logs.${AWS::Region}.amazonaws.com'
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:Describe*
+            Resource: '*'
+            Condition:
+              ArnLike:
+                kms:EncryptionContext:aws:logs:arn: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'
+
+  KmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Condition: CreateKmsKey
+    Properties:
+      AliasName: !Sub 'alias/${NamePrefix}'
+      TargetKeyId: !Ref KmsKey
+
   # Attached to the gateway ECS tasks; the DB ingress rule references it, so
-  # no CIDRs are opened to the database.
+  # no CIDRs are opened to the database. Egress is scoped (SC-7): specifying
+  # the inline egress list removes the default allow-all (the 127.0.0.1/32
+  # entry is the CFN idiom for "no egress beyond the explicit rules"); the
+  # real 5432 rule is a standalone resource to break the reference cycle
+  # with DBSecurityGroup's ingress.
   DBClientSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: !Sub '${NamePrefix} - attach to workloads that may reach the gateway database'
       VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: no egress except explicit standalone rules
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}-db-client'
+
+  DBClientToDbEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref DBClientSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      DestinationSecurityGroupId: !Ref DBSecurityGroup
+      Description: PostgreSQL to the gateway database only
 
   DBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -76,6 +170,11 @@ Resources:
           ToPort: 5432
           SourceSecurityGroupId: !Ref DBClientSecurityGroup
           Description: PostgreSQL from gateway tasks only
+      # The database initiates nothing.
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: no egress
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}-db'
@@ -86,14 +185,26 @@ Resources:
       DBSubnetGroupDescription: !Sub '${NamePrefix} gateway database subnets'
       SubnetIds: !Ref PrivateSubnetIds
 
-  # Enforce TLS to the database (gateway connects with ?sslmode=require).
+  # Enforce TLS to the database (the gateway connects with
+  # ?sslmode=verify-full) and capture a real audit trail: without pgaudit,
+  # the exported postgresql log records almost nothing at the default
+  # log_statement=none. shared_preload_libraries is a STATIC parameter -
+  # it applies at instance creation here; changing it on a live instance
+  # requires a reboot (parameter shows pending-reboot until then).
   DBParameterGroup:
     Type: AWS::RDS::DBParameterGroup
     Properties:
-      Description: !Sub '${NamePrefix} - force SSL'
+      Description: !Sub '${NamePrefix} - force SSL + pgaudit'
       Family: postgres16
       Parameters:
         rds.force_ssl: '1'
+        shared_preload_libraries: pgaudit
+        pgaudit.log: !Ref PgauditLogClasses
+        pgaudit.log_catalog: '0'
+        pgaudit.log_parameter: '0'   # keep bind values (may carry user content) out of the log
+        log_statement: ddl
+        log_connections: '1'
+        log_disconnections: '1'
 
   Database:
     Type: AWS::RDS::DBInstance
@@ -107,11 +218,15 @@ Resources:
       AllocatedStorage: !Ref DBAllocatedStorage
       StorageType: gp3
       StorageEncrypted: true
+      KmsKeyId: !If [CreateKmsKey, !GetAtt KmsKey.Arn, !Ref KmsKeyArn]
       MultiAZ: !Ref MultiAZ
       DBName: gateway
-      # RDS creates and rotates the master secret in Secrets Manager.
-      # The gateway entrypoint reads username/password keys from it.
+      # RDS creates the master secret in Secrets Manager and auto-rotates
+      # it every 7 days. The gateway entrypoint reads username/password
+      # keys from it.
       ManageMasterUserPassword: true
+      MasterUserSecret:
+        KmsKeyId: !If [CreateKmsKey, !GetAtt KmsKey.Arn, !Ref KmsKeyArn]
       MasterUsername: gw
       DBSubnetGroupName: !Ref DBSubnetGroup
       DBParameterGroupName: !Ref DBParameterGroup
@@ -126,6 +241,11 @@ Resources:
       CACertificateIdentifier: rds-ca-rsa2048-g1
 
 Outputs:
+  KmsKeyArnResolved:
+    Description: The CMK every stack encrypts with (created here or passed in).
+    Value: !If [CreateKmsKey, !GetAtt KmsKey.Arn, !Ref KmsKeyArn]
+    Export:
+      Name: !Sub '${NamePrefix}-kms-key-arn'
   DBEndpointAddress:
     Value: !GetAtt Database.Endpoint.Address
     Export:

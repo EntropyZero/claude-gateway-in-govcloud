@@ -66,18 +66,22 @@ cp scripts/deploy.env.example scripts/deploy.env   # fill in VPC, Okta, network 
 ./scripts/import-enterprise-cert.sh import claude-gateway.example.com leaf.pem key.pem chain.pem
 #    ^ writes CERTIFICATE_ARN back into deploy.env automatically
 
-# 2. Image (on a machine with egress + Docker). Verification fails closed:
+# 2. Database stack FIRST - it also creates (or adopts) the KMS key and
+#    persists KMS_KEY_ARN into deploy.env, so the ECR repos created in the
+#    next step are CMK-encrypted (ECR encryption is fixed at creation).
+./scripts/deploy-database.sh
+
+# 3. Image (on a machine with egress + Docker). Verification fails closed:
 #    supply Anthropic's release-signing key via ANTHROPIC_GPG_KEY, or
 #    explicitly accept TLS-only trust with ALLOW_UNVERIFIED_MANIFEST=1.
 ./client/mirror-claude-release.sh 2.1.207
 cp mirror/2.1.207/claude docker/claude
 ./scripts/build-and-push-image.sh          # writes IMAGE_URI back into deploy.env
 
-# 3. Stacks
-./scripts/deploy-database.sh
+# 4. Gateway stack
 ./scripts/deploy-gateway.sh
 
-# 4. Finish: Okta secret, corporate DNS CNAME, Zscaler bypass, then verify
+# 5. Finish: Okta secret, corporate DNS CNAME, Zscaler bypass, then verify
 ./scripts/set-okta-secret.sh
 ./scripts/verify-gateway.sh
 ```
@@ -171,9 +175,12 @@ aws bedrock list-inference-profiles --region us-gov-west-1 \
   --query "inferenceProfileSummaries[?contains(inferenceProfileId,'anthropic')].inferenceProfileId"
 ```
 
-The task-role and VPC-endpoint IAM policies already cover `anthropic.*`
-foundation models and `us-gov.anthropic.*` inference profiles, so switching
-or adding models is a parameter change only.
+The task-role and VPC-endpoint IAM policies are scoped to **exactly the two
+configured models** (derived from the `*_BEDROCK_MODEL_ID` parameters — the
+inference profiles plus their underlying foundation models), so nothing
+outside the approved pair is invokable even with the org credential.
+Switching or adding models is still a parameter change only; the policies
+follow the parameters.
 
 ## VPC endpoints
 
@@ -319,6 +326,20 @@ The observability stack imports the gateway stack's exports (`svc-sg`,
   re-run `deploy-gateway.sh`. `deploy-gateway.sh` guards this — if the URL
   is set but the 03 stack doesn't exist, it deploys without forwarding and
   tells you.
+- **The same export lock exists 01↔02:** the gateway stack imports the DB
+  endpoint, master-secret ARN, client SG, and KMS key ARN from 01. Any 01
+  change that would alter those export values (most notably the RDS
+  storage KMS key — create-time-only, forces replacement, and collides
+  with the fixed instance identifier) cannot be applied in place; it
+  requires tearing down 03 and 02 first and restoring data manually from a
+  snapshot. Encrypt-at-rest choices are effectively day-one decisions.
+- **HTTP→HTTPS target-group migration (one-time, existing deployments):**
+  the internal-TLS change replaces both target groups. Push the rebuilt
+  images **first** (the new entrypoints generate the TLS certs the task
+  definitions expect — tags are immutable, so bump the tag), then update
+  the stacks in a maintenance window: CloudFormation points the listener
+  at the new empty target group before the first TLS task passes health
+  checks, so expect a few minutes of 503s per service.
 
 ## Usage & cost observability
 
@@ -408,14 +429,16 @@ obvious alternative?" question — revisit only with a concrete reason.
 | Area | Decision and rationale |
 |---|---|
 | Inference | Bedrock `us-gov-west-1`, `us-gov.anthropic.*` inference profiles, reached via a `bedrock-runtime` interface VPC endpoint — no NAT/IGW path needed. |
-| Gateway | Claude apps gateway (built into the `claude` binary ≥ 2.1.195) on ECS Fargate, plain HTTP :8080 behind an **internal, IPv4-only** ALB. Dual-stack is off deliberately: internal dual-stack ALBs publish public-range AAAA records, which fails Claude Code's `/login` private-network check. |
+| Gateway | Claude apps gateway (built into the `claude` binary ≥ 2.1.195) on ECS Fargate behind an **internal, IPv4-only** ALB. The ALB **re-encrypts to the tasks** (`listen.tls` with a per-task self-signed cert generated at startup — ALBs don't validate target certs, developers still pin the ALB's enterprise cert). Dual-stack is off deliberately: internal dual-stack ALBs publish public-range AAAA records, which fails Claude Code's `/login` private-network check. |
 | TLS | Enterprise-CA-signed certificate, SAN = the corporate CNAME, imported into ACM. Public certs are impossible for `*.elb.amazonaws.com`, and the corporate name survives ALB recreation. Imported certs do **not** auto-renew — alarm on expiry; rotation re-triggers the client fingerprint prompt, so publish the new fingerprint first. |
 | DNS | Corporate-DNS CNAME → the ALB's default DNS name; resolves to private IPs, passing the `/login` check. No Route 53 private hosted zone required. |
 | Zscaler | The gateway FQDN is bypassed: ZIA SSL-inspection exemption + app bypass (TLS inspection breaks certificate fingerprint pinning; public proxy egress IPs fail `/login`), or a ZPA app segment (ZPA's synthetic CGNAT answers pass the check and ZPA doesn't intercept TLS). Add the FQDN to `NO_PROXY` on laptops if a PAC/explicit proxy is in use. |
 | IdP | Okta OIDC; a custom authorization server is preferred, and `userinfo_fallback: true` is set so the org server also works. Redirect URI is `https://<GatewayFqdn>/oauth/callback`. |
-| Store | RDS PostgreSQL 16 with `rds.force_ssl`, an RDS-managed master secret, and SG-to-SG access only. Multi-AZ is on by default because a lost store loses spend tracking and caps, not just re-logins. |
+| Store | RDS PostgreSQL 16 with `rds.force_ssl` + **pgaudit**, client-side `sslmode=verify-full` (RDS CA bundle baked into the image), an RDS-managed master secret, and SG-to-SG access only. The master secret **auto-rotates every 7 days**; an EventBridge→Lambda hook rolls the gateway service on each rotation so tasks never hold a stale password. Multi-AZ is on by default because a lost store loses spend tracking and caps, not just re-logins. |
+| Encryption at rest | One customer-managed KMS key (created by the DB stack or bring-your-own via `KMS_KEY_ARN`) covers RDS, all secrets, CloudWatch log groups, the activity archive, and AMP. Exception: the ALB access-logs bucket stays SSE-S3 — ELB log delivery does not support KMS. |
+| Network egress | Every security group has explicit egress (no default allow-all); all VPC endpoints carry resource policies scoped to this account/workload. Bedrock IAM + endpoint policies allow exactly the two configured models. |
 | Client install | Fully offline: pinned binary mirrored from Anthropic's release bucket and verified before distribution; managed settings force gateway login, pin a minimum version, and block **all** update paths (`DISABLE_UPDATES=1`). Works for non-admin users (per-user install + HKCU managed-policy source). |
-| Guardrails | IAM task role **and** VPC-endpoint policy are independently scoped to `anthropic.*` foundation models / `us-gov.anthropic.*` inference profiles — two separate controls on what the org credential can invoke. |
+| Guardrails | IAM task role **and** VPC-endpoint policy are independently scoped to **exactly the two configured models** (inference-profile IDs + their derived foundation-model IDs, from the `*_BEDROCK_MODEL_ID` parameters) — two separate controls on what the org credential can invoke, both following the parameters. |
 
 ### Gotchas — do not re-litigate
 
@@ -451,13 +474,44 @@ obvious alternative?" question — revisit only with a concrete reason.
   after `ALB_LOG_RETENTION_DAYS`, default 90). The bucket is retained on
   stack deletion.
 
+### Secret rotation posture
+
+- **RDS master secret** — RDS-managed, auto-rotates every 7 days (not
+  configurable). Because ECS injects `PGPASSWORD` at task start, the stack
+  includes an EventBridge rule + Lambda that force a new gateway deployment
+  on every successful rotation (zero-downtime roll). Prerequisite: a
+  CloudTrail trail with management events — standard in any landing zone —
+  since `RotationSucceeded` reaches EventBridge via CloudTrail.
+- **JWT session secret** — manual, prepend → roll → remove (see above).
+  Set a calendar cadence per your SSP (e.g. 90 days).
+- **Okta client secrets (gateway + Grafana)** — rotate in Okta, then run
+  `set-okta-secret.sh` / `set-grafana-oidc-secret.sh` (each rolls its
+  service). Automating these end-to-end would need a rotation Lambda with
+  Okta API access — out of template scope; run them on the same cadence as
+  other IdP credentials.
+- **Grafana `admin` password** — break-glass only (login form disabled);
+  rotate by putting a new secret value and rolling Grafana.
+
+### Internal TLS (SC-8) status
+
+ALB→gateway and ALB→Grafana are **encrypted** (per-task self-signed certs;
+the ALB re-encrypts and does not validate target certs, so no cert
+distribution problem). The one remaining plaintext hop is
+gateway→collector OTLP (:4318), which is SG-scoped so only gateway tasks
+can reach it. Encrypting it requires an enterprise-CA-signed cert for
+`otel-collector.<prefix>.internal` in a custom collector image plus the CA
+root in the gateway image trust store — the gateway validates telemetry
+TLS against the system store only. See the comment on the collector task
+definition in `03-observability.yaml`; scope against your SSP (in-VPC
+SG-scoped hops often pass on the VPC-boundary argument).
+
 ### Hardening roadmap (post-deploy)
 
 Not yet wired in, planned as policy firms up: per-Okta-group
 `managed.policies` (model allowlists, locked CLI settings) and gateway spend
 limits in the `gateway.yaml` block of `02-gateway.yaml` (config deploys via a
-stack update — ECS rolls the service automatically); OTLP telemetry to your
-own collector; and egress blocking from developer subnets to Bedrock /
+stack update — ECS rolls the service automatically); OTLP receiver TLS (see
+above); and egress blocking from developer subnets to Bedrock /
 `api.anthropic.com` (pair with `skipWebFetchPreflight: true`) so the gateway
 is the only inference path.
 

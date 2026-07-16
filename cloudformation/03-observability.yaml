@@ -94,6 +94,14 @@ Parameters:
       Grafana needs the proxy too or SSO logins time out at the code
       exchange. AWS API traffic (AMP queries) stays direct via NO_PROXY.
 
+  HttpsProxyPort:
+    Type: String
+    Default: ''
+    AllowedPattern: '^[0-9]*$'
+    Description: >-
+      Port of HttpsProxyUrl - Grafana task egress is scoped to tcp/443
+      plus this port (deploy-observability.sh derives it automatically).
+
   GrafanaOktaClientId:
     Type: String
     Description: >-
@@ -118,6 +126,17 @@ Parameters:
       Optional Okta group granted the Viewer role. Empty = no Viewer
       mapping. Role mapping is STRICT - an Okta user in none of these
       groups is denied login even after Okta authenticates them.
+
+  EncryptAmpWithCmk:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Encrypt the AMP workspace with the CMK. A workspace's KMS key is
+      fixed at creation, so enabling this on an EXISTING deployment
+      REPLACES the workspace - the old one (and every metric in it) is
+      retained but orphaned, and dashboards start from zero. Existing
+      deployments that must keep their usage/cost history set false.
 
   GrafanaDisableLoginForm:
     Type: String
@@ -145,6 +164,8 @@ Parameters:
 Conditions:
   WantAmpEndpoint: !Equals [!Ref CreateAmpEndpoint, 'true']
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
+  HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
+  WantAmpCmk: !Equals [!Ref EncryptAmpWithCmk, 'true']
 
 Resources:
 
@@ -159,6 +180,12 @@ Resources:
     UpdateReplacePolicy: Retain
     Properties:
       Alias: !Sub '${NamePrefix}-usage'
+      # CMK is creation-time only for AMP - adding it later REPLACES the
+      # workspace (see EncryptAmpWithCmk).
+      KmsKeyArn: !If
+        - WantAmpCmk
+        - Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+        - !Ref 'AWS::NoValue'
 
   # ------------------------------------------------- service discovery
   # Deterministic private DNS so the gateway's telemetry.forward_to URL is
@@ -194,12 +221,36 @@ Resources:
           SourceSecurityGroupId:
             Fn::ImportValue: !Sub '${NamePrefix}-svc-sg'
           Description: OTLP (grpc/http) from gateway tasks
+      SecurityGroupEgress:
+        # AMP remote_write + CloudWatch Logs (activity stream) + ECR pull -
+        # all TLS, via the endpoints or the NAT/TGW path.
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS to AWS services
+
+  # The gateway tasks' egress is scoped in 02; this attaches their OTLP
+  # path to the collector once this stack exists (deploys are ordered
+  # 02 -> 03 -> 02-with-OTLP-URL, so the rule lands before forwarding starts).
+  GatewayToCollectorEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Fn::ImportValue: !Sub '${NamePrefix}-svc-sg'
+      IpProtocol: tcp
+      FromPort: 4317
+      ToPort: 4318
+      DestinationSecurityGroupId: !Ref CollectorSecurityGroup
+      Description: OTLP forward to the collector
 
   CollectorLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/ecs/${NamePrefix}-otel'
       RetentionInDays: 90
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
 
   CollectorExecutionRole:
     Type: AWS::IAM::Role
@@ -279,6 +330,19 @@ Resources:
             # attributes (team, cost_center, ...) are converted to metric
             # labels so Prometheus can group by them. The logs pipeline sits
             # idle until the gateway stack sets ForwardActivityLogs=true.
+            #
+            # SC-8 note: the gateway->collector OTLP hop is plain HTTP,
+            # scoped SG-to-SG (only gateway tasks can reach 4317/4318). The
+            # gateway's telemetry.forward_to validates TLS against the
+            # SYSTEM trust store only (no custom-CA option), so encrypting
+            # this hop requires: an enterprise-CA-signed cert for
+            # otel-collector.<prefix>.internal served by the receiver
+            # (receivers.otlp.protocols.*.tls: {cert_file, key_file} - a
+            # custom collector image that carries the files), the CA root
+            # baked into the gateway image trust store (see
+            # docker/Dockerfile), and an https OtlpForwardUrl. Scope
+            # against the SSP: in-VPC SG-scoped hops often satisfy SC-8
+            # via the VPC boundary argument.
             - Name: AOT_CONFIG_CONTENT
               Value: !Sub |
                 extensions:
@@ -353,6 +417,8 @@ Resources:
     Properties:
       LogGroupName: !Sub '/claude/${NamePrefix}/activity'
       RetentionInDays: !Ref ActivityLogWindowDays
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
 
   ActivityArchiveBucket:
     Type: AWS::S3::Bucket
@@ -362,7 +428,10 @@ Resources:
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID:
+                Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+            BucketKeyEnabled: true
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -403,6 +472,13 @@ Resources:
                 Resource:
                   - !GetAtt ActivityArchiveBucket.Arn
                   - !Sub '${ActivityArchiveBucket.Arn}/*'
+              # Writing to the SSE-KMS bucket needs the CMK.
+              - Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource:
+                  Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
 
   ActivityDeliveryStream:
     Type: AWS::KinesisFirehose::DeliveryStream
@@ -464,7 +540,34 @@ Resources:
           ToPort: 3000
           SourceSecurityGroupId:
             Fn::ImportValue: !Sub '${NamePrefix}-alb-sg'
-          Description: HTTP from the ALB only
+          Description: TLS (ALB re-encrypt) from the ALB only
+      SecurityGroupEgress:
+        # AMP queries + Okta OAuth + ECR pull, all TLS.
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS to AWS services and Okta
+        - !If
+          - HaveProxyPort
+          - IpProtocol: tcp
+            FromPort: !Ref HttpsProxyPort
+            ToPort: !Ref HttpsProxyPort
+            CidrIp: 0.0.0.0/0
+            Description: Egress proxy port
+          - !Ref 'AWS::NoValue'
+
+  # The ALB's egress is scoped in 02; this opens its path to Grafana.
+  AlbToGrafanaEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Fn::ImportValue: !Sub '${NamePrefix}-alb-sg'
+      IpProtocol: tcp
+      FromPort: 3000
+      ToPort: 3000
+      DestinationSecurityGroupId: !Ref GrafanaSecurityGroup
+      Description: Forward/health-check to Grafana
 
   GrafanaAdminSecret:
     Type: AWS::SecretsManager::Secret
@@ -474,6 +577,8 @@ Resources:
         Grafana 'admin' password - BREAK-GLASS ONLY. Day-to-day access is
         per-user Okta SSO; the login form is disabled unless
         GrafanaDisableLoginForm=false.
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
       GenerateSecretString:
         PasswordLength: 24
         ExcludePunctuation: true
@@ -485,6 +590,8 @@ Resources:
       Description: >-
         Okta OIDC client secret for Grafana SSO. Placeholder at creation -
         set the real value with scripts/set-grafana-oidc-secret.sh.
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
       SecretString: 'REPLACE-ME-run-scripts-set-grafana-oidc-secret.sh'
 
   GrafanaLogGroup:
@@ -492,6 +599,8 @@ Resources:
     Properties:
       LogGroupName: !Sub '/ecs/${NamePrefix}-grafana'
       RetentionInDays: 90
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
 
   GrafanaExecutionRole:
     Type: AWS::IAM::Role
@@ -515,6 +624,11 @@ Resources:
                 Resource:
                   - !Ref GrafanaAdminSecret
                   - !Ref GrafanaOidcClientSecret
+              # CMK-encrypted secrets need decrypt on the key itself.
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource:
+                  Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
 
   GrafanaTaskRole:
     Type: AWS::IAM::Role
@@ -659,14 +773,18 @@ Resources:
             - Name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
               ValueFrom: !Ref GrafanaOidcClientSecret
 
+  # No Name (protocol changes replace the group; a fixed name collides with
+  # itself). HTTPS: the Grafana image's TLS entrypoint serves a per-task
+  # self-signed cert; ALBs don't validate target certs.
   GrafanaTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Sub '${NamePrefix}-grafana'
       VpcId: !Ref VpcId
-      Protocol: HTTP
+      Protocol: HTTPS
       Port: 3000
       TargetType: ip
+      # ALB health checks default to HTTP even on an HTTPS target group.
+      HealthCheckProtocol: HTTPS
       HealthCheckPath: /grafana/api/health
       HealthCheckIntervalSeconds: 30
       HealthyThresholdCount: 2
@@ -725,6 +843,11 @@ Resources:
           ToPort: 443
           SourceSecurityGroupId: !Ref GrafanaSecurityGroup
           Description: queries from Grafana
+      # Endpoint ENIs never initiate connections.
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: no egress
 
   AmpEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -737,6 +860,19 @@ Resources:
       SecurityGroupIds:
         - !Ref AmpEndpointSecurityGroup
       PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ThisWorkspaceOnly
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - aps:RemoteWrite
+              - aps:QueryMetrics
+              - aps:GetSeries
+              - aps:GetLabels
+              - aps:GetMetricMetadata
+            Resource: !GetAtt Workspace.Arn
 
 Outputs:
   WorkspaceId:

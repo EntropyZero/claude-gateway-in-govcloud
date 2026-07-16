@@ -14,9 +14,19 @@ aws cloudformation deploy \
   --parameter-overrides \
       "NamePrefix=${NAME_PREFIX}" \
       "VpcId=${VPC_ID}" \
-      "PrivateSubnetIds=${PRIVATE_SUBNET_IDS}"
+      "PrivateSubnetIds=${PRIVATE_SUBNET_IDS}" \
+      "PgauditLogClasses=${PGAUDIT_LOG_CLASSES:-ddl,role,write}" \
+      "KmsKeyArn=${KMS_KEY_ARN:-}"
 
 log "Stack outputs"
 aws cloudformation describe-stacks --region "$AWS_REGION" \
   --stack-name "$DB_STACK_NAME" \
   --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
+
+# Persist the resolved CMK so ensure_ecr_repo creates CMK-encrypted repos
+# (ECR encryption is fixed at creation - deploy this stack BEFORE the first
+# image push, per the README quick-start order).
+if [ -z "${KMS_KEY_ARN:-}" ]; then
+  RESOLVED_KEY="$(stack_output "$DB_STACK_NAME" KmsKeyArnResolved)"
+  [ -n "$RESOLVED_KEY" ] && [ "$RESOLVED_KEY" != "None" ] && set_env_var KMS_KEY_ARN "$RESOLVED_KEY"
+fi

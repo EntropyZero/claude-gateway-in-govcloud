@@ -53,6 +53,23 @@ account_id() {
 
 log() { printf '\033[36m==> %s\033[0m\n' "$*"; }
 
+# proxy_port URL - print the port of a proxy URL (explicit port, else the
+# scheme default). Task-SG egress is scoped to 443 + this port; 443 prints
+# nothing (already covered by the standing HTTPS rule).
+proxy_port() {
+  local url="$1" port
+  [ -n "$url" ] || return 0
+  # Optional userinfo (user:pass@) before the host must not eat the port.
+  port="$(printf '%s' "$url" | sed -nE 's#^[a-zA-Z]+://([^/@]*@)?[^:/]+:([0-9]+).*#\2#p')"
+  if [ -z "$port" ]; then
+    case "$url" in
+      https://*) port=443 ;;
+      http://*)  port=80 ;;
+    esac
+  fi
+  [ "$port" = "443" ] || printf '%s' "$port"
+}
+
 # put_secret_and_roll SECRET-ARN CLUSTER SERVICE PROMPT-LABEL
 # Prompt (hidden) for a secret value, write it to Secrets Manager via a
 # mode-600 temp file (never argv - visible via ps//proc otherwise), then
@@ -88,17 +105,21 @@ put_secret_and_roll() {
 }
 
 # ensure_ecr_repo REPO-NAME - create the repository if missing (scan on
-# push), and enforce IMMUTABLE tags either way, so repos created by older
-# script versions get back-filled instead of silently staying mutable.
+# push, CMK-encrypted when KMS_KEY_ARN is set - encryption is fixed at
+# creation and cannot be changed on an existing repo), and enforce
+# IMMUTABLE tags either way, so repos created by older script versions get
+# back-filled instead of silently staying mutable.
 ensure_ecr_repo() {
-  local repo="$1"
+  local repo="$1" enc=()
+  [ -n "${KMS_KEY_ARN:-}" ] && enc=(--encryption-configuration "encryptionType=KMS,kmsKey=${KMS_KEY_ARN}")
   log "Ensuring ECR repository ${repo} exists (immutable tags)"
   aws ecr describe-repositories --region "$AWS_REGION" \
       --repository-names "$repo" >/dev/null 2>&1 || \
     aws ecr create-repository --region "$AWS_REGION" \
       --repository-name "$repo" \
       --image-scanning-configuration scanOnPush=true \
-      --image-tag-mutability IMMUTABLE >/dev/null
+      --image-tag-mutability IMMUTABLE \
+      ${enc[@]+"${enc[@]}"} >/dev/null
   aws ecr put-image-tag-mutability --region "$AWS_REGION" \
     --repository-name "$repo" \
     --image-tag-mutability IMMUTABLE >/dev/null

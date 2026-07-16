@@ -96,15 +96,42 @@ surfaced and fixed several issues in the fixes themselves:
 - README documents the mirror script's fail-closed GPG behavior
   (`ANTHROPIC_GPG_KEY` / `ALLOW_UNVERIFIED_MANIFEST=1`).
 
+**Batch C implementation (2026-07-15, same session):** C1, C3, C4, C5, C6,
+C10, C11 implemented; C2 implemented for ALB→gateway and ALB→Grafana
+(per-task self-signed certs, ALB re-encrypt), with the gateway→collector
+OTLP hop documented as an SSP-scoped option (the gateway validates
+telemetry TLS against the system trust store only — no custom-CA setting).
+A new latent bug was found and fixed during C11: the RDS-managed master
+secret auto-rotates every 7 days while ECS injects PGPASSWORD at task
+start — tasks older than a rotation would fail new DB connections. An
+EventBridge (CloudTrail `RotationSucceeded`) → Lambda hook now rolls the
+gateway service on each rotation. See the C-batch header below for the
+item-by-item mapping.
+
 **What remains (open work):**
-- **Batch C except C7/C8/C9**: C1 CMKs, C2 internal TLS, C3 RDS
-  `verify-full`, C4 pgaudit, C5 endpoint policies, C6 IAM/endpoint model
-  scoping, C10 SG egress scoping, C11 secret rotation schedules. Scope
-  against the client's ATO boundary and SSP baseline before implementing.
-- Deploy-time verification of the applied fixes (nothing has been deployed
-  since the changes): fresh `deploy-database.sh` → `deploy-gateway.sh` →
-  observability chain in a test account, plus the Grafana Okta login flow
-  end-to-end (custom auth server with `groups` claim + redirect URI).
+- **Deploy-time verification** — nothing has been deployed since any of
+  these changes: fresh `deploy-database.sh` → `deploy-gateway.sh` →
+  observability chain in a test account. Pay attention to: first pull of
+  the rebuilt images (RDS CA bundle + TLS entrypoints), the HTTPS target
+  groups going healthy, Grafana Okta login end-to-end (custom auth server
+  with `groups` claim + redirect URI), and a forced secret rotation
+  (`aws secretsmanager rotate-secret`) triggering the service roll.
+- **Existing-deployment migration**: the RDS storage CMK is a day-one
+  decision — a plain 01 update cannot adopt it (fixed instance identifier
+  + the db-endpoint/db-secret/kms export locks); the real path is snapshot
+  → tear down 03+02 → rebuild 01 → restore data → redeploy (README
+  "Teardown & update order"). The HTTP→HTTPS target-group swap needs the
+  rebuilt images pushed FIRST and a maintenance window (listener points at
+  the empty new TG until the first TLS task is healthy). AMP CMK on an
+  existing workspace is gated behind `ENCRYPT_AMP_WITH_CMK` (enabling it
+  replaces the workspace and orphans metric history). ECR repos created
+  before 01 existed stay SSE-S3 forever (encryption fixed at creation) —
+  recreate them if CMK coverage is mandatory.
+- **Post-deploy verification of the rotation hook**: the EventBridge
+  SecretId match is observed behavior, not a documented contract — force a
+  rotation once (`aws secretsmanager rotate-secret`) and confirm the roll;
+  consider alarming on zero RotationRollFunction invocations per period.
+- C2 OTLP-hop TLS if the SSP requires it; C9 Object Lock stays deferred.
 
 **Also-durable context** lives in project memory
 (`claude-gateway-project-context.md`): client template (never hardcode
@@ -276,11 +303,30 @@ the gateway segment.
 
 ## C. FedRAMP High / IL4-5 compliance posture
 
-> **Status:** C7 implemented as Option 1 (Okta SSO, strict group→role
-> mapping, login form off, break-glass admin retained) and C8 implemented
-> (gravatar off, secure cookies, anonymous/sign-up off, session lifetimes,
-> external snapshots off). C9 **deferred** by user decision (2026-07-15).
-> C1–C6, C10, C11 remain open pending ATO-boundary scoping.
+> **Status: implemented 2026-07-15** (except C9, deferred by user decision).
+> - C1 → one CMK (created in 01 or bring-your-own `KMS_KEY_ARN`; exported)
+>   covering RDS + master secret, all Secrets Manager secrets, CloudWatch
+>   log groups, activity archive (SSE-KMS + Firehose key perms), AMP, and
+>   ECR at repo creation. ALB-logs bucket stays SSE-S3 (ELB limitation).
+> - C2 → ALB→gateway (`listen.tls`, per-task self-signed cert from the
+>   entrypoint) and ALB→Grafana (TLS entrypoint in the image) encrypted;
+>   both target groups HTTPS (Name dropped - protocol changes replace TGs).
+>   Gateway→collector OTLP hop documented (system-trust-store constraint).
+> - C3 → `sslmode=verify-full` + GovCloud RDS trust bundle fetched by the
+>   build script and baked into the image.
+> - C4 → pgaudit (`ddl,role,write` default, parameterized) + log_statement
+>   ddl + connection logging; log_parameter off to keep user content out.
+> - C5 → policies on ecr.api/ecr.dkr/logs/secretsmanager/aps endpoints and
+>   the S3 gateway endpoint (this-account + ECR starport layer bucket).
+> - C6 → IAM + endpoint policy scoped to exactly the two configured models
+>   (profile IDs + derived foundation-model IDs; region * kept for geo
+>   profile fan-out).
+> - C10 → explicit egress on every SG (inline lists remove default
+>   allow-all; standalone rules where inline would cycle; 03 attaches
+>   ALB→Grafana and gateway→collector rules to the imported SGs; proxy
+>   port derived by the deploy scripts).
+> - C11 → RDS master secret auto-rotates (7d) + NEW: rotation→service-roll
+>   hook (stale-PGPASSWORD bug); JWT/Okta/Grafana runbooks in README.
 
 **C1. No customer-managed KMS keys anywhere.** RDS (`StorageEncrypted: true`,
 no `KmsKeyId`), Secrets Manager (RDS master, Okta, JWT, Grafana admin secrets),

@@ -35,7 +35,9 @@ aws cloudformation deploy \
       "GrafanaViewerGroup=${GRAFANA_VIEWER_GROUP:-}" \
       "GrafanaDisableLoginForm=${GRAFANA_DISABLE_LOGIN_FORM:-true}" \
       "HttpsProxyUrl=${HTTPS_PROXY_URL:-}" \
+      "HttpsProxyPort=$(proxy_port "${HTTPS_PROXY_URL:-}")" \
       "CreateAmpEndpoint=${CREATE_AMP_ENDPOINT:-false}" \
+      "EncryptAmpWithCmk=${ENCRYPT_AMP_WITH_CMK:-true}" \
       "ActivityLogWindowDays=${ACTIVITY_LOG_WINDOW_DAYS:-14}" \
       "ActivityArchiveRetentionDays=${ACTIVITY_ARCHIVE_RETENTION_DAYS:-731}"
 

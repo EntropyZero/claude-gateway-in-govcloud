@@ -73,6 +73,7 @@ aws cloudformation deploy \
       "CreateSupportingEndpoints=${CREATE_SUPPORTING_ENDPOINTS:-false}" \
       "PrivateRouteTableIds=${PRIVATE_ROUTE_TABLE_IDS:-}" \
       "HttpsProxyUrl=${HTTPS_PROXY_URL:-}" \
+      "HttpsProxyPort=$(proxy_port "${HTTPS_PROXY_URL:-}")" \
       "CertExpiryAlarmDays=${CERT_EXPIRY_ALARM_DAYS:-30}" \
       "AlarmSnsTopicArn=${ALARM_SNS_TOPIC_ARN:-}" \
       "AlbLogRetentionDays=${ALB_LOG_RETENTION_DAYS:-90}" \

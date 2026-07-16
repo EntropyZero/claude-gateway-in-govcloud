@@ -13,8 +13,10 @@ ARG CLAUDE_VERSION=unknown
 LABEL org.opencontainers.image.title="claude-apps-gateway" \
       org.opencontainers.image.version="${CLAUDE_VERSION}"
 
+# openssl: the entrypoint generates a per-task self-signed cert so the
+# ALB->task hop is TLS (SC-8) with the private key never leaving the task.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates openssl \
  && rm -rf /var/lib/apt/lists/*
 
 # If your enterprise CA also signs internal endpoints the gateway must call
@@ -25,6 +27,9 @@ RUN apt-get update \
 # The verified native binary from the release bucket (glibc build, linux-x64).
 COPY claude /usr/local/bin/claude
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+# RDS CA trust bundle (fetched by build-and-push-image.sh) - lets the
+# entrypoint use sslmode=verify-full instead of trust-blind 'require'.
+COPY rds-ca-bundle.pem /usr/local/share/rds-ca-bundle.pem
 RUN chmod 0755 /usr/local/bin/claude /usr/local/bin/entrypoint.sh \
  && useradd --system --create-home --uid 10001 gateway \
  && mkdir -p /etc/claude && chown gateway:gateway /etc/claude
