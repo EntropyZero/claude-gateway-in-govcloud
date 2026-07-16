@@ -90,9 +90,7 @@ reverse (03 → 02 → 01).
 
 ## Rules
 
-Hard rules extracted to `.claude/rules/` and imported below. Follow them.
-
-@.claude/rules/security.md
-@.claude/rules/cloudformation.md
-@.claude/rules/scripts.md
-@.claude/rules/process.md
+Hard rules live in `.claude/rules/*.md` (`security`, `cloudformation`,
+`scripts`, `process`). Claude Code **auto-loads** that directory at session
+start — no import needed — so they are always in effect. Follow them; add new
+cross-cutting rules there rather than inline here.
