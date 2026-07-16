@@ -78,18 +78,24 @@ Parameters:
 
   OktaIssuer:
     Type: String
-    AllowedPattern: 'https://[A-Za-z0-9.-]+(:[0-9]+)?(/.*)?'
+    # Identical to 03-observability.yaml's OktaIssuer pattern: the SAME
+    # OKTA_ISSUER feeds both stacks, so a value that passes here must pass
+    # there. Requires https://, allows the bare org domain or a custom
+    # /oauth2/<id> server, and rejects a trailing slash - which would both
+    # break the gateway's OIDC discovery (issuer mismatch) and give Grafana's
+    # derived <issuer>/oauth2/v1/... URLs a double slash.
+    AllowedPattern: '^https://[a-zA-Z0-9.-]+(/oauth2/[a-zA-Z0-9._-]+)?$'
     ConstraintDescription: >-
-      Must be a full https:// URL. The gateway rejects a scheme-less or
-      non-https oidc.issuer at startup ("must be an http(s) URL"). Org server:
-      https://<your-org-domain> with NO trailing slash. Custom server:
-      https://<your-org-domain>/oauth2/<id>.
+      Must be an https Okta issuer with NO trailing slash. A scheme-less or
+      non-https value crash-loops the gateway ("oidc.issuer must be an http(s)
+      URL"). Org server: https://your-org.okta.com. Custom server:
+      https://your-org.okta.com/oauth2/<id>. Set OktaAuthServerType to match.
     Description: >-
       Okta issuer URL - INCLUDE the https:// scheme (a bare domain crash-loops
-      the task). A custom authorization server is recommended
-      (https://your-org.okta.com/oauth2/default); the org server
-      (https://your-org.okta.com, no trailing slash) also works because
-      userinfo_fallback is enabled.
+      the task). Reused verbatim for Grafana SSO in 03. A custom authorization
+      server is recommended (https://your-org.okta.com/oauth2/default); the org
+      server (https://your-org.okta.com) also works because userinfo_fallback
+      is enabled.
 
   OktaClientId:
     Type: String

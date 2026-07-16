@@ -82,3 +82,33 @@ def test_check_rejects_string_upstream_model():
     }
     with pytest.raises(AssertionError):
         _assert_upstream_model_objects(bad)
+
+
+def _okta_issuer_pattern(template):
+    path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "cloudformation", template
+    )
+    text = open(path).read()
+    # the OktaIssuer parameter block's AllowedPattern
+    blk = text[text.index("OktaIssuer:"):]
+    m = re.search(r"AllowedPattern:\s*'([^']+)'", blk)
+    assert m, f"{template}: OktaIssuer has no AllowedPattern"
+    return m.group(1)
+
+
+def test_okta_issuer_pattern_identical_across_stacks():
+    # The same OKTA_ISSUER env var feeds both stacks, so a value that passes
+    # 02 must pass 03 (and vice versa). Divergence let a trailing-slash issuer
+    # deploy the gateway but break Grafana's derived /oauth2/v1 URLs.
+    p02 = _okta_issuer_pattern("02-gateway.yaml")
+    p03 = _okta_issuer_pattern("03-observability.yaml")
+    assert p02 == p03, f"OktaIssuer patterns diverge:\n 02: {p02}\n 03: {p03}"
+
+
+def test_okta_issuer_pattern_rejects_trailing_slash_and_scheme_less():
+    pat = _okta_issuer_pattern("02-gateway.yaml")
+    assert re.fullmatch(pat, "https://your-org.okta.com")               # org
+    assert re.fullmatch(pat, "https://your-org.okta.com/oauth2/default")  # custom
+    assert not re.fullmatch(pat, "https://your-org.okta.com/")          # trailing slash
+    assert not re.fullmatch(pat, "your-org.okta.com")                   # no scheme
+    assert not re.fullmatch(pat, "http://your-org.okta.com")            # not https
