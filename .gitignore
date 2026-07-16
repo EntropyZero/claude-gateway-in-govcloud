@@ -16,3 +16,6 @@ mirror/
 
 # Python bytecode (local syntax checks)
 __pycache__/
+
+# Playwright MCP scratch
+.playwright-mcp/

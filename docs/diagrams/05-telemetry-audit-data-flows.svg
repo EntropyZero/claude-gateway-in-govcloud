@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="700" viewBox="0 0 1500 700">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker></defs>
+<rect x="0.5" y="0.5" width="1499" height="699" rx="14" fill="#FFFFFF" stroke="#E2E8F0"/>
+<text x="36" y="46" font-family="Helvetica, Arial, sans-serif" font-size="20" fill="#0F172A" font-weight="bold" text-anchor="start" >Telemetry &amp; audit data flows</text>
+<text x="36" y="68" font-family="Helvetica, Arial, sans-serif" font-size="12.5" fill="#64748B" font-weight="normal" text-anchor="start" >two streams, different sensitivity — the audit stream is opt-in and prompt content is always redacted</text>
+<rect x="48" y="150" width="240" height="76" rx="8" fill="#FFFFFF" stroke="#2563EB" stroke-width="1.4"/>
+<text x="168.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Claude Code clients</text>
+<text x="168.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >OTLP enabled centrally by the</text>
+<text x="168.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >gateway via /managed/settings</text>
+<rect x="48" y="260" width="240" height="62" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="168.0" y="281" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway's own metrics</text>
+<rect x="380" y="180" width="260" height="96" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="510.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway</text>
+<text x="510.0" y="217" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >stamps user.id · user.email ·</text>
+<text x="510.0" y="231" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >user.groups from the Okta JWT</text>
+<text x="510.0" y="245" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >onto every export</text>
+<rect x="740" y="180" width="260" height="90" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="870.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >ADOT collector</text>
+<text x="870.0" y="217" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >drops session.id (cardinality)</text>
+<text x="870.0" y="231" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >promotes team / cost_center</text>
+<text x="870.0" y="245" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >to metric labels</text>
+<rect x="1080" y="96" width="380" height="250" rx="12" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.5"/>
+<text x="1096" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#6D28D9" font-weight="bold" text-anchor="start" letter-spacing="0.06em">USAGE &amp; COST METRICS</text>
+<text x="1096" y="139" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="start" >operational sensitivity</text>
+<rect x="1104" y="152" width="332" height="66" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1270.0" y="173" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Amazon Managed Prometheus</text>
+<text x="1270.0" y="189" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >CMK · 150-day retention</text>
+<rect x="1104" y="244" width="332" height="76" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1270.0" y="265" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Grafana dashboard</text>
+<text x="1270.0" y="281" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Okta SSO, strict group→role;</text>
+<text x="1270.0" y="295" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >cost by team / cost-center / Okta group</text>
+<rect x="740" y="380" width="720" height="250" rx="12" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
+<text x="756" y="406" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#B91C1C" font-weight="bold" text-anchor="start" letter-spacing="0.06em">ACTIVITY AUDIT STREAM — HIGHLY SENSITIVE, OPT-IN</text>
+<text x="756" y="423" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="start" >FORWARD_ACTIVITY_LOGS=true · bash commands, tool inputs, file paths per user</text>
+<rect x="764" y="446" width="200" height="76" rx="8" fill="#FFFFFF" stroke="#B91C1C" stroke-width="1.4"/>
+<text x="864.0" y="467" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >CloudWatch Logs</text>
+<text x="864.0" y="483" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >CMK · 14-day</text>
+<text x="864.0" y="497" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >operational window</text>
+<rect x="1020" y="446" width="170" height="76" rx="8" fill="#FFFFFF" stroke="#B91C1C" stroke-width="1.4"/>
+<text x="1105.0" y="467" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Firehose</text>
+<text x="1105.0" y="483" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >buffered delivery</text>
+<path d="M1246 455 a 95.0 9 0 0 1 190 0 v 58 a 95.0 9 0 0 1 -190 0 Z" fill="#FFFFFF" stroke="#B91C1C" stroke-width="1.4"/>
+<path d="M1246 455 a 95.0 9 0 0 0 190 0" fill="none" stroke="#B91C1C" stroke-width="1.4"/>
+<text x="1341.0" y="477" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >S3 archive</text>
+<text x="1341.0" y="493" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SSE-KMS · 731 days</text>
+<text x="1341.0" y="507" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bucket retained</text>
+<text x="764" y="560" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#B91C1C" font-weight="normal" text-anchor="start" >Access: IAM only — no dashboard surface. Flag for SIEM subscription where policy requires.</text>
+<path d="M288 188 L380 210" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="255.85000000000002" y="166" width="148.29999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="330" y="179.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#2563EB" font-weight="normal" text-anchor="middle" >OTLP via gateway FQDN</text>
+<path d="M288 291 L334 291 L334 244 L380 244" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M640 214 L740 214" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="659.95" y="192" width="60.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="690" y="205.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >metrics</text>
+<path d="M640 250 L700 250 L700 462 L764 462" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="578.6" y="356" width="242.79999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="700" y="369.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >activity records (only when enabled)</text>
+<path d="M1000 200 L1104 185" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="987.3" y="162" width="129.39999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1052" y="175.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 remote_write</text>
+<path d="M1270 218 L1270 244" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M964 484 L1020 484" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M1190 484 L1246 484" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<text x="48" y="664" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#334155" font-weight="normal" text-anchor="start" >Data-class table with retention and access paths: architecture.md §5. ALB access logs (SSE-S3, 90 d) and pgaudit DB logs (CMK, 365 d) are separate IAM-only stores.</text>
+</svg>

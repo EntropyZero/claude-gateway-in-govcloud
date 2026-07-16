@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1010" viewBox="0 0 1500 1010">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker></defs>
+<rect x="0.5" y="0.5" width="1499" height="1009" rx="14" fill="#FFFFFF" stroke="#E2E8F0"/>
+<text x="36" y="46" font-family="Helvetica, Arial, sans-serif" font-size="20" fill="#0F172A" font-weight="bold" text-anchor="start" >System architecture &amp; trust boundaries</text>
+<text x="36" y="68" font-family="Helvetica, Arial, sans-serif" font-size="12.5" fill="#64748B" font-weight="normal" text-anchor="start" >Claude apps gateway in AWS GovCloud us-gov-west-1 — every arrow is TLS unless flagged</text>
+<rect x="40" y="96" width="340" height="216" rx="12" fill="#EFF6FF" stroke="#2563EB" stroke-width="1.5"/>
+<text x="56" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#2563EB" font-weight="bold" text-anchor="start" letter-spacing="0.06em">MANAGED WINDOWS FLEET</text>
+<text x="56" y="139" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#2563EB" font-weight="normal" text-anchor="start" >Zscaler ZPA</text>
+<rect x="64" y="138" width="292" height="74" rx="8" fill="#FFFFFF" stroke="#2563EB" stroke-width="1.4"/>
+<text x="210.0" y="159" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Developer laptop — Claude Code</text>
+<text x="210.0" y="175" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >precompiled binary, mirrored install</text>
+<text x="210.0" y="189" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >managed settings: forced gateway login,</text>
+<text x="210.0" y="203" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >updates disabled</text>
+<rect x="64" y="232" width="292" height="58" rx="8" fill="#FFFFFF" stroke="#2563EB" stroke-width="1.4"/>
+<text x="210.0" y="253" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Zscaler Client Connector</text>
+<text x="210.0" y="269" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >answers DNS with synthetic CGNAT IPs</text>
+<rect x="40" y="360" width="340" height="300" rx="12" fill="#FFFBEB" stroke="#B45309" stroke-width="1.5"/>
+<text x="56" y="386" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#B45309" font-weight="bold" text-anchor="start" letter-spacing="0.06em">CORPORATE NETWORK</text>
+<rect x="64" y="402" width="292" height="58" rx="8" fill="#FFFFFF" stroke="#B45309" stroke-width="1.4"/>
+<text x="210.0" y="423" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >ZPA App Connector</text>
+<text x="210.0" y="439" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >real DNS lookup + the source IP</text>
+<text x="210.0" y="453" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >the ALB actually sees</text>
+<rect x="64" y="480" width="292" height="58" rx="8" fill="#FFFFFF" stroke="#B45309" stroke-width="1.4"/>
+<text x="210.0" y="501" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >AD DNS</text>
+<text x="210.0" y="517" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >claude-gateway.example.com</text>
+<text x="210.0" y="531" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >CNAME → internal ALB name</text>
+<rect x="64" y="558" width="292" height="58" rx="8" fill="#FFFFFF" stroke="#B45309" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="210.0" y="579" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Egress proxy (optional)</text>
+<text x="210.0" y="595" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >HTTPS_PROXY_URL — only when the</text>
+<text x="210.0" y="609" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >landing zone mandates it</text>
+<rect x="432" y="96" width="640" height="700" rx="12" fill="#ECFDF5" stroke="#047857" stroke-width="1.5"/>
+<text x="448" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#047857" font-weight="bold" text-anchor="start" letter-spacing="0.06em">AWS GOVCLOUD VPC</text>
+<text x="448" y="139" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="start" >spoke · private subnets only · no IGW/NAT required</text>
+<rect x="470" y="150" width="250" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="595.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Internal ALB  :443</text>
+<text x="595.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >enterprise-CA cert (ACM import)</text>
+<text x="595.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >IPv4-only · deletion-protected</text>
+<text x="595.0" y="215" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >stack-policy locked</text>
+<rect x="790" y="150" width="250" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="915.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Grafana  :3000 TLS</text>
+<text x="915.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >per-task self-signed cert</text>
+<text x="915.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Okta SSO only, no local login</text>
+<rect x="470" y="292" width="250" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="595.0" y="313" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway — ECS Fargate ×2</text>
+<text x="595.0" y="329" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >claude gateway (pinned binary)</text>
+<text x="595.0" y="343" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >TLS listener :8080, per-task cert</text>
+<rect x="790" y="292" width="250" height="62" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="915.0" y="313" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >ADOT collector ×2</text>
+<text x="915.0" y="329" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >OTLP :4317 / :4318</text>
+<path d="M470 443 a 125.0 9 0 0 1 250 0 v 66 a 125.0 9 0 0 1 -250 0 Z" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<path d="M470 443 a 125.0 9 0 0 0 250 0" fill="none" stroke="#047857" stroke-width="1.4"/>
+<text x="595.0" y="465" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >RDS PostgreSQL 16</text>
+<text x="595.0" y="481" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Multi-AZ · CMK · pgaudit</text>
+<text x="595.0" y="495" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >app-user login only</text>
+<text x="595.0" y="509" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >stack-policy locked</text>
+<rect x="790" y="420" width="250" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="915.0" y="441" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >db-admin Lambdas</text>
+<text x="915.0" y="457" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bootstrap app DB users +</text>
+<text x="915.0" y="471" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >rotate secret &amp; roll service</text>
+<rect x="470" y="566" width="570" height="96" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="755.0" y="587" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Interface VPC endpoints — each with a resource policy</text>
+<text x="755.0" y="603" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bedrock-runtime (2 approved models only) · ecr.api · ecr.dkr · logs</text>
+<text x="755.0" y="617" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint</text>
+<rect x="470" y="692" width="570" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="755.0" y="713" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >KMS CMK  alias/&lt;prefix&gt;</text>
+<text x="755.0" y="729" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >one customer-managed key: RDS, secrets, log groups,</text>
+<text x="755.0" y="743" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >activity archive, AMP, ECR (rotation enabled)</text>
+<rect x="1124" y="96" width="336" height="564" rx="12" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.5"/>
+<text x="1140" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#6D28D9" font-weight="bold" text-anchor="start" letter-spacing="0.06em">AWS REGIONAL SERVICES</text>
+<text x="1140" y="139" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="start" >reached via endpoints / AWS backbone</text>
+<rect x="1148" y="152" width="288" height="56" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1292.0" y="173" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Managed Prometheus (AMP)</text>
+<text x="1292.0" y="189" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >usage/cost metrics · CMK</text>
+<rect x="1148" y="228" width="288" height="66" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1292.0" y="249" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Amazon Bedrock</text>
+<text x="1292.0" y="265" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Claude Opus 4.8 · Sonnet 4.5</text>
+<text x="1292.0" y="279" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >us-gov profiles · endpoint policy: 2 models</text>
+<rect x="1148" y="314" width="288" height="48" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1292.0" y="335" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Secrets Manager (CMK)</text>
+<rect x="1148" y="382" width="288" height="56" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1292.0" y="403" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >CloudWatch Logs → Firehose</text>
+<text x="1292.0" y="419" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >activity window (CMK) → archive</text>
+<path d="M1148 467 a 144.0 9 0 0 1 288 0 v 38 a 144.0 9 0 0 1 -288 0 Z" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<path d="M1148 467 a 144.0 9 0 0 0 288 0" fill="none" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1292.0" y="489" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >S3: activity archive</text>
+<text x="1292.0" y="505" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SSE-KMS · 731-day retention</text>
+<path d="M1148 543 a 144.0 9 0 0 1 288 0 v 38 a 144.0 9 0 0 1 -288 0 Z" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<path d="M1148 543 a 144.0 9 0 0 0 288 0" fill="none" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1292.0" y="565" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >S3: ALB access logs</text>
+<text x="1292.0" y="581" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SSE-S3 — ELB delivery limitation</text>
+<rect x="1124" y="700" width="336" height="120" rx="12" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
+<text x="1140" y="726" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#B91C1C" font-weight="bold" text-anchor="start" letter-spacing="0.06em">EXTERNAL SAAS — THE ONLY PUBLIC DEPENDENCY</text>
+<rect x="1148" y="744" width="288" height="58" rx="8" fill="#FFFFFF" stroke="#B91C1C" stroke-width="1.4"/>
+<text x="1292.0" y="765" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Okta</text>
+<text x="1292.0" y="781" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >custom authorization server</text>
+<text x="1292.0" y="795" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >with groups claim</text>
+<path d="M210 212 L210 232" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M210 290 L210 360" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="170.5" y="326" width="79.0" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="210" y="339.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#2563EB" font-weight="normal" text-anchor="middle" >ZPA tunnel</text>
+<path d="M356 431 L415 431 L415 188 L470 188" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="381.8" y="230" width="66.4" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="415" y="243.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="bold" text-anchor="middle" >TLS :443</text>
+<path d="M720 188 L790 188" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="731.25" y="166" width="47.5" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="755" y="179.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >:3000</text>
+<path d="M595 226 L595 292" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="536.6" y="252" width="116.8" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="595" y="265.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >:8080 re-encrypt</text>
+<path d="M595 368 L595 434" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="533.45" y="394" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="595" y="407.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >:5432 verify-full</text>
+<path d="M720 330 L790 330" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="733.25" y="308" width="47.5" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="757" y="321.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >:4318</text>
+<rect x="682.85" y="368" width="148.29999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#B91C1C"/>
+<text x="757" y="381.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >plaintext · SG-scoped</text>
+<path d="M1040 178 L1148 178" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="1051.35" y="156" width="85.3" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1094" y="169.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 query</text>
+<path d="M720 300 L756 300 L756 258 L1148 258" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="838.45" y="248" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="900" y="261.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >inference — SigV4</text>
+<path d="M1010 354 L1010 378 L1120 378 L1120 206 L1148 206" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="993.3" y="368" width="129.39999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1058" y="381.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 remote_write</text>
+<path d="M915 354 L915 396 L1148 396" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="901.4" y="388" width="167.2" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="985" y="401.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >activity stream (opt-in)</text>
+<path d="M790 470 L720 470" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M915 496 L915 520 L1136 520 L1136 338 L1148 338" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="962.45" y="510" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1024" y="523.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >manage app secret</text>
+<path d="M470 330 L452 330 L452 830 L1180 830 L1180 802" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="637.65" y="820" width="324.7" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="800" y="833.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >OIDC login + token exchange (TGW egress or proxy)</text>
+<path d="M940 226 L940 274 L1096 274 L1096 744" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="1028.15" y="680" width="135.7" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1096" y="693.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >OAuth code exchange</text>
+<path d="M356 587 L410 587 L410 862 L1240 862 L1240 820" fill="none" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+<rect x="616.4" y="852" width="167.2" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="700" y="865.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B45309" font-weight="normal" text-anchor="middle" >proxy path when mandated</text>
+<text x="36" y="980" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#334155" font-weight="normal" text-anchor="start" >Boundary facts: no public ingress (internal ALB behind ZPA); no public egress from the inference path (Bedrock endpoint, 2-model policy); clients never contact Anthropic (mirrored, verified binaries; updates disabled).</text>
+</svg>
