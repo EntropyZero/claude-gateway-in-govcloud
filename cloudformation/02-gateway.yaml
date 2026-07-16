@@ -947,6 +947,11 @@ Resources:
     Type: Custom::DbAppUserBootstrap
     Properties:
       ServiceToken: !GetAtt DbBootstrapFunction.Arn
+      # Fail the stack in minutes, not the ~1-hour default, if the bootstrap
+      # Lambda never responds (e.g. it can't start, or hangs with no DB
+      # route). Comfortably above a normal run (VPC cold start + a few SQL
+      # statements, ~tens of seconds) and the Lambda's own 120s timeout.
+      ServiceTimeout: 300
       # Bump to force a re-run (idempotent: converges roles/grants, never
       # resets live passwords).
       ConfigVersion: '1'

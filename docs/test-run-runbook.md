@@ -206,8 +206,9 @@ now:
 
 🔎 **DB bootstrap** — `Custom::DbAppUserBootstrap` reaches CREATE_COMPLETE.
 If it hangs, tail `/aws/lambda/<prefix>-db-bootstrap` (VPC Lambda cold start +
-SG path to Postgres/Secrets Manager). A stuck custom resource blocks the stack
-for ~1h before failing, so watch it early.
+SG path to Postgres/Secrets Manager). The custom resource has
+`ServiceTimeout: 300`, so a stuck/failing bootstrap fails the stack in ~5 min
+(not the ~1h CloudFormation default) — but watch the Lambda log to see *why*.
 
 🔎 **Target group health** — after the service starts:
 ```bash
