@@ -358,17 +358,6 @@ Conditions:
   HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
   HaveTelemetry: !Not [!Equals [!Ref ObservabilityOtlpUrl, '']]
 
-# Account IDs that Elastic Load Balancing uses to deliver access logs
-# (regions without a service-principal log-delivery path, incl. GovCloud).
-Mappings:
-  ElbAccount:
-    us-gov-west-1: { Id: '048591011584' }
-    us-gov-east-1: { Id: '190560391635' }
-    us-east-1:     { Id: '127311923021' }
-    us-east-2:     { Id: '033677994240' }
-    us-west-1:     { Id: '027434742980' }
-    us-west-2:     { Id: '797873946194' }
-
 Resources:
 
   # ------------------------------------------------------------------ secrets
@@ -510,12 +499,19 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
+          # Grant the ELB log-delivery SERVICE PRINCIPAL, not the legacy
+          # per-region ELB account root. The account-ID mechanism delivers
+          # logs via an object ACL (bucket-owner-full-control); this bucket
+          # sets OwnershipControls: BucketOwnerEnforced (ACLs disabled), so
+          # that path is denied and the ALB's create-time test-write fails
+          # with AccessDenied. The service principal writes without an ACL and
+          # is AWS's current recommendation (works in GovCloud; the account-ID
+          # policy is legacy-only). Resource is scoped to this account's log
+          # path so only this account's load balancers can write here.
           - Sid: AllowElbLogDelivery
             Effect: Allow
             Principal:
-              AWS: !Sub
-                - 'arn:${AWS::Partition}:iam::${ElbAccountId}:root'
-                - ElbAccountId: !FindInMap [ElbAccount, !Ref 'AWS::Region', Id]
+              Service: logdelivery.elasticloadbalancing.amazonaws.com
             Action: s3:PutObject
             Resource: !Sub '${AlbLogsBucket.Arn}/AWSLogs/${AWS::AccountId}/*'
 
