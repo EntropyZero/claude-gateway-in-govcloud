@@ -10,8 +10,8 @@ jobs:
     name: Lambda (pytest)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - run: pip install -r tests/requirements-test.txt
@@ -21,7 +21,7 @@ jobs:
     name: Shell helpers (bats)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: sudo apt-get update && sudo apt-get install -y bats
       - run: bats tests/bash
 
@@ -29,8 +29,8 @@ jobs:
     name: CloudFormation (cfn-lint + cfn-guard)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - run: pip install cfn-lint
@@ -51,7 +51,7 @@ jobs:
     name: Installer (Pester)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Pester
         shell: pwsh
         run: Install-Module Pester -Force -SkipPublisherCheck -MinimumVersion 5.0.0
