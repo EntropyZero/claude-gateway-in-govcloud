@@ -22,16 +22,12 @@ if [ -n "${GATEWAY_TELEMETRY_B64:-}" ]; then
   printf '%s' "$GATEWAY_TELEMETRY_B64" | base64 -d >> /etc/claude/gateway.yaml
 fi
 
-# Per-task self-signed TLS cert for the gateway listener (paths match the
-# listen.tls block in the rendered config). The ALB re-encrypts to the
-# target and does not validate target certificates, so an ephemeral
-# per-task cert encrypts the hop while the key never leaves this task.
-# Client-side fingerprint pinning is unaffected - developers pin the
-# ALB-presented enterprise cert, not this one.
-mkdir -p /etc/claude/tls
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
-  -keyout /etc/claude/tls/server.key -out /etc/claude/tls/server.crt \
-  -days 3650 -subj "/CN=claude-gateway-task" 2>/dev/null
+# The listener's self-signed TLS cert (paths match the listen.tls block in
+# the rendered config) is baked into the image at /etc/claude/tls by the
+# build - the image carries no openssl. The ALB re-encrypts to the target
+# and does not validate target certificates, so this cert only encrypts the
+# ALB->task hop; client-side fingerprint pinning is unaffected (developers
+# pin the ALB-presented enterprise cert, not this one).
 
 # Percent-encode every byte that is not RFC 3986 'unreserved', so any
 # password RDS generates survives inside a postgres:// URL.

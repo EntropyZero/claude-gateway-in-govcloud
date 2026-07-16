@@ -17,18 +17,17 @@ ARG CLAUDE_VERSION=unknown
 LABEL org.opencontainers.image.title="claude-apps-gateway" \
       org.opencontainers.image.version="${CLAUDE_VERSION}"
 
-# openssl: the entrypoint generates a per-task self-signed cert so the
-# ALB->task hop is TLS (SC-8) with the private key never leaving the task.
-# ca-certificates: public TLS trust (Okta, AWS endpoints). shadow-utils:
-# provides useradd (not in the AL2023 minimal base).
-RUN dnf install -y --setopt=install_weak_deps=False \
-      ca-certificates openssl shadow-utils \
- && dnf clean all \
- && rm -rf /var/cache/dnf
-
-# If your enterprise CA also signs internal endpoints the gateway must call
-# (e.g. an internal Okta cell or OTLP collector), trust it in the image
-# (RHEL-family paths):
+# No package install: this image needs NO access to the Amazon Linux repos.
+# - public TLS trust: the base already ships /etc/pki/tls/certs/ca-bundle.crt.
+# - openssl: not needed at runtime - the listener cert is generated on the
+#   build host and baked in (see the tls/ COPY below).
+# - the unprivileged user is created by writing /etc/passwd directly, so no
+#   shadow-utils/useradd is required.
+# The claude binary is self-contained (bundles its own TLS), so it needs no
+# system openssl.
+#
+# If your enterprise CA also signs internal endpoints the gateway must call,
+# trust it in the image (RHEL-family paths - update-ca-trust is in the base):
 # COPY enterprise-root-ca.pem /etc/pki/ca-trust/source/anchors/enterprise-root-ca.pem
 # RUN update-ca-trust
 
@@ -38,9 +37,13 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 # RDS CA trust bundle (fetched by build-and-push-image.sh) - lets the
 # entrypoint use sslmode=verify-full instead of trust-blind 'require'.
 COPY rds-ca-bundle.pem /usr/local/share/rds-ca-bundle.pem
+# Listener TLS cert, generated on the build host by build-and-push-image.sh.
+COPY --chown=10001:10001 tls/ /etc/claude/tls/
 RUN chmod 0755 /usr/local/bin/claude /usr/local/bin/entrypoint.sh \
- && useradd --system --create-home --uid 10001 gateway \
- && mkdir -p /etc/claude && chown gateway:gateway /etc/claude
+ && printf 'gateway:x:10001:10001::/home/gateway:/sbin/nologin\n' >> /etc/passwd \
+ && printf 'gateway:x:10001:\n' >> /etc/group \
+ && mkdir -p /home/gateway \
+ && chown 10001:10001 /home/gateway /etc/claude
 
 USER gateway
 ENV CLAUDE_CONFIG_DIR=/tmp/.claude

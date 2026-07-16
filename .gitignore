@@ -26,3 +26,6 @@ tests/**/__pycache__/
 
 # Generated Grafana TLS cert (built per-run by build-and-push-grafana.sh)
 docker/grafana/tls/
+
+# Generated gateway listener TLS cert (built per-run by build-and-push-image.sh)
+docker/tls/

@@ -123,15 +123,21 @@ that flow between the CloudFormation stacks (security-group IDs, the DB
 endpoint, the ALB listener) travel as stack exports and never touch
 `deploy.env`.
 
-**Controlled-network image builds.** The three images are built to need no
-package-repo access at build time — only the base images do, which you mirror
-into your registry (`GATEWAY_BASE_IMAGE`, `GRAFANA_BASE_IMAGE`,
-`LAMBDA_BASE_IMAGE`, and the ADOT `COLLECTOR_IMAGE`, each pinnable by digest):
-the gateway is Amazon Linux 2023 (glibc; packages from Amazon's in-region
-repos, not `deb.debian.org`); the db-admin image installs `pg8000` from
-vendored wheels in `docker/db-admin/vendor/` (`--no-index`, no PyPI); and the
-Grafana TLS cert is generated on the build host, so its Alpine image needs no
-`apk` install. All three verified building with networking disabled.
+**Controlled-network image builds.** The three images build with **no
+package-repo access at all** — no `deb.debian.org`, no Amazon Linux repos, no
+PyPI, no Alpine CDN. Only the base images are pulled, which you mirror into
+your registry (`GATEWAY_BASE_IMAGE`, `GRAFANA_BASE_IMAGE`, `LAMBDA_BASE_IMAGE`,
+and the ADOT `COLLECTOR_IMAGE`, each pinnable by digest). How each avoids a
+build-time install:
+- **Gateway** — Amazon Linux 2023 (glibc, matches the `claude` binary). The
+  base already ships the public CA bundle; the listener TLS cert is generated
+  on the build host and baked in (no `openssl` in the image); the unprivileged
+  user is written to `/etc/passwd` directly (no `shadow-utils`).
+- **db-admin** — installs `pg8000` + deps from vendored wheels in
+  `docker/db-admin/vendor/` (`pip --no-index`).
+- **Grafana** — TLS cert generated on the build host and baked in (no `apk`).
+
+All three verified building with networking disabled.
 
 ## Windows client rollout (offline)
 

@@ -31,6 +31,18 @@ IMAGE="${REGISTRY}/${ECR_REPO_NAME}:${CLAUDE_VERSION}"
 # for controlled networks: GATEWAY_BASE_IMAGE=<registry>/amazonlinux@sha256:...
 GATEWAY_BASE_IMAGE="${GATEWAY_BASE_IMAGE:-public.ecr.aws/amazonlinux/amazonlinux:2023}"
 
+# Listener TLS cert, generated here on the build host (openssl) and baked into
+# the image - so the image needs no openssl and no Amazon Linux repo access at
+# build. The ALB re-encrypts and does not validate this cert; it only encrypts
+# the ALB->task hop. Regenerated each build and gitignored.
+TLS_DIR="${REPO_ROOT}/docker/tls"
+log "Generating gateway listener TLS cert"
+mkdir -p "$TLS_DIR"
+( umask 077
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+    -keyout "$TLS_DIR/server.key" -out "$TLS_DIR/server.crt" \
+    -days 3650 -subj "/CN=claude-gateway" 2>/dev/null )
+
 log "Building ${IMAGE} (base: ${GATEWAY_BASE_IMAGE})"
 docker build \
   --build-arg "CLAUDE_VERSION=${CLAUDE_VERSION}" \
