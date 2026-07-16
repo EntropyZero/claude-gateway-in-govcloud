@@ -31,16 +31,20 @@ LABEL org.opencontainers.image.title="claude-apps-gateway" \
 # COPY enterprise-root-ca.pem /etc/pki/ca-trust/source/anchors/enterprise-root-ca.pem
 # RUN update-ca-trust
 
+# --chmod on every COPY so files are readable/executable regardless of the
+# build host's umask (a umask-077 checkout yields mode-600 sources that COPY
+# would otherwise preserve, breaking reads as the unprivileged gateway user).
 # The verified native binary from the release bucket (glibc build, linux-x64).
-COPY claude /usr/local/bin/claude
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=0755 claude /usr/local/bin/claude
+COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 # RDS CA trust bundle (fetched by build-and-push-image.sh) - lets the
 # entrypoint use sslmode=verify-full instead of trust-blind 'require'.
-COPY rds-ca-bundle.pem /usr/local/share/rds-ca-bundle.pem
+COPY --chmod=0644 rds-ca-bundle.pem /usr/local/share/rds-ca-bundle.pem
 # Listener TLS cert, generated on the build host by build-and-push-image.sh.
+# --chown (not --chmod) so the private key stays 0600, owned by the gateway
+# user that reads it.
 COPY --chown=10001:10001 tls/ /etc/claude/tls/
-RUN chmod 0755 /usr/local/bin/claude /usr/local/bin/entrypoint.sh \
- && printf 'gateway:x:10001:10001::/home/gateway:/sbin/nologin\n' >> /etc/passwd \
+RUN printf 'gateway:x:10001:10001::/home/gateway:/sbin/nologin\n' >> /etc/passwd \
  && printf 'gateway:x:10001:\n' >> /etc/group \
  && mkdir -p /home/gateway \
  && chown 10001:10001 /home/gateway /etc/claude

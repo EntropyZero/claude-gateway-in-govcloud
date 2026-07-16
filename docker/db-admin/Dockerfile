@@ -15,12 +15,16 @@ FROM ${LAMBDA_BASE_IMAGE}
 # from vendored wheels so the build needs no PyPI access - vendor/ holds
 # universal (py3-none-any) wheels committed to the repo. Refresh with:
 #   pip download pg8000==1.31.2 -d docker/db-admin/vendor
-COPY vendor/ /tmp/vendor/
+# --chmod on every COPY so files are world-readable regardless of the build
+# host's umask - a umask-077 checkout yields mode-600 sources that COPY would
+# otherwise preserve, and Lambda's non-root runtime user then can't read the
+# handler (permission denied /var/task/app.py) or the wheels/CA bundle.
+COPY --chmod=0644 vendor/ /tmp/vendor/
 RUN pip install --no-cache-dir --no-index --find-links /tmp/vendor pg8000==1.31.2 \
  && rm -rf /tmp/vendor
 
-COPY rds-ca-bundle.pem ${LAMBDA_TASK_ROOT}/rds-ca-bundle.pem
-COPY app.py ${LAMBDA_TASK_ROOT}/app.py
+COPY --chmod=0644 rds-ca-bundle.pem ${LAMBDA_TASK_ROOT}/rds-ca-bundle.pem
+COPY --chmod=0644 app.py ${LAMBDA_TASK_ROOT}/app.py
 
 # Default handler; CloudFormation overrides per function via
 # ImageConfig.Command (app.bootstrap_handler / app.rotate_handler).
