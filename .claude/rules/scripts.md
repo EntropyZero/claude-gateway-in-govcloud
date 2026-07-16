@@ -32,7 +32,17 @@
 - **Bash safety:** scripts run under `set -euo pipefail`. Expand possibly-empty
   arrays as `${arr[@]+"${arr[@]}"}` (bare `"${arr[@]}"` aborts under `set -u`
   on bash < 4.4, incl. macOS system bash).
+  ```bash
+  local enc=()
+  [ -n "${KMS_KEY_ARN:-}" ] && enc=(--encryption-configuration "...")
+  aws ecr create-repository ... ${enc[@]+"${enc[@]}"}   # good — safe when empty
+  aws ecr create-repository ... "${enc[@]}"              # bad  — "unbound variable" on bash 3.2
+  ```
 
 - **Never write key material or secrets to a world-readable path.** Use
   `umask 077` before creating them, and remove any pre-existing target first
   (umask governs new files only, not overwrites).
+  ```bash
+  ( umask 077; rm -f "$key"; openssl ... -keyout "$key" )   # good — 0600 even if $key pre-existed 0644
+  openssl ... -keyout "$key"; chmod 600 "$key"              # bad  — brief world-readable window
+  ```

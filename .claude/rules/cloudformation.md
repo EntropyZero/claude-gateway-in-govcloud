@@ -20,17 +20,36 @@
   `HealthCheckProtocol: HTTPS` **explicitly** — ALB health checks default to
   HTTP regardless of the target-group protocol, so omitting it means no target
   ever goes healthy.
+  ```yaml
+  TargetGroup:                    # good
+    Properties:
+      Protocol: HTTPS
+      HealthCheckProtocol: HTTPS  # without this, the probe is plaintext HTTP → never healthy
+      # no Name:
+  ```
 
 - **Every interface VPC endpoint gets a resource policy** scoped to this
   account/workload — except where GovCloud doesn't support endpoint policies.
-  Pre-check with `describe-vpc-endpoint-services ... VpcEndpointPolicySupported`
-  before adding one; the `ecs` endpoint deliberately has none for this reason
+  Pre-check before adding one; a `PolicyDocument` on an unsupported endpoint
+  fails the stack. The `ecs` endpoint deliberately has none for this reason
   (IAM-side scoping covers it).
+  ```bash
+  aws ec2 describe-vpc-endpoint-services --region us-gov-west-1 \
+    --service-names com.amazonaws.us-gov-west-1.<svc> \
+    --query 'ServiceDetails[].VpcEndpointPolicySupported'   # false → omit PolicyDocument
+  ```
 
 - **Secrets set out-of-band use a placeholder `SecretString` literal.**
   Changing that literal in the template — or otherwise triggering an update to
   the secret resource — clobbers the live value that a script wrote. Don't
   edit those resources casually; the real value lives only in Secrets Manager.
+  ```yaml
+  GrafanaOidcClientSecret:
+    Properties:
+      SecretString: 'REPLACE-ME-run-set-grafana-oidc-secret.sh'  # real value written by the script;
+      # editing this line (or the resource's Name/Description) on a later deploy re-applies the
+      # placeholder and locks Grafana out. GenerateSecretString is not re-applied on unrelated updates.
+  ```
 
 - **Keep `TaskCpu`/`TaskMemory` within the valid Fargate pairings** — the
   `Rules` section asserts them, and an invalid combo otherwise fails deploy

@@ -10,6 +10,11 @@
   visible via `ps` / `/proc/<pid>/cmdline`. Use the `put_secret_and_roll`
   helper in `common.sh`, or `--secret-string file://<mode-600 tmpfile>`.
   Read secrets via a hidden prompt; never echo, never persist to `deploy.env`.
+  ```bash
+  f=$(mktemp); chmod 600 "$f"; printf '%s' "$val" >"$f"
+  aws secretsmanager put-secret-value --secret-id "$arn" --secret-string "file://$f"  # good
+  aws secretsmanager put-secret-value --secret-id "$arn" --secret-string "$val"       # bad — leaks via ps
+  ```
 
 - **Verification fails closed.** The release mirror refuses to proceed without
   GPG verification unless `ALLOW_UNVERIFIED_MANIFEST=1` is set explicitly.
