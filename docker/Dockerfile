@@ -4,10 +4,14 @@
 # GPG-verified per the runbook (downloads.claude.ai/claude-code-releases/<ver>/):
 #   docker build -t claude-gateway:2.1.207 --build-arg CLAUDE_VERSION=2.1.207 .
 #
-# Mirror the base image into your internal registry for controlled networks,
-# and pin it by digest there (FROM <registry>/debian@sha256:<digest>) so the
-# base can't change under you - a floating tag is mutable upstream.
-FROM debian:bookworm-slim
+# Amazon Linux 2023 base: glibc (matches the linux-x64 claude binary), and its
+# packages come from Amazon's in-region repos - reachable from an AWS build
+# host that can't reach deb.debian.org. Mirror the base image into your
+# internal registry for controlled networks and pin it by digest there
+# (GATEWAY_BASE_IMAGE=<registry>/amazonlinux@sha256:<digest>) so the base
+# can't change under you - a floating tag is mutable upstream.
+ARG GATEWAY_BASE_IMAGE=public.ecr.aws/amazonlinux/amazonlinux:2023
+FROM ${GATEWAY_BASE_IMAGE}
 
 ARG CLAUDE_VERSION=unknown
 LABEL org.opencontainers.image.title="claude-apps-gateway" \
@@ -15,14 +19,18 @@ LABEL org.opencontainers.image.title="claude-apps-gateway" \
 
 # openssl: the entrypoint generates a per-task self-signed cert so the
 # ALB->task hop is TLS (SC-8) with the private key never leaving the task.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates openssl \
- && rm -rf /var/lib/apt/lists/*
+# ca-certificates: public TLS trust (Okta, AWS endpoints). shadow-utils:
+# provides useradd (not in the AL2023 minimal base).
+RUN dnf install -y --setopt=install_weak_deps=False \
+      ca-certificates openssl shadow-utils \
+ && dnf clean all \
+ && rm -rf /var/cache/dnf
 
 # If your enterprise CA also signs internal endpoints the gateway must call
-# (e.g. an internal Okta cell or OTLP collector), trust it in the image:
-# COPY enterprise-root-ca.pem /usr/local/share/ca-certificates/enterprise-root-ca.crt
-# RUN update-ca-certificates
+# (e.g. an internal Okta cell or OTLP collector), trust it in the image
+# (RHEL-family paths):
+# COPY enterprise-root-ca.pem /etc/pki/ca-trust/source/anchors/enterprise-root-ca.pem
+# RUN update-ca-trust
 
 # The verified native binary from the release bucket (glibc build, linux-x64).
 COPY claude /usr/local/bin/claude

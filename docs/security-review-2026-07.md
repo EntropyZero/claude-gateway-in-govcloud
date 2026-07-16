@@ -523,9 +523,10 @@ image that also bakes in the provisioned dashboard can be silently overwritten.
 **D10. Double-asterisk ARN** in the activity-log IAM resource
 (`${ActivityLogGroup.Arn}*` → `…:*​*`). Cosmetic; functions as a wildcard.
 
-**D11. Base images pinned by tag, not digest** (`debian:bookworm-slim`,
-`grafana/grafana-oss:11.5.1`); no cosign/notary verification of the Grafana or
-ADOT images.
+**D11. Base images pinned by tag, not digest** (the gateway base — now
+`public.ecr.aws/amazonlinux/amazonlinux:2023` — plus `grafana/grafana-oss`
+and the ADOT/Lambda bases); no cosign/notary verification. Mitigated by the
+digest-pin guidance + per-image `*_BASE_IMAGE` override for mirroring.
 
 **D12. `import-enterprise-cert.sh` key file** written with default umask before
 `chmod 600` — brief permissive window on a shared build host.

@@ -27,9 +27,14 @@ ensure_ecr_repo "$ECR_REPO_NAME"
 REGISTRY="$(ecr_login)"
 IMAGE="${REGISTRY}/${ECR_REPO_NAME}:${CLAUDE_VERSION}"
 
-log "Building ${IMAGE}"
+# Amazon Linux 2023 base by default; point at your mirror (pinned by digest)
+# for controlled networks: GATEWAY_BASE_IMAGE=<registry>/amazonlinux@sha256:...
+GATEWAY_BASE_IMAGE="${GATEWAY_BASE_IMAGE:-public.ecr.aws/amazonlinux/amazonlinux:2023}"
+
+log "Building ${IMAGE} (base: ${GATEWAY_BASE_IMAGE})"
 docker build \
   --build-arg "CLAUDE_VERSION=${CLAUDE_VERSION}" \
+  --build-arg "GATEWAY_BASE_IMAGE=${GATEWAY_BASE_IMAGE}" \
   -t "$IMAGE" \
   "${REPO_ROOT}/docker"
 
