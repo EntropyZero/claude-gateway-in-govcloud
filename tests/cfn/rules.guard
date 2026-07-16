@@ -47,6 +47,24 @@ rule https_target_groups_healthcheck_https {
     }
 }
 
+# An ECS service on the default/rolling controller must name a TaskDefinition.
+# CloudFormation only requires it conditionally (EXTERNAL / CODE_DEPLOY
+# controllers manage the task def out-of-band), so a missing TaskDefinition
+# passes cfn-lint but fails at deploy with "TaskDefinition can not be blank".
+rule ecs_service_has_taskdefinition {
+    let services = Resources.*[ Type == 'AWS::ECS::Service' ]
+    when %services !empty {
+        when %services.Properties.DeploymentController.Type not exists {
+            %services.Properties.TaskDefinition exists
+            <<An ECS service using the default (rolling) deployment controller must set TaskDefinition.>>
+        }
+        when %services.Properties.DeploymentController.Type == 'ECS' {
+            %services.Properties.TaskDefinition exists
+            <<An ECS service using the ECS (rolling) deployment controller must set TaskDefinition.>>
+        }
+    }
+}
+
 # RDS storage is encrypted with a CMK.
 rule rds_storage_encrypted_cmk {
     let dbs = Resources.*[ Type == 'AWS::RDS::DBInstance' ]

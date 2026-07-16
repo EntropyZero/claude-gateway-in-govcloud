@@ -830,6 +830,10 @@ Resources:
     Properties:
       ServiceName: !Sub '${NamePrefix}-gateway'
       Cluster: !Ref Cluster
+      # Required for the default (rolling) deployment controller. !Ref on a
+      # TaskDefinition returns its full ARN incl. revision, so each template
+      # update that changes the task def rolls the service to the new revision.
+      TaskDefinition: !Ref TaskDefinition
       LaunchType: FARGATE
       DesiredCount: !Ref DesiredCount
       HealthCheckGracePeriodSeconds: 60

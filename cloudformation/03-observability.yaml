@@ -408,6 +408,9 @@ Resources:
       ServiceName: !Sub '${NamePrefix}-otel'
       Cluster:
         Fn::ImportValue: !Sub '${NamePrefix}-cluster-arn'
+      # Required for the default (rolling) deployment controller; !Ref returns
+      # the task-def ARN incl. revision so updates roll the service.
+      TaskDefinition: !Ref CollectorTaskDefinition
       LaunchType: FARGATE
       DesiredCount: !Ref CollectorDesiredCount
       NetworkConfiguration:
@@ -830,6 +833,9 @@ Resources:
       ServiceName: !Sub '${NamePrefix}-grafana'
       Cluster:
         Fn::ImportValue: !Sub '${NamePrefix}-cluster-arn'
+      # Required for the default (rolling) deployment controller; !Ref returns
+      # the task-def ARN incl. revision so updates roll the service.
+      TaskDefinition: !Ref GrafanaTaskDefinition
       LaunchType: FARGATE
       DesiredCount: 1
       HealthCheckGracePeriodSeconds: 60
