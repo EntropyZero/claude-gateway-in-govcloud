@@ -43,6 +43,7 @@ secrets, security-group, and encryption inventories — see
 | `scripts/import-enterprise-cert.sh` | CSR generation, ACM import, fingerprint output |
 | `scripts/build-and-push-image.sh` | Build the gateway image and push to ECR |
 | `scripts/build-and-push-grafana.sh` | Build the provisioned Grafana image and push to ECR |
+| `scripts/mirror-collector.sh` | Mirror a pinned ADOT collector into ECR; persists `COLLECTOR_IMAGE` |
 | `scripts/build-and-push-dbadmin.sh` | Build the DB admin Lambda image and push to ECR |
 | `scripts/deploy-observability.sh` | Deploy the observability stack |
 | `scripts/deploy-database.sh` | Deploy the database stack |
@@ -429,9 +430,8 @@ Deploy order (see [Teardown & update order](#teardown--update-order) for why
 the gateway redeploy comes last):
 
 ```bash
-# One-time: mirror a pinned ADOT collector release into ECR and set
-# COLLECTOR_IMAGE (by digest) in deploy.env - there is no public default.
 ./scripts/build-and-push-grafana.sh        # image → ECR; writes GRAFANA_IMAGE to deploy.env
+ADOT_VERSION=v0.43.0 ./scripts/mirror-collector.sh  # mirrors ADOT → ECR; writes COLLECTOR_IMAGE
 ./scripts/deploy-observability.sh          # AMP + collector + Grafana; writes OBSERVABILITY_OTLP_URL
 ./scripts/set-grafana-oidc-secret.sh       # Okta client secret for Grafana SSO
 ./scripts/deploy-gateway.sh                # picks up OBSERVABILITY_OTLP_URL, starts forwarding
@@ -480,9 +480,9 @@ are baked into the image).
 The provisioned "Claude Code — Usage & Cost" dashboard has
 cost/tokens/sessions/active-users stats, cost by team, cost center, and
 Okta group, tokens by model and type, top users by cost, and
-lines-of-code/commit panels. Mirror the ADOT collector (required —
-`COLLECTOR_IMAGE`, pin by digest) and Grafana base (`GRAFANA_BASE_IMAGE`)
-images into ECR. Amazon Managed Grafana exists in GovCloud but has no
+lines-of-code/commit panels. The ADOT collector (required) is mirrored into
+ECR and digest-pinned by `scripts/mirror-collector.sh` (sets
+`COLLECTOR_IMAGE`); mirror the Grafana base (`GRAFANA_BASE_IMAGE`) too. Amazon Managed Grafana exists in GovCloud but has no
 CloudFormation support, so the stack self-hosts Grafana OSS on the existing
 ECS cluster to stay fully code-driven — swap to AMG manually if preferred,
 pointing it at the same AMP workspace.

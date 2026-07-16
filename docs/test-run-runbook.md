@@ -180,24 +180,17 @@ cp mirror/2.1.207/claude docker/claude
 # 3c. Grafana image
 ./scripts/build-and-push-grafana.sh                # persists GRAFANA_IMAGE
 
-# 3d. ADOT collector — mirror a pinned release into ECR (no build script)
-source scripts/deploy.env
-ACCT=$(aws sts get-caller-identity --query Account --output text)
-REG=${ACCT}.dkr.ecr.${AWS_REGION}.amazonaws.com
-aws ecr create-repository --region "$AWS_REGION" --repository-name adot-collector \
-  --image-scanning-configuration scanOnPush=true --image-tag-mutability IMMUTABLE \
-  --encryption-configuration "encryptionType=KMS,kmsKey=${KMS_KEY_ARN}" 2>/dev/null || true
-aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REG"
-docker pull public.ecr.aws/aws-observability/aws-otel-collector:v0.43.0
-docker tag  public.ecr.aws/aws-observability/aws-otel-collector:v0.43.0 "$REG/adot-collector:v0.43.0"
-docker push "$REG/adot-collector:v0.43.0"
-#    → grab the pushed digest and set COLLECTOR_IMAGE to the @sha256 form:
-aws ecr describe-images --region "$AWS_REGION" --repository-name adot-collector \
-  --image-ids imageTag=v0.43.0 --query 'imageDetails[0].imageDigest' --output text
-#    edit deploy.env: COLLECTOR_IMAGE="$REG/adot-collector@sha256:<digest>"
+# 3d. ADOT collector — mirror a pinned upstream image into ECR.
+#     Set ADOT_VERSION to the release you want; the script pulls it,
+#     pushes to your ECR (CMK-encrypted, immutable), and PERSISTS a
+#     digest-pinned COLLECTOR_IMAGE into deploy.env automatically.
+ADOT_VERSION=v0.43.0 ./scripts/mirror-collector.sh
 ```
-🔎 All four repos exist and are IMMUTABLE; deploy.env now has `IMAGE_URI`,
-`DBADMIN_IMAGE`, `GRAFANA_IMAGE`, and a digest-pinned `COLLECTOR_IMAGE`.
+🔎 After this, `deploy.env` has all four image vars set by the scripts —
+`IMAGE_URI`, `DBADMIN_IMAGE`, `GRAFANA_IMAGE`, and a digest-pinned
+`COLLECTOR_IMAGE` (`<acct>.dkr.ecr.<region>.amazonaws.com/claude-gw-adot@sha256:…`).
+You do **not** edit `deploy.env` by hand for any of them. Confirm with:
+`grep -E 'IMAGE_URI|DBADMIN_IMAGE|GRAFANA_IMAGE|COLLECTOR_IMAGE' scripts/deploy.env`
 
 ---
 
