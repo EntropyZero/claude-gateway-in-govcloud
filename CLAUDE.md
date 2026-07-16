@@ -94,3 +94,8 @@ Hard rules live in `.claude/rules/*.md` (`security`, `cloudformation`,
 `scripts`, `process`). Claude Code **auto-loads** that directory at session
 start — no import needed — so they are always in effect. Follow them; add new
 cross-cutting rules there rather than inline here.
+
+To add a rule file, copy `.claude/rules/TEMPLATE.md.example` to a new `.md`
+file. It shows the house style and the optional `paths:` frontmatter that
+scopes a file to matching paths — the four active files omit it deliberately
+(their rules are cross-cutting), so they load every session.

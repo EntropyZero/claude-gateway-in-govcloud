@@ -1,0 +1,37 @@
+---
+# paths: (optional) — scope this rule file to matching files.
+#   • Omit entirely → ALWAYS-ON: every rule here loads each session. This is
+#     the right default for cross-cutting rules, and is what the four active
+#     rule files do (security / cloudformation / scripts / process).
+#   • Add globs     → the rules load only when a matching file is in play.
+#     Gitignore-style globs; list one or more. Use this when a file's rules
+#     are genuinely specific to one area and would be noise elsewhere.
+#
+# Example — uncomment to scope this file to the IaC templates only:
+# paths:
+#   - "cloudformation/**"
+#   - "docker/**/Dockerfile"
+---
+
+# Rules — <topic>
+
+> **Using this template:** copy it to `.claude/rules/<topic>.md` (drop the
+> `.example` suffix so it auto-loads), replace the placeholders, and delete
+> this blockquote. House style: one **bold imperative directive** per bullet
+> with the *why* in the same sentence (so the rule generalizes past the cases
+> it lists); add a good/bad snippet **only** for mechanical rules where it
+> removes ambiguity — skip it for judgment/behavioral rules; keep it tight,
+> since every rule here sits in the context window every session.
+
+- **<Do X, or never do Y>.** <What it covers, concretely — the specific
+  things in scope.> <Why — the consequence of getting it wrong, phrased so it
+  applies to novel cases too, not just the ones listed.>
+
+- **<A mechanical directive where a snippet earns its place>.** <What + why.>
+  ```bash
+  <good form>   # good — <one-line reason>
+  <bad form>    # bad  — <what breaks, concretely>
+  ```
+
+- **<A behavioral / judgment rule>.** <What + why. No code block — an example
+  here would be filler.>
