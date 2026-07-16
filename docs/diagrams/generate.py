@@ -184,7 +184,7 @@ def d1():
     s.zone(1124, 700, 336, 120, "External SaaS — the only public dependency",
            RED, RED_T)
     s.node(1148, 744, 288, 58, "Okta",
-           ["custom authorization server", "with groups claim"], border=RED)
+           ["authorization server (org or custom)", "returns groups in token"], border=RED)
 
     # ---- flows
     s.arrow([(210, 212), (210, 232)])
@@ -335,7 +335,7 @@ def d3():
         ("Claude Code", 160, BLUE, ["laptop CLI"]),
         ("Browser", 430, BLUE, ["laptop"]),
         ("Gateway", 740, GREEN, ["reached via ALB + ZPA,", "TLS end-to-end"]),
-        ("Okta", 1050, RED, ["custom auth server"]),
+        ("Okta", 1050, RED, ["org / custom auth server"]),
     ]
     s, xs = seq_canvas("Developer authentication — Okta OIDC via the gateway",
                        "managed settings force gateway login; no local API keys exist",
@@ -587,7 +587,7 @@ def d1a():
     s.zone(1120, 360, 340, 160, "External SaaS — only public dependency",
            RED, RED_T)
     s.node(1144, 410, 292, 76, "Okta",
-           ["custom authorization server", "with groups claim · user MFA"],
+           ["authorization server (org or custom)", "groups in token · user MFA"],
            border=RED)
 
     # ingress path

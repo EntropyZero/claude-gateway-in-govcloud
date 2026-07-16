@@ -92,8 +92,8 @@
 <text x="1140" y="726" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#B91C1C" font-weight="bold" text-anchor="start" letter-spacing="0.06em">EXTERNAL SAAS — THE ONLY PUBLIC DEPENDENCY</text>
 <rect x="1148" y="744" width="288" height="58" rx="8" fill="#FFFFFF" stroke="#B91C1C" stroke-width="1.4"/>
 <text x="1292.0" y="765" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Okta</text>
-<text x="1292.0" y="781" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >custom authorization server</text>
-<text x="1292.0" y="795" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >with groups claim</text>
+<text x="1292.0" y="781" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >authorization server (org or custom)</text>
+<text x="1292.0" y="795" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >returns groups in token</text>
 <path d="M210 212 L210 232" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M210 290 L210 360" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="170.5" y="326" width="79.0" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>

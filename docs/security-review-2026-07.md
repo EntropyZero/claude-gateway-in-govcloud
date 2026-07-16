@@ -65,9 +65,13 @@ surfaced and fixed several issues in the fixes themselves:
 - Grafana SSO had no egress-proxy plumbing — in a proxy-mandated landing
   zone the Okta token exchange would time out with the login form disabled
   (total lockout). 03 now takes `HttpsProxyUrl` (same value as the gateway).
-- 03's `OktaIssuer` now has `AllowedPattern: ^https://.+/oauth2/.+$` — the
-  gateway accepts the org-server issuer but Grafana's derived
-  `<issuer>/v1/...` URLs 404 on it; this fails at deploy instead of first login.
+- Grafana (no OIDC discovery) derives its OAuth endpoint URLs from the
+  issuer. Initially this assumed a custom auth server (`<issuer>/v1/...`);
+  it now supports the **org** server too via an `OktaAuthServerType`
+  toggle (`org` → `<issuer>/oauth2/v1/...`, built-in `groups` scope;
+  `custom` → `<issuer>/v1/...`), because this deployment can only use the
+  org authorization server. The `OktaIssuer` pattern accepts either form
+  and rejects a trailing slash.
 - The deploy-gateway.sh telemetry guard now only clears
   `OBSERVABILITY_OTLP_URL` on a definitive missing/never-came-up stack
   (incl. `ROLLBACK_COMPLETE`); any other describe-stacks failure
@@ -116,8 +120,9 @@ task. See the C-batch header below for the item-by-item mapping.
   these changes: fresh `deploy-database.sh` → `deploy-gateway.sh` →
   observability chain in a test account. Pay attention to: first pull of
   the rebuilt images (RDS CA bundle + TLS entrypoints), the HTTPS target
-  groups going healthy, Grafana Okta login end-to-end (custom auth server
-  with `groups` claim + redirect URI), and a forced secret rotation
+  groups going healthy, Grafana Okta login end-to-end (org authorization
+  server, `OKTA_AUTH_SERVER_TYPE=org`, groups via the built-in scope +
+  redirect URI), and a forced secret rotation
   (`aws secretsmanager rotate-secret`) triggering the service roll.
 - **Existing-deployment migration**: the RDS storage CMK is a day-one
   decision — a plain 01 update cannot adopt it (fixed instance identifier
