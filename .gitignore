@@ -13,3 +13,6 @@ mirror/
 *.key.pem
 *.csr
 *.pem
+
+# Python bytecode (local syntax checks)
+__pycache__/
