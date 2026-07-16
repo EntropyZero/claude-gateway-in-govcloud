@@ -1357,3 +1357,14 @@ Outputs:
     Value: !GetAtt Cluster.Arn
     Export:
       Name: !Sub '${NamePrefix}-cluster-arn'
+  # Only when the shared Fargate interface endpoints exist (their private DNS
+  # forces VPC-wide traffic onto them). 03 imports this to add collector /
+  # Grafana ingress so those tasks can reach ecr/logs/secretsmanager; without
+  # it their 443 is dropped and 03 never reaches steady state. The SG itself
+  # exists under WantAnyInterfaceEndpoint, a superset of WantSupportingEndpoints.
+  EndpointSecurityGroupId:
+    Condition: WantSupportingEndpoints
+    Description: Shared interface-endpoint SG; 03 adds observability-task ingress to it.
+    Value: !Ref EndpointSecurityGroup
+    Export:
+      Name: !Sub '${NamePrefix}-endpoint-sg'

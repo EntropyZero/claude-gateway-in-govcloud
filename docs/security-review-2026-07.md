@@ -115,6 +115,29 @@ own Lambda, with the service roll built into the rotation itself; the
 master secret became break-glass and its rotation affects no running
 task. See the C-batch header below for the item-by-item mapping.
 
+**Test-run deploy fixes (2026-07-16, first end-to-end run).** The first real
+deploy surfaced latent deploy-breakers that static checks could not catch;
+each is fixed and committed:
+- Container images failed on a umask-077 / legacy-Docker-builder host —
+  reworked to `--chown` + `RUN chmod` (no BuildKit `COPY --chmod`).
+- ALB access-log delivery denied under `BucketOwnerEnforced` — switched the
+  bucket policy to the `logdelivery.elasticloadbalancing.amazonaws.com`
+  service principal (the legacy per-region ELB account writes via an ACL).
+- **All three ECS services** (gateway, collector, Grafana) were missing
+  `TaskDefinition` — `cfn-lint` treats it as optional (EXTERNAL/CODE_DEPLOY
+  controllers). Fixed + added a `cfn-guard` rule (`ecs_service_has_taskdefinition`).
+- DB-bootstrap custom resource had no `ServiceTimeout`, so a failed/hung
+  Lambda blocked the stack ~1h — set `ServiceTimeout: 300`.
+- **Endpoint-SG cross-stack reachability** (found by the pre-redeploy
+  multi-agent review): 02's shared interface-endpoint SG admitted 443 only
+  from the gateway + db-admin SGs. When 02 creates the supporting endpoints
+  (private DNS forces VPC-wide routing onto them), 03's collector/Grafana
+  tasks could not pull images or read secrets → 03 rollback. Fixed by
+  exporting the endpoint SG from 02 and adding collector/Grafana ingress in
+  03, gated on `CreateSupportingEndpoints` (must match 02). No static gate
+  fits this (a semantic cross-stack reachability property); re-check it in
+  any change to the endpoint SG or the observability task SGs.
+
 **What remains (open work):**
 - **Deploy-time verification** — nothing has been deployed since any of
   these changes: fresh `deploy-database.sh` → `deploy-gateway.sh` →

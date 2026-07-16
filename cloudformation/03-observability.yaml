@@ -63,6 +63,20 @@ Parameters:
       queries to AMP stay off the NAT/TGW path. Recommended alongside
       CreateSupportingEndpoints in no-NAT VPCs.
 
+  CreateSupportingEndpoints:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      MUST match the value passed to 02-gateway. When 02 creates the shared
+      ecr/logs/secretsmanager interface endpoints (PrivateDnsEnabled), their
+      DNS resolves VPC-wide to those endpoint ENIs, so the collector/Grafana
+      tasks are forced onto them for image pull, awslogs, and secret
+      injection. This stack then adds their SGs as 443 ingress on 02's
+      endpoint SG (imported); without it those tasks are firewalled off the
+      endpoints and the services never start. Leave 'false' on a NAT/TGW
+      profile with no supporting endpoints.
+
   # ----- Grafana auth: Okta SSO (per-user accounts, no shared admin) -----
   OktaIssuer:
     Type: String
@@ -174,6 +188,7 @@ Parameters:
 
 Conditions:
   WantAmpEndpoint: !Equals [!Ref CreateAmpEndpoint, 'true']
+  WantSharedEndpoints: !Equals [!Ref CreateSupportingEndpoints, 'true']
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
   HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
   WantAmpCmk: !Equals [!Ref EncryptAmpWithCmk, 'true']
@@ -256,6 +271,37 @@ Resources:
       ToPort: 4318
       DestinationSecurityGroupId: !Ref CollectorSecurityGroup
       Description: OTLP forward to the collector
+
+  # Let the observability tasks reach 02's shared interface endpoints
+  # (ecr/logs/secretsmanager) for image pull, awslogs, and secret injection.
+  # 02's endpoint SG admits only the gateway + db-admin SGs; these add the
+  # collector/Grafana SGs. Same cross-stack pattern as GatewayToCollectorEgress
+  # (modify an imported 02 SG). Only when 02 actually created those endpoints
+  # (CreateSupportingEndpoints=true) - otherwise the endpoint SG / export does
+  # not exist and these are unnecessary.
+  CollectorToEndpointsIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WantSharedEndpoints
+    Properties:
+      GroupId:
+        Fn::ImportValue: !Sub '${NamePrefix}-endpoint-sg'
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref CollectorSecurityGroup
+      Description: TLS from the OTLP collector tasks
+
+  GrafanaToEndpointsIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WantSharedEndpoints
+    Properties:
+      GroupId:
+        Fn::ImportValue: !Sub '${NamePrefix}-endpoint-sg'
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref GrafanaSecurityGroup
+      Description: TLS from the Grafana tasks
 
   CollectorLogGroup:
     Type: AWS::Logs::LogGroup
