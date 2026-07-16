@@ -85,10 +85,27 @@ for platform in "${PLATFORMS[@]}"; do
     *)       local_name="claude" ;;
   esac
 
-  echo "==> Downloading ${platform}"
-  # Windows builds may be published as claude.exe - try both names.
-  curl -fsSL "${BASE_URL}/${VERSION}/${platform}/claude" -o "${OUT}/${local_name}" \
-    || curl -fsSL "${BASE_URL}/${VERSION}/${platform}/claude.exe" -o "${OUT}/${local_name}"
+  # The manifest names the published binary per platform (claude.exe for
+  # win32, claude for linux), so fetch that exact URL directly. This replaces
+  # an older probe that always tried .../claude first and 404'd for Windows
+  # before falling back - which made a real failure look like a confusing
+  # double error. Legacy manifests without a 'binary' field keep the probe.
+  remote="$(jq -re --arg p "$platform" '.platforms[$p].binary' "${OUT}/manifest.json" 2>/dev/null || true)"
+  if [ -n "$remote" ] && [ "$remote" != "null" ]; then
+    url="${BASE_URL}/${VERSION}/${platform}/${remote}"
+    echo "==> Downloading ${platform} -> ${url}"
+    curl -fsSL "$url" -o "${OUT}/${local_name}" || {
+      echo "FATAL: download failed for ${platform} at ${url}" >&2
+      echo "       An HTTP error, or your egress path blocks this file type" >&2
+      echo "       (corporate proxies often block .exe) - fetch it from an" >&2
+      echo "       unrestricted network, or allowlist ${BASE_URL%/*}." >&2
+      exit 4
+    }
+  else
+    echo "==> Downloading ${platform} (legacy manifest - probing names)"
+    curl -fsSL "${BASE_URL}/${VERSION}/${platform}/claude" -o "${OUT}/${local_name}" \
+      || curl -fsSL "${BASE_URL}/${VERSION}/${platform}/claude.exe" -o "${OUT}/${local_name}"
+  fi
 
   actual="$(sha256sum "${OUT}/${local_name}" | awk '{print $1}')"
   if [ "$actual" != "$expected" ]; then
