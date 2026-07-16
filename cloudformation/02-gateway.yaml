@@ -788,12 +788,18 @@ Resources:
                   # version, disable it and map models explicitly. Developers see
                   # both entries in the Claude Code model picker; the mapping is
                   # parameterized (OpusModelId/SonnetModelId + Bedrock IDs).
+                  # upstream_model is an OBJECT keyed by the upstream's name -
+                  # the single bedrock upstream above has no `name:`, so it keys
+                  # on its provider string, `bedrock`. A bare string fails schema
+                  # validation ("Expected object, received string").
                   auto_include_builtin_models: false
                   models:
                     - id: ${OpusModelId}
-                      upstream_model: ${OpusBedrockModelId}
+                      upstream_model:
+                        bedrock: ${OpusBedrockModelId}
                     - id: ${SonnetModelId}
-                      upstream_model: ${SonnetBedrockModelId}
+                      upstream_model:
+                        bedrock: ${SonnetBedrockModelId}
 
                   # Per-IdP-group guardrails and managed settings:
                   # managed:

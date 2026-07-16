@@ -137,6 +137,14 @@ each is fixed and committed:
   03, gated on `CreateSupportingEndpoints` (must match 02). No static gate
   fits this (a semantic cross-stack reachability property); re-check it in
   any change to the endpoint SG or the observability task SGs.
+- **Gateway config-schema mismatches** (task boot-crashed, fail-closed as
+  designed): (a) `OktaIssuer` had no scheme validation, so a bare domain hit
+  "oidc.issuer must be an http(s) URL" — added an `https://` `AllowedPattern`.
+  (b) `models[].upstream_model` was a bare string but the gateway schema wants
+  an OBJECT keyed by upstream name (`bedrock: <id>`) — fixed and added
+  `tests/templates/test_gateway_config.py`, which parses the embedded
+  GATEWAY_CONFIG_B64 block (invisible to cfn-lint) and asserts the shape.
+  Both verified against code.claude.com/docs/en/claude-apps-gateway-config.
 
 **What remains (open work):**
 - **Deploy-time verification** — nothing has been deployed since any of
