@@ -136,7 +136,10 @@ each is fixed and committed:
   exporting the endpoint SG from 02 and adding collector/Grafana ingress in
   03, gated on `CreateSupportingEndpoints` (must match 02). No static gate
   fits this (a semantic cross-stack reachability property); re-check it in
-  any change to the endpoint SG or the observability task SGs.
+  any change to the endpoint SG or the observability task SGs. Same class,
+  found live: an in-VPC operator/build host is also captured by the
+  endpoints' private DNS — `AdminClientSecurityGroupId`
+  (`ADMIN_CLIENT_SG_ID`) now grants it 443 when set.
 - **Gateway config-schema mismatches** (task boot-crashed, fail-closed as
   designed): (a) `OktaIssuer` had no scheme validation, so a bare domain hit
   "oidc.issuer must be an http(s) URL" — added an `https://` `AllowedPattern`.
