@@ -155,6 +155,20 @@ Parameters:
       endpoint, so apply the Claude-only endpoint policy there (see README
       "VPC endpoints").
 
+  AdminClientSecurityGroupId:
+    Type: String
+    Default: ''
+    AllowedPattern: '(sg-[0-9a-f]+)?'
+    ConstraintDescription: A security group ID (sg-...) or empty.
+    Description: >-
+      Optional. SG of an in-VPC operator/build host (the machine running the
+      deploy scripts). Interface endpoints with private DNS capture AWS API
+      calls from EVERY VPC client, but the endpoint SG only admits the
+      workload SGs - so an in-VPC admin host's aws/docker calls to
+      ecr/logs/secretsmanager/ecs otherwise time out. Grants that SG 443 to
+      the shared endpoint SG. Leave empty when operating from outside the
+      VPC.
+
   CreateSupportingEndpoints:
     Type: String
     Default: 'false'
@@ -366,6 +380,8 @@ Conditions:
   WantSecretsManagerEndpoint: !And [!Condition WantSupportingEndpoints, !Equals [!Ref CreateSecretsManagerEndpoint, 'true']]
   WantEcsEndpoint: !And [!Condition WantSupportingEndpoints, !Equals [!Ref CreateEcsEndpoint, 'true']]
   WantAnyInterfaceEndpoint: !Or [!Condition WantBedrockEndpoint, !Condition WantSupportingEndpoints]
+  HaveAdminClientSg: !Not [!Equals [!Ref AdminClientSecurityGroupId, '']]
+  WantAdminEndpointIngress: !And [!Condition WantAnyInterfaceEndpoint, !Condition HaveAdminClientSg]
   WantS3Endpoint: !Not [!Equals [!Join ['', !Ref PrivateRouteTableIds], '']]
   HaveAlarmTopic: !Not [!Equals [!Ref AlarmSnsTopicArn, '']]
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
@@ -1105,6 +1121,20 @@ Resources:
         - IpProtocol: '-1'
           CidrIp: 127.0.0.1/32
           Description: no egress
+
+  # In-VPC operator/build host (private DNS forces its AWS API calls onto
+  # these endpoints; without this rule they black-hole). Separate resource,
+  # not an inline rule, so it exists only when the SG is supplied.
+  AdminToEndpointsIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WantAdminEndpointIngress
+    Properties:
+      GroupId: !Ref EndpointSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref AdminClientSecurityGroupId
+      Description: TLS from the in-VPC operator/build host
 
   BedrockRuntimeEndpoint:
     Type: AWS::EC2::VPCEndpoint
