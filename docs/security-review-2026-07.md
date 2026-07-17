@@ -156,10 +156,13 @@ each is fixed and committed:
   gateway Dockerfile: the fetched RDS bundle is installed into the OS trust
   store (`update-ca-trust`) AND exported via `NODE_EXTRA_CA_CERTS` (the
   documented CA-extension mechanism; extends, never replaces, default roots).
-  The URL keeps `verify-full&sslrootcert=` — harmless, documents intent. The
-  bootstrap Lambda was unaffected (pg8000 takes an explicit `cafile`).
-  `build-and-push-image.sh` gained `IMAGE_TAG` for same-version rebuilds
-  (immutable tags). Requires image rebuild + service roll.
+  Follow-up finding: `sslrootcert=` could NOT stay in the URL — the driver
+  forwards unknown URL params to the server as session parameters, and
+  Postgres rejects them ("unrecognized configuration parameter") at boot.
+  The URL is now `?sslmode=verify-full` only. The bootstrap Lambda was
+  unaffected (pg8000 takes an explicit `cafile`). `build-and-push-image.sh`
+  gained `IMAGE_TAG` for same-version rebuilds (immutable tags). Requires
+  image rebuild + service roll.
 - **ALB access logs raced S3 bucket-policy propagation** (intermittent —
   worked several deploys, then AccessDenied on an identical template): ELB's
   create-time test-write can land before the just-created bucket policy is
