@@ -310,10 +310,19 @@ guard now sees the obs stack exists and keeps the OTLP URL.)
 
 - **Custom resource / stack hung**: check the relevant Lambda log group
   first; the bootstrap and rotation functions log every step.
+- **A 02 deploy failed**: deploy-gateway.sh runs with `--disable-rollback` by
+  default, so the stack lands in `CREATE_FAILED`/`UPDATE_FAILED` **with its
+  healthy resources intact** — fix the cause and re-run the script; the
+  deploy continues from the failed resource instead of tearing everything
+  down (a full rollback costs ~30 min of db-admin Lambda ENI teardown alone).
+  Set `CFN_DISABLE_ROLLBACK=false` to restore classic auto-rollback.
 - **Rollback of 02**: the ALB and Database are stack-policy locked against
   replace/delete, so a bad update fails fast rather than destroying them —
-  good. To iterate on the DB itself in a throwaway test account, see the
-  teardown-order notes below.
+  good. ALB deletion protection and access logs are applied by
+  deploy-gateway.sh *after* the deploy (protection at create time wedges
+  failed-create rollbacks; access-log enablement at create time races S3
+  bucket-policy propagation). To iterate on the DB itself in a throwaway
+  test account, see the teardown-order notes below.
 - **Teardown order** (test account cleanup): delete **03 first**, then 02,
   then 01. Caveats: the db-admin Lambda ENIs can linger ~20 min and are
   attached to 01's db-client SG — if a 01 delete fails with a dependency

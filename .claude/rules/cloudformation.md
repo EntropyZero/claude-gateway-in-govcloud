@@ -5,7 +5,12 @@
   re-publish); a new RDS instance is an *empty* database, not a restore. Both
   are protected three ways — deletion protection, fixed physical names, and a
   **stack policy** (set by the deploy scripts) denying `Update:Replace` /
-  `Update:Delete`. Do not remove any of those layers.
+  `Update:Delete`. Do not remove any of those layers. **ALB deletion
+  protection and access logs are applied by `deploy-gateway.sh` post-deploy,
+  NOT in the template** — in-template protection makes a failed CREATE
+  un-rollbackable (DELETE_FAILED wedge), and in-template access logs race S3
+  bucket-policy propagation (intermittent AccessDenied even on a correct
+  policy). Don't move either back into `LoadBalancerAttributes`.
 
 - **Cross-stack export values are locked while imported.** 01 exports the CMK,
   DB endpoint, master-secret ARN, and client SG to 02; 02 exports SGs, the

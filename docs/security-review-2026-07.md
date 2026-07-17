@@ -145,6 +145,17 @@ each is fixed and committed:
   `tests/templates/test_gateway_config.py`, which parses the embedded
   GATEWAY_CONFIG_B64 block (invisible to cfn-lint) and asserts the shape.
   Both verified against code.claude.com/docs/en/claude-apps-gateway-config.
+- **ALB access logs raced S3 bucket-policy propagation** (intermittent —
+  worked several deploys, then AccessDenied on an identical template): ELB's
+  create-time test-write can land before the just-created bucket policy is
+  live, and CloudFormation doesn't retry. Moved `access_logs.s3.*` AND
+  `deletion_protection.enabled` out of `LoadBalancerAttributes` into a
+  post-deploy step in deploy-gateway.sh (`retry_n` helper in common.sh, bats-
+  tested). Deletion protection at create was also what wedged failed creates
+  in DELETE_FAILED. deploy-gateway.sh now also runs `--disable-rollback` by
+  default (`CFN_DISABLE_ROLLBACK`), so a failed deploy keeps healthy
+  resources and the re-run continues from the failure instead of paying the
+  ~30-min Lambda-ENI rollback each iteration.
 
 **What remains (open work):**
 - **Deploy-time verification** — nothing has been deployed since any of

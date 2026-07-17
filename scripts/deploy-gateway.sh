@@ -45,6 +45,16 @@ fi
 
 ARTIFACTS_BUCKET="$(ensure_artifacts_bucket)"
 
+# On failure, KEEP successfully-created resources (the stack lands in
+# CREATE_FAILED / UPDATE_FAILED) instead of rolling everything back: fix the
+# problem and re-run this script - the deploy CONTINUES from where it failed.
+# This kills the fix -> full-rollback -> full-recreate cycle (the in-VPC
+# db-admin Lambda alone adds ~30 min of ENI teardown to every rollback).
+# Set CFN_DISABLE_ROLLBACK=false for classic auto-rollback (hands-off
+# production updates).
+ROLLBACK_ARGS=(--disable-rollback)
+[ "${CFN_DISABLE_ROLLBACK:-true}" = "false" ] && ROLLBACK_ARGS=()
+
 log "Deploying ${GATEWAY_STACK_NAME} (ALB + ECS Fargate) in ${AWS_REGION}"
 aws cloudformation deploy \
   --region "$AWS_REGION" \
@@ -54,6 +64,7 @@ aws cloudformation deploy \
   --s3-prefix "$GATEWAY_STACK_NAME" \
   --capabilities CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset \
+  ${ROLLBACK_ARGS[@]+"${ROLLBACK_ARGS[@]}"} \
   --parameter-overrides \
       "NamePrefix=${NAME_PREFIX}" \
       "VpcId=${VPC_ID}" \
@@ -98,7 +109,7 @@ aws cloudformation deploy \
 # Stack policy: refuse any future update that would REPLACE or DELETE the
 # ALB. Its default DNS name is the corporate CNAME target - recreation
 # means re-submitting DNS to the client and re-publishing the fingerprint.
-# Layered with deletion_protection.enabled and the fixed ALB name (a
+# Layered with deletion protection (applied below) and the fixed ALB name (a
 # create-before-delete replacement collides with itself). Remove the
 # policy deliberately if an ALB replacement is ever truly intended:
 #   aws cloudformation set-stack-policy --stack-name <stack> \
@@ -114,6 +125,32 @@ aws cloudformation set-stack-policy \
        "Principal": "*", "Resource": "LogicalResourceId/LoadBalancer"}
     ]
   }'
+
+# ALB hardening applied POST-deploy, deliberately not in the template (see
+# the LoadBalancer comment there):
+# - deletion protection at create time makes a FAILED create un-rollbackable
+#   (the rollback can't delete the ALB -> DELETE_FAILED wedge);
+# - access logs at create time race S3 bucket-policy propagation - ELB's
+#   test-write intermittently gets AccessDenied on a policy that is correct
+#   but not yet live, and CloudFormation doesn't retry. retry_n rides it out.
+# Both calls are idempotent; re-running this script re-asserts them.
+ALB_ARN="$(stack_output "$GATEWAY_STACK_NAME" LoadBalancerArn)"
+ALB_LOGS_BUCKET="$(stack_output "$GATEWAY_STACK_NAME" AlbLogsBucketName)"
+
+log "Enabling ALB deletion protection"
+aws elbv2 modify-load-balancer-attributes --region "$AWS_REGION" \
+  --load-balancer-arn "$ALB_ARN" \
+  --attributes Key=deletion_protection.enabled,Value=true >/dev/null
+
+log "Enabling ALB access logs -> s3://${ALB_LOGS_BUCKET}"
+if ! retry_n 6 10 aws elbv2 modify-load-balancer-attributes --region "$AWS_REGION" \
+    --load-balancer-arn "$ALB_ARN" \
+    --attributes Key=access_logs.s3.enabled,Value=true \
+                 "Key=access_logs.s3.bucket,Value=${ALB_LOGS_BUCKET}"; then
+  echo "FATAL: could not enable ALB access logs (bucket ${ALB_LOGS_BUCKET})." >&2
+  echo "       Check the bucket policy, then re-run this script." >&2
+  exit 1
+fi
 
 log "Stack outputs"
 aws cloudformation describe-stacks --region "$AWS_REGION" \

@@ -82,3 +82,26 @@ srcf() { run bash -c "DEPLOY_ENV_FILE='$ENVFILE' COMMON_SH_OPTIONAL_ENV=1 source
   src 'SET_ME=1 require_vars SET_ME'
   [ "$status" -eq 0 ]
 }
+
+# ---- retry_n -------------------------------------------------------------
+
+@test "retry_n: returns 0 immediately on first success" {
+  src 'retry_n 3 0 true && echo done'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *done* ]]
+}
+
+@test "retry_n: retries until the command succeeds" {
+  # fails twice (no marker file), succeeds on attempt 3
+  local marker="$BATS_TEST_TMPDIR/count"
+  src "retry_n 5 0 bash -c 'n=\$(cat \"$marker\" 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > \"$marker\"; [ \$n -ge 3 ]'"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$marker")" = "3" ]
+}
+
+@test "retry_n: fails after exhausting attempts and runs exactly N times" {
+  local marker="$BATS_TEST_TMPDIR/count2"
+  src "retry_n 4 0 bash -c 'n=\$(cat \"$marker\" 2>/dev/null || echo 0); echo \$((n+1)) > \"$marker\"; false'"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$marker")" = "4" ]
+}

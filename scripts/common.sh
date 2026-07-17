@@ -191,3 +191,20 @@ set_env_var() {
   fi
   log "persisted ${key} -> ${ENV_FILE##*/}"
 }
+
+# retry_n ATTEMPTS DELAY_SECONDS CMD [ARGS...] - run CMD up to ATTEMPTS times,
+# sleeping DELAY between failures. Returns 0 on the first success, 1 after the
+# final failure. For eventual-consistency waits (e.g. ELB's access-log
+# test-write racing S3 bucket-policy propagation).
+retry_n() {
+  local attempts="$1" delay="$2"; shift 2
+  local i
+  for ((i = 1; i <= attempts; i++)); do
+    if "$@"; then return 0; fi
+    if [ "$i" -lt "$attempts" ]; then
+      log "  attempt ${i}/${attempts} failed; retrying in ${delay}s"
+      sleep "$delay"
+    fi
+  done
+  return 1
+}
