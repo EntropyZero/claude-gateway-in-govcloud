@@ -168,6 +168,15 @@ each is fixed and committed:
   default (`CFN_DISABLE_ROLLBACK`), so a failed deploy keeps healthy
   resources and the re-run continues from the failure instead of paying the
   ~30-min Lambda-ENI rollback each iteration.
+- **ALB log delivery needs BOTH principals in GovCloud**: with only the
+  recommended `logdelivery.elasticloadbalancing.amazonaws.com` service
+  principal granted, the delivery test-write kept getting AccessDenied on a
+  dump-verified-correct policy — us-gov-west-1's writer still authenticates
+  as the legacy regional ELB account (048591011584). The bucket policy now
+  grants the service principal AND the legacy account root (restored
+  `ElbAccount` mapping), so either writer is authorized.
+  `BucketOwnerEnforced` accepts the legacy writer's `bucket-owner-full-
+  control` canned ACL, so ACLs stay disabled.
 
 **What remains (open work):**
 - **Deploy-time verification** — nothing has been deployed since any of
