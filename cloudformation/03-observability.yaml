@@ -769,6 +769,26 @@ Resources:
               Value: 'false'
             - Name: GF_ANALYTICS_CHECK_FOR_UPDATES
               Value: 'false'
+            # ---- fully offline: everything Grafana needs is provisioned
+            # into the image, so it must make NO grafana.com calls. In an
+            # inspected-egress environment (Zscaler) those calls fail TLS
+            # (MITM cert not in the container trust store), and a failing
+            # startup subsystem retries into the known
+            # "duplicate metrics collector registration attempted" panic
+            # (grafana/grafana#92707) - a crash-loop, not a warning.
+            - Name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES
+              Value: 'false'
+            # Verify bundled-plugin signatures with the key EMBEDDED in the
+            # binary instead of downloading manifest keys from grafana.com.
+            - Name: GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED
+              Value: 'true'
+            # No Grafana-side alerting (CloudWatch owns alerting in this
+            # deployment); also sidesteps the Alertmanager-init retry that
+            # triggers the panic above.
+            - Name: GF_UNIFIED_ALERTING_ENABLED
+              Value: 'false'
+            - Name: GF_NEWS_NEWS_FEED_ENABLED
+              Value: 'false'
             # ---- Okta SSO (generic OAuth). Per-user accounts with real
             # identity; access = Okta group membership, offboarding is
             # automatic. Identity is authoritative in Okta, so the lack of a
