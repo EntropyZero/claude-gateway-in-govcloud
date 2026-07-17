@@ -2,7 +2,7 @@
 # (.github/workflows/tests.yml) runs the same commands per job.
 # Tooling expected on PATH: python3 + pytest, bats, cfn-lint, cfn-guard, pwsh.
 
-.PHONY: test test-lambda test-bash test-cfn test-powershell
+.PHONY: test test-lambda test-bash test-cfn test-powershell docs-pdf
 
 test: test-lambda test-bash test-cfn test-powershell
 	@echo "All test suites passed."
@@ -22,3 +22,9 @@ test-cfn:
 
 test-powershell:
 	pwsh -NoProfile -File tests/run-pester.ps1
+
+# Render the review-package docs (architecture, network-access-controls) to
+# PDF next to their sources. Deps: pip install weasyprint markdown.
+# Re-run and commit the PDFs in the same change that edits a doc or diagram.
+docs-pdf:
+	python3 scripts/md-to-pdf.py
