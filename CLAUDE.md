@@ -19,11 +19,19 @@ CloudFormation parameter or a `scripts/deploy.env` variable.
 
 ## Status (keep this current)
 
-**As of 2026-07-16: code-complete and fully review-hardened, but NOT yet
-deployed.** The first end-to-end test run is imminent — see
-`docs/test-run-runbook.md`. Nothing here is "proven" until that run passes.
-Do not describe this as production-ready until the runbook's validation
-checklist is green.
+**As of 2026-07-17: first end-to-end test run IN PROGRESS.** Stacks 01/02
+deploy; proven live so far: DB bootstrap + app-user auth, RDS TLS
+(verify-full via the OS trust store — the driver ignores `sslrootcert=`),
+offline image builds on a hardened host (legacy Docker builder, umask 077),
+ALB + access logs (after evicting a landing-zone auto-remediation), and the
+endpoint-SG reachability model (workloads + in-VPC admin host).
+**Currently blocked on one org prerequisite: a Zscaler ALLOW +
+SSL-inspection exemption for the Okta issuer FQDN on the VPC's server-side
+egress** — gateway boot fails at OIDC discovery (403) until it lands. The
+running fix log is at the top of `docs/security-review-2026-07.md`. Still
+unexercised: gateway steady state + end-to-end login, Grafana Okta login,
+secret rotation, activity archive. Not production-ready until the runbook's
+validation checklist is green.
 
 The full security review (`docs/security-review-2026-07.md`) is implemented:
 batches A (deploy-breakers), B (ZPA/landing-zone prerequisites), C (FedRAMP
