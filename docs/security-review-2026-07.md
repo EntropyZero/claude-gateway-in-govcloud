@@ -174,6 +174,17 @@ each is fixed and committed:
   default (`CFN_DISABLE_ROLLBACK`), so a failed deploy keeps healthy
   resources and the re-run continues from the failure instead of paying the
   ~30-min Lambda-ENI rollback each iteration.
+- **Server-side Zscaler inspection broke the Okta token exchange**: VPC
+  egress to the Okta issuer passes TLS inspection, so the gateway and
+  Grafana saw the inspector's derived cert and failed verification at token
+  exchange. Preferred fix (added to `docs/networking-request-email.md`): an
+  SSL-inspection exemption for the issuer FQDN on the server-side egress
+  path — the exchange carries the OIDC client secret, which should not
+  transit inspection infrastructure. Interim/fallback implemented:
+  `EXTRA_CA_CERT_PATH` (deploy.env) bakes the inspection root CA into both
+  images' trust stores (gateway: OS store + combined `NODE_EXTRA_CA_CERTS`
+  bundle; Grafana: appended to the system bundle). Empty by default; offline
+  builds verified with and without it.
 - **ALB access-log AccessDenied — root cause was landing-zone automation**:
   an LZ auto-remediation was rewriting the ALB's access-log config to a
   central logging bucket, fighting the stack and producing intermittent

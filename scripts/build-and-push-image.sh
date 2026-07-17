@@ -23,6 +23,16 @@ RDS_CA_BUNDLE_URL="${RDS_CA_BUNDLE_URL:-https://truststore.pki.us-gov-west-1.rds
 log "Fetching RDS CA trust bundle"
 curl -fsSL "$RDS_CA_BUNDLE_URL" -o "${REPO_ROOT}/docker/rds-ca-bundle.pem"
 
+# Optional enterprise/TLS-inspection root CA (e.g. Zscaler): trusted by the
+# image so inspected egress (the Okta hops) verifies. Staged as an empty file
+# when unset - the Dockerfile skips the empty file.
+if [ -n "${EXTRA_CA_CERT_PATH:-}" ]; then
+  log "Staging extra root CA from ${EXTRA_CA_CERT_PATH}"
+  cp "$EXTRA_CA_CERT_PATH" "${REPO_ROOT}/docker/extra-ca.pem"
+else
+  : > "${REPO_ROOT}/docker/extra-ca.pem"
+fi
+
 ensure_ecr_repo "$ECR_REPO_NAME"
 REGISTRY="$(ecr_login)"
 # Tags are IMMUTABLE: to rebuild the same claude version (Dockerfile fix,

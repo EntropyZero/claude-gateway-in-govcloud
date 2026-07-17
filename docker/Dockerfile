@@ -26,10 +26,10 @@ LABEL org.opencontainers.image.title="claude-apps-gateway" \
 # The claude binary is self-contained (bundles its own TLS), so it needs no
 # system openssl.
 #
-# If your enterprise CA also signs internal endpoints the gateway must call,
-# trust it in the image (RHEL-family paths - update-ca-trust is in the base):
-# COPY enterprise-root-ca.pem /etc/pki/ca-trust/source/anchors/enterprise-root-ca.pem
-# RUN update-ca-trust
+# Enterprise/TLS-inspection root CA (e.g. Zscaler): set EXTRA_CA_CERT_PATH in
+# deploy.env and build-and-push-image.sh stages it as extra-ca.pem (empty file
+# when unset). Without it, egress through an inspecting proxy fails TLS on
+# the Okta hops (the inspector's derived cert isn't in any default store).
 
 # The verified native binary from the release bucket (glibc build, linux-x64).
 COPY claude /usr/local/bin/claude
@@ -37,6 +37,8 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 # RDS CA trust bundle (fetched by build-and-push-image.sh) - lets the
 # entrypoint use sslmode=verify-full instead of trust-blind 'require'.
 COPY rds-ca-bundle.pem /usr/local/share/rds-ca-bundle.pem
+# Optional extra root CA (may be an empty file - see above).
+COPY extra-ca.pem /usr/local/share/extra-ca.pem
 # Listener TLS cert, generated on the build host by build-and-push-image.sh.
 # --chown (works on the legacy builder) so the gateway user owns the cert and
 # reads it even at 0600 - keeps the private key owner-only.
@@ -51,9 +53,15 @@ COPY --chown=10001:10001 tls/ /etc/claude/tls/
 # OS store), and Amazon's RDS CAs are private, so without this every DB
 # connection fails with "self signed certificate in certificate chain".
 RUN chmod 0755 /usr/local/bin/claude /usr/local/bin/entrypoint.sh \
- && chmod 0644 /usr/local/share/rds-ca-bundle.pem \
+ && chmod 0644 /usr/local/share/rds-ca-bundle.pem /usr/local/share/extra-ca.pem \
  && cp /usr/local/share/rds-ca-bundle.pem /etc/pki/ca-trust/source/anchors/rds-ca-bundle.pem \
+ && if [ -s /usr/local/share/extra-ca.pem ]; then \
+      cp /usr/local/share/extra-ca.pem /etc/pki/ca-trust/source/anchors/extra-ca.pem; \
+    fi \
  && update-ca-trust \
+ && cat /usr/local/share/rds-ca-bundle.pem /usr/local/share/extra-ca.pem \
+      > /usr/local/share/node-extra-cas.pem \
+ && chmod 0644 /usr/local/share/node-extra-cas.pem \
  && printf 'gateway:x:10001:10001::/home/gateway:/sbin/nologin\n' >> /etc/passwd \
  && printf 'gateway:x:10001:\n' >> /etc/group \
  && mkdir -p /home/gateway \
@@ -63,7 +71,8 @@ USER gateway
 ENV CLAUDE_CONFIG_DIR=/tmp/.claude
 # Belt-and-suspenders with the OS-store install above: NODE_EXTRA_CA_CERTS is
 # the documented CA-extension mechanism for the claude runtime (it EXTENDS the
-# default roots, so Okta/AWS TLS is unaffected).
-ENV NODE_EXTRA_CA_CERTS=/usr/local/share/rds-ca-bundle.pem
+# default roots, so unrelated TLS is unaffected). Points at the combined
+# RDS + optional-extra bundle built in the RUN above.
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/node-extra-cas.pem
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -29,3 +29,17 @@ COPY --chown=472:472 tls/ /etc/grafana/tls/
 ENV GF_SERVER_PROTOCOL=https \
     GF_SERVER_CERT_FILE=/etc/grafana/tls/server.crt \
     GF_SERVER_CERT_KEY=/etc/grafana/tls/server.key
+
+# Optional enterprise/TLS-inspection root CA (e.g. Zscaler), staged by
+# build-and-push-grafana.sh from EXTRA_CA_CERT_PATH (empty file when unset).
+# Grafana's only external call is the Okta OAuth exchange; behind an
+# inspecting proxy that hop presents the inspector's derived cert, so the
+# inspector's root must be in the system bundle Go reads. Root only for the
+# append; back to the grafana user immediately after.
+COPY extra-ca.pem /tmp/extra-ca.pem
+USER root
+RUN if [ -s /tmp/extra-ca.pem ]; then \
+      cat /tmp/extra-ca.pem >> /etc/ssl/certs/ca-certificates.crt; \
+    fi \
+ && rm -f /tmp/extra-ca.pem
+USER grafana

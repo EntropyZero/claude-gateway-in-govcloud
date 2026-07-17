@@ -24,6 +24,16 @@ mkdir -p "$TLS_DIR"
     -keyout "$TLS_DIR/server.key" -out "$TLS_DIR/server.crt" \
     -days 3650 -subj "/CN=claude-gw-grafana" 2>/dev/null )
 
+# Optional enterprise/TLS-inspection root CA (e.g. Zscaler): trusted by the
+# image so the Okta OAuth exchange verifies behind inspected egress. Staged
+# as an empty file when unset - the Dockerfile skips the empty file.
+if [ -n "${EXTRA_CA_CERT_PATH:-}" ]; then
+  log "Staging extra root CA from ${EXTRA_CA_CERT_PATH}"
+  cp "$EXTRA_CA_CERT_PATH" "${REPO_ROOT}/docker/grafana/extra-ca.pem"
+else
+  : > "${REPO_ROOT}/docker/grafana/extra-ca.pem"
+fi
+
 ensure_ecr_repo "$REPO_NAME"
 REGISTRY="$(ecr_login)"
 IMAGE="${REGISTRY}/${REPO_NAME}:${GRAFANA_IMAGE_TAG}"
