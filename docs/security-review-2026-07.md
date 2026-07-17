@@ -184,7 +184,12 @@ each is fixed and committed:
   `EXTRA_CA_CERT_PATH` (deploy.env) bakes the inspection root CA into both
   images' trust stores (gateway: OS store + combined `NODE_EXTRA_CA_CERTS`
   bundle; Grafana: appended to the system bundle). Empty by default; offline
-  builds verified with and without it.
+  builds verified with and without it. Follow-on (confirmed live): with TLS
+  trusted, ZIA **policy** then 403'd the identity-less server-originated
+  request — the networking ask is now ALLOW + inspection-exemption for the
+  issuer FQDN from the VPC egress location. **OPEN as of 2026-07-17:
+  awaiting that Zscaler change; gateway boot blocks on OIDC discovery until
+  it lands.**
 - **ALB access-log AccessDenied — root cause was landing-zone automation**:
   an LZ auto-remediation was rewriting the ALB's access-log config to a
   central logging bucket, fighting the stack and producing intermittent

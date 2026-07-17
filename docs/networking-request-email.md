@@ -97,20 +97,26 @@ matches how we deliver this app** (ZPA is preferred):
   public Zscaler proxy IPs (the client's private-network check fails
   otherwise).
 
-### Server-side egress: SSL-inspection exemption for the Okta issuer *(either option)*
+### Server-side egress: ALLOW + SSL-inspection exemption for the Okta issuer *(either option)*
 - The gateway and Grafana containers (in the workload VPC) call
-  `<OKTA_ISSUER_FQDN>` for OIDC discovery and OAuth **token exchange**. If
-  VPC egress passes through TLS inspection, they receive the inspector's
-  derived certificate and the exchange fails TLS verification.
-- **Request:** exempt `<OKTA_ISSUER_FQDN>` from SSL inspection **on the
-  server-side egress path from the workload VPC** (not just user traffic).
+  `<OKTA_ISSUER_FQDN>` for OIDC discovery and OAuth **token exchange**.
+  This is **server-originated** traffic: it carries no Zscaler user
+  identity, so default ZIA policy both intercepts it AND blocks it
+  (observed in the first test run: TLS failure from the derived cert, then
+  **403 Forbidden** from policy once the cert was trusted).
+- **Request (two parts, for the ZIA location/sub-location that carries the
+  workload VPC's central egress):**
+  1. **Allow** `<OKTA_ISSUER_FQDN>` (TCP 443) for unauthenticated /
+     server-originated traffic from that egress source.
+  2. **Exempt it from SSL inspection** on the same path.
 - **Why exemption rather than trusting the inspection CA:** the token
   exchange carries the OIDC **client secret**; decrypting it means the IdP
   credential transits the inspection infrastructure. IdP endpoints are a
   standard SSL-inspection bypass category for exactly this reason.
 - *(Fallback if the exemption is refused: we can bake the inspection root CA
   into the two container images — `EXTRA_CA_CERT_PATH` in the deploy
-  tooling — but the exemption is the preferred posture.)*
+  tooling — but the policy ALLOW is required either way, and the exemption
+  is the preferred posture.)*
 
 ### Also needed for the offline client rollout (either option)
 - **UNC file-share app segment:** the installer pulls `claude.exe` from

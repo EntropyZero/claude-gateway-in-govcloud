@@ -310,6 +310,15 @@ guard now sees the obs stack exists and keeps the OTLP URL.)
 
 - **Custom resource / stack hung**: check the relevant Lambda log group
   first; the bootstrap and rotation functions log every step.
+- **Gateway boot: TLS error, then "expected 200 OK, got: 403 Forbidden" on
+  the Okta hop**: server-originated egress hitting Zscaler. The TLS error is
+  the inspection cert (fix: `EXTRA_CA_CERT_PATH` or an inspection
+  exemption); the 403 is ZIA *policy* blocking identity-less server traffic
+  — needs an explicit ALLOW for the issuer FQDN from the VPC's egress
+  location (see the networking request email, "Server-side egress").
+  Probe from the admin instance to distinguish Zscaler (HTML block page)
+  from an Okta network-zone 403 (JSON error):
+  `curl -sv https://<issuer>/.well-known/openid-configuration`
 - **A 02 deploy failed**: deploy-gateway.sh runs with `--disable-rollback` by
   default, so the stack lands in `CREATE_FAILED`/`UPDATE_FAILED` **with its
   healthy resources intact** — fix the cause and re-run the script; the
