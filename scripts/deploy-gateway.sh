@@ -109,7 +109,7 @@ aws cloudformation deploy \
 # Stack policy: refuse any future update that would REPLACE or DELETE the
 # ALB. Its default DNS name is the corporate CNAME target - recreation
 # means re-submitting DNS to the client and re-publishing the fingerprint.
-# Layered with deletion protection (applied below) and the fixed ALB name (a
+# Layered with deletion_protection.enabled and the fixed ALB name (a
 # create-before-delete replacement collides with itself). Remove the
 # policy deliberately if an ALB replacement is ever truly intended:
 #   aws cloudformation set-stack-policy --stack-name <stack> \
@@ -126,31 +126,13 @@ aws cloudformation set-stack-policy \
     ]
   }'
 
-# ALB hardening applied POST-deploy, deliberately not in the template (see
-# the LoadBalancer comment there):
-# - deletion protection at create time makes a FAILED create un-rollbackable
-#   (the rollback can't delete the ALB -> DELETE_FAILED wedge);
-# - access logs at create time race S3 bucket-policy propagation - ELB's
-#   test-write intermittently gets AccessDenied on a policy that is correct
-#   but not yet live, and CloudFormation doesn't retry. retry_n rides it out.
-# Both calls are idempotent; re-running this script re-asserts them.
-ALB_ARN="$(stack_output "$GATEWAY_STACK_NAME" LoadBalancerArn)"
-ALB_LOGS_BUCKET="$(stack_output "$GATEWAY_STACK_NAME" AlbLogsBucketName)"
-
-log "Enabling ALB deletion protection"
-aws elbv2 modify-load-balancer-attributes --region "$AWS_REGION" \
-  --load-balancer-arn "$ALB_ARN" \
-  --attributes Key=deletion_protection.enabled,Value=true >/dev/null
-
-log "Enabling ALB access logs -> s3://${ALB_LOGS_BUCKET}"
-if ! retry_n 6 10 aws elbv2 modify-load-balancer-attributes --region "$AWS_REGION" \
-    --load-balancer-arn "$ALB_ARN" \
-    --attributes Key=access_logs.s3.enabled,Value=true \
-                 "Key=access_logs.s3.bucket,Value=${ALB_LOGS_BUCKET}"; then
-  echo "FATAL: could not enable ALB access logs (bucket ${ALB_LOGS_BUCKET})." >&2
-  echo "       Check the bucket policy, then re-run this script." >&2
-  exit 1
-fi
+# ALB deletion protection + access logs live in the TEMPLATE
+# (LoadBalancerAttributes) - declarative and drift-checked. The transient
+# post-deploy variant that used to live here existed to dodge a landing-zone
+# auto-remediation that was rewriting the ALB's access-log config (since
+# exempted). If create-time log validation ever fails AccessDenied on a
+# fresh account, check for such automation FIRST - the bucket policy grants
+# both ELB delivery principals and is not the likely culprit.
 
 log "Stack outputs"
 aws cloudformation describe-stacks --region "$AWS_REGION" \

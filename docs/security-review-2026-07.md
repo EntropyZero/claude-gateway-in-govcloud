@@ -168,15 +168,20 @@ each is fixed and committed:
   default (`CFN_DISABLE_ROLLBACK`), so a failed deploy keeps healthy
   resources and the re-run continues from the failure instead of paying the
   ~30-min Lambda-ENI rollback each iteration.
-- **ALB log delivery needs BOTH principals in GovCloud**: with only the
-  recommended `logdelivery.elasticloadbalancing.amazonaws.com` service
-  principal granted, the delivery test-write kept getting AccessDenied on a
-  dump-verified-correct policy — us-gov-west-1's writer still authenticates
-  as the legacy regional ELB account (048591011584). The bucket policy now
-  grants the service principal AND the legacy account root (restored
-  `ElbAccount` mapping), so either writer is authorized.
-  `BucketOwnerEnforced` accepts the legacy writer's `bucket-owner-full-
-  control` canned ACL, so ACLs stay disabled.
+- **ALB access-log AccessDenied — root cause was landing-zone automation**:
+  an LZ auto-remediation was rewriting the ALB's access-log config to a
+  central logging bucket, fighting the stack and producing intermittent
+  AccessDenied that mimicked first a propagation race, then a policy bug.
+  The operator removed/exempted the remediation; access logs +
+  deletion protection are back in `LoadBalancerAttributes` (declarative,
+  drift-checked; in-template protection is safe alongside the script's
+  `--disable-rollback` default). The bucket policy retains BOTH ELB delivery
+  principals (service principal + legacy regional account 048591011584) —
+  belt-and-suspenders that costs nothing and covers either writer.
+  `BucketOwnerEnforced` accepts the legacy writer's
+  `bucket-owner-full-control` canned ACL, so ACLs stay disabled. NOTE for
+  new accounts: if access-log enablement fails, check for LZ automation
+  first.
 
 **What remains (open work):**
 - **Deploy-time verification** — nothing has been deployed since any of

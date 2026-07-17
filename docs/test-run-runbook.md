@@ -318,10 +318,16 @@ guard now sees the obs stack exists and keeps the OTLP URL.)
   Set `CFN_DISABLE_ROLLBACK=false` to restore classic auto-rollback.
 - **Rollback of 02**: the ALB and Database are stack-policy locked against
   replace/delete, so a bad update fails fast rather than destroying them —
-  good. ALB deletion protection and access logs are applied by
-  deploy-gateway.sh *after* the deploy (protection at create time wedges
-  failed-create rollbacks; access-log enablement at create time races S3
-  bucket-policy propagation). To iterate on the DB itself in a throwaway
+  good. ALB deletion protection and access logs are in the template; a
+  protected ALB is safe with failed creates because of `--disable-rollback`
+  (no rollback ever tries to delete it). **Before deleting the 02 stack**,
+  disable protection first:
+  `aws elbv2 modify-load-balancer-attributes --load-balancer-arn <arn>
+  --attributes Key=deletion_protection.enabled,Value=false`.
+  If ALB access-log validation fails AccessDenied at create, check for a
+  landing-zone auto-remediation rewriting ALB log config (seen in the first
+  test run) before debugging the bucket policy — the policy grants both ELB
+  delivery principals. To iterate on the DB itself in a throwaway
   test account, see the teardown-order notes below.
 - **Teardown order** (test account cleanup): delete **03 first**, then 02,
   then 01. Caveats: the db-admin Lambda ENIs can linger ~20 min and are
