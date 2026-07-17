@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="900" viewBox="0 0 1560 900">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker></defs>
+<rect x="0.5" y="0.5" width="1559" height="899" rx="14" fill="#FFFFFF" stroke="#E2E8F0"/>
+<text x="36" y="46" font-family="Helvetica, Arial, sans-serif" font-size="20" fill="#0F172A" font-weight="bold" text-anchor="start" >8. Security-group rule inventory</text>
+<text x="36" y="68" font-family="Helvetica, Arial, sans-serif" font-size="12.5" fill="#64748B" font-weight="normal" text-anchor="start" >Every rule in the deployment, by group. IN = ingress, OUT = egress. Groups not listed here do not exist.</text>
+<rect x="40" y="96" width="470" height="109" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="275.0" y="117" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >alb  (internal ALB)</text>
+<rect x="450.3" y="102" width="27.4" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="464" y="115.5" font-family="Helvetica, Arial, sans-serif" font-size="9.5" fill="#64748B" font-weight="normal" text-anchor="middle" >02</text>
+<text x="58" y="140" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >IN   443   from ClientIngressCidr (developer networks)</text>
+<text x="58" y="155" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >OUT  8080  to svc (forward + health checks)</text>
+<text x="58" y="170" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >OUT  3000  to grafana  (rule added by 03)</text>
+<rect x="40" y="268" width="470" height="140" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="275.0" y="289" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >svc  (gateway tasks)</text>
+<rect x="450.3" y="274" width="27.4" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="464" y="287.5" font-family="Helvetica, Arial, sans-serif" font-size="9.5" fill="#64748B" font-weight="normal" text-anchor="middle" >02</text>
+<text x="58" y="312" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >IN   8080       from alb</text>
+<text x="58" y="327" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >OUT  443        0.0.0.0/0 (Okta, AWS APIs via endpoints/egress)</text>
+<text x="58" y="342" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >OUT  proxy port 0.0.0.0/0 (only when HttpsProxyUrl set)</text>
+<text x="58" y="357" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >OUT  4317-4318  to collector  (rule added by 03)</text>
+<text x="58" y="376" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#64748B" font-weight="normal" text-anchor="start" >also carries db-client (below) for 5432</text>
+<rect x="40" y="458" width="470" height="110" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="275.0" y="479" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >db-admin  (bootstrap + rotation Lambdas)</text>
+<rect x="450.3" y="464" width="27.4" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="464" y="477.5" font-family="Helvetica, Arial, sans-serif" font-size="9.5" fill="#64748B" font-weight="normal" text-anchor="middle" >02</text>
+<text x="58" y="502" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >IN   none</text>
+<text x="58" y="517" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >OUT  443  0.0.0.0/0 (Secrets Manager, ECS via endpoints)</text>
+<text x="58" y="536" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#64748B" font-weight="normal" text-anchor="start" >also carries db-client (below) for 5432</text>
+<rect x="40" y="606" width="470" height="124" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="275.0" y="627" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >endpoint  (shared, all 02 interface endpoints)</text>
+<rect x="450.3" y="612" width="27.4" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="464" y="625.5" font-family="Helvetica, Arial, sans-serif" font-size="9.5" fill="#64748B" font-weight="normal" text-anchor="middle" >02</text>
+<text x="58" y="650" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >IN   443  from svc, db-admin</text>
+<text x="58" y="665" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >IN   443  from collector, grafana   (rules added by 03)</text>
+<text x="58" y="680" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >IN   443  from AdminClientSecurityGroupId (optional param)</text>
+<text x="58" y="695" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >OUT  none (endpoint ENIs never initiate)</text>
+<rect x="545" y="96" width="470" height="110" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="780.0" y="117" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >db-client  (attach to reach the DB)</text>
+<rect x="955.3" y="102" width="27.4" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="969" y="115.5" font-family="Helvetica, Arial, sans-serif" font-size="9.5" fill="#64748B" font-weight="normal" text-anchor="middle" >01</text>
+<text x="563" y="140" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >IN   none</text>
+<text x="563" y="155" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >OUT  5432  to db</text>
+<text x="563" y="174" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#64748B" font-weight="normal" text-anchor="start" >attached to: gateway tasks, both db-admin Lambdas</text>
+<rect x="545" y="244" width="470" height="94" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="780.0" y="265" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >db  (RDS instance)</text>
+<rect x="955.3" y="250" width="27.4" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="969" y="263.5" font-family="Helvetica, Arial, sans-serif" font-size="9.5" fill="#64748B" font-weight="normal" text-anchor="middle" >01</text>
+<text x="563" y="288" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >IN   5432  from db-client</text>
+<text x="563" y="303" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >OUT  none</text>
+<rect x="545" y="376" width="470" height="94" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="780.0" y="397" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >collector  (OTLP collector tasks)</text>
+<rect x="955.3" y="382" width="27.4" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="969" y="395.5" font-family="Helvetica, Arial, sans-serif" font-size="9.5" fill="#64748B" font-weight="normal" text-anchor="middle" >03</text>
+<text x="563" y="420" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >IN   4317-4318  from svc (gateway OTLP forward)</text>
+<text x="563" y="435" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >OUT  443        0.0.0.0/0 (AMP remote_write, ECR, logs)</text>
+<rect x="545" y="524" width="470" height="94" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="780.0" y="545" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >grafana  (dashboard task)</text>
+<rect x="955.3" y="530" width="27.4" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="969" y="543.5" font-family="Helvetica, Arial, sans-serif" font-size="9.5" fill="#64748B" font-weight="normal" text-anchor="middle" >03</text>
+<text x="563" y="568" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >IN   3000  from alb (path rule /grafana)</text>
+<text x="563" y="583" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >OUT  443   0.0.0.0/0 (AMP queries, Okta OAuth, ECR)</text>
+<rect x="545" y="672" width="470" height="109" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="780.0" y="693" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >amp-endpoint  (aps-workspaces endpoint)</text>
+<rect x="955.3" y="678" width="27.4" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="969" y="691.5" font-family="Helvetica, Arial, sans-serif" font-size="9.5" fill="#64748B" font-weight="normal" text-anchor="middle" >03</text>
+<text x="563" y="716" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >IN   443  from collector (remote_write)</text>
+<text x="563" y="731" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >IN   443  from grafana (queries)</text>
+<text x="563" y="746" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >OUT  none</text>
+<rect x="1050" y="96" width="470" height="250" rx="8" fill="#FFFFFF" stroke="#334155" stroke-width="1.4"/>
+<text x="1285.0" y="117" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Cross-stack rule writers</text>
+<text x="1068" y="130" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >03 adds rules to SGs it imports from 02:</text>
+<text x="1068" y="147" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >  - AlbToGrafanaEgress:       alb  OUT 3000 -&gt; grafana</text>
+<text x="1068" y="164" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >  - GatewayToCollectorEgress: svc  OUT 4317-18 -&gt; collector</text>
+<text x="1068" y="181" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >  - CollectorToEndpointsIngress: endpoint IN 443</text>
+<text x="1068" y="198" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >  - GrafanaToEndpointsIngress:   endpoint IN 443</text>
+<text x="1068" y="215" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >02 param AdminClientSecurityGroupId:</text>
+<text x="1068" y="232" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >  - AdminToEndpointsIngress:     endpoint IN 443</text>
+<text x="1068" y="249" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" ></text>
+<text x="1068" y="266" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >Deploy order matters: the imported SGs must exist</text>
+<text x="1068" y="283" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >(02 before 03), and CREATE_SUPPORTING_ENDPOINTS</text>
+<text x="1068" y="300" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >must match between the two deploys.</text>
+<rect x="1050" y="376" width="470" height="170" rx="8" fill="#FFFFFF" stroke="#334155" stroke-width="1.4"/>
+<text x="1285.0" y="397" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Reading the map</text>
+<text x="1068" y="410" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >A connection works only when BOTH ends agree:</text>
+<text x="1068" y="427" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >an egress rule on the source SG and an ingress</text>
+<text x="1068" y="444" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >rule on the destination SG. Every SG here is</text>
+<text x="1068" y="461" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >default-deny; the 127.0.0.1/32 egress entries in</text>
+<text x="1068" y="478" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >the templates are deliberate no-op placeholders</text>
+<text x="1068" y="495" font-family="Helvetica, Arial, sans-serif" font-size="10.8" fill="#334155" font-weight="normal" text-anchor="start" >that suppress the default allow-all egress.</text>
+<text x="36" y="876" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#64748B" font-weight="normal" text-anchor="start" >Accepted risk (SSP-scoped): the gateway-&gt;collector OTLP hop (4317-4318) is plaintext, compensated by SG-to-SG scoping - only gateway tasks can reach the collector ports. See security-review C2.</text>
+</svg>

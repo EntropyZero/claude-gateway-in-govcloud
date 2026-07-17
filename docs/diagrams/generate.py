@@ -704,5 +704,258 @@ def d1b():
     s.write("01b-workloads-data-services.svg")
 
 
+# =====================================================================
+# 7. Security-group topology map
+# =====================================================================
+def d7():
+    s = SVG(1560, 1010, "7. Security groups - who may talk to whom",
+            "Every arrow is an explicit SG rule pair (egress on the source + "
+            "ingress on the destination). Everything else is denied.")
+
+    s.zone(36, 96, 300, 170, "Corporate network", AMBER, AMBER_T)
+    s.node(66, 150, 240, 84, "Developer laptops",
+           ["ZPA / VPN networks", "ClientIngressCidr"], border=AMBER)
+
+    s.zone(36, 296, 1120, 660, "Workload VPC - private subnets", GREEN, GREEN_T)
+
+    s.node(96, 356, 250, 92, "Internal ALB", ["SG: alb", "TLS listener :443"],
+           border=GREEN)
+    s.node(96, 520, 250, 100, "Gateway tasks",
+           ["SGs: svc + db-client", "listener :8080 (TLS)"], border=GREEN)
+    s.node(430, 520, 230, 100, "Grafana task",
+           ["SG: grafana", "listener :3000 (TLS)"], border=GREEN)
+    s.node(740, 520, 230, 100, "OTLP collector x2",
+           ["SG: collector", "listeners :4317-4318"], border=GREEN)
+    s.node(140, 700, 206, 96, "db-admin Lambdas",
+           ["SGs: db-admin", "+ db-client"], border=GREEN)
+    s.node(430, 716, 220, 84, "RDS PostgreSQL",
+           ["SG: db - IN 5432", "only from db-client"], border=GREEN, cyl=True)
+    s.node(975, 700, 170, 96, "Admin / build EC2",
+           ["SG: admin (param)", "runs deploy scripts"], border=GREEN,
+           dashed=True, tsize=12)
+
+    s.node(96, 862, 560, 80, "Interface VPC endpoints (shared SG: endpoint)",
+           ["bedrock-runtime | ecr.api | ecr.dkr | logs | secretsmanager | ecs",
+            "IN 443 only from: svc, db-admin, grafana, collector, admin host"],
+           border=VIOLET)
+    s.node(740, 862, 230, 80, "AMP endpoint",
+           ["SG: amp-endpoint",
+            "IN 443: collector + grafana"], border=VIOLET)
+
+    s.zone(1196, 96, 328, 400, "External / regional", RED, RED_T)
+    s.node(1226, 150, 268, 78, "Okta issuer",
+           ["via central egress + Zscaler", "(ALLOW + no-inspect required)"],
+           border=RED)
+    s.node(1226, 268, 268, 66, "AWS regional APIs",
+           ["behind the endpoints below"], border=VIOLET)
+    s.node(1226, 372, 268, 96, "Amazon S3 (gateway endpoint)",
+           ["route-table entry, no SG;", "policy: ECR layers, CFN responses,",
+            "this account's buckets"], border=VIOLET, dashed=True)
+
+    # -- north-south data plane
+    s.arrow([(221, 234), (221, 356)], color=AMBER)
+    s.chip(221, 300, "443  from ClientIngressCidr", color=AMBER)
+    s.arrow([(221, 448), (221, 520)], color=GREEN)
+    s.chip(221, 487, "8080  alb->svc", color=GREEN)
+    s.arrow([(346, 402), (545, 402), (545, 520)], color=GREEN)
+    s.chip(545, 442, "3000  alb->grafana (03)", color=GREEN)
+
+    # -- corridors above row B: Okta egress (y470) and OTLP forward (y498)
+    s.arrow([(300, 520), (300, 470), (1090, 470), (1090, 200), (1226, 200)],
+            color=RED)
+    s.arrow([(560, 520), (560, 470)], color=RED, dashed=True)
+    s.chip(900, 458, "443  gateway + grafana -> Okta (OIDC/OAuth)", color=RED)
+    s.arrow([(280, 520), (280, 498), (795, 498), (795, 520)], color=GREEN)
+    s.chip(560, 498, "4317-4318  svc->collector (03)", color=GREEN)
+
+    # -- database (5432 rides the attached db-client SG)
+    s.arrow([(346, 600), (388, 600), (388, 745), (430, 745)], color=SLATE)
+    s.arrow([(346, 760), (430, 760)], color=SLATE)
+    s.chip(305, 685, "5432  db-client->db", color=SLATE)
+
+    # -- 443 to the shared interface endpoints
+    s.arrow([(118, 620), (118, 862)], color=VIOLET)
+    s.arrow([(243, 796), (243, 862)], color=VIOLET)
+    s.arrow([(460, 620), (460, 668), (400, 668), (400, 862)], color=VIOLET)
+    s.arrow([(770, 620), (770, 650), (690, 650), (690, 830), (600, 830),
+             (600, 862)], color=VIOLET)
+    s.arrow([(1060, 796), (1060, 815), (615, 815), (615, 862)], color=VIOLET,
+            dashed=True)
+
+    # -- 443 to the AMP endpoint
+    s.arrow([(855, 620), (855, 862)], color=VIOLET)
+    s.arrow([(660, 585), (700, 585), (700, 640), (905, 640), (905, 862)],
+            color=VIOLET)
+
+    s.text(36, 986, "Not shown: every SG's default egress is a 127.0.0.1/32 "
+           "placeholder (deny) unless a rule above exists; endpoint ENIs and "
+           "RDS initiate nothing. Dashed = optional/conditional "
+           "(admin-host param, AMP endpoint toggle, Grafana's Okta hop).",
+           size=11, color=SLATE_LT)
+    s.write("07-security-groups-map.svg")
+
+
+# =====================================================================
+# 8. Security-group rule inventory
+# =====================================================================
+def d8():
+    s = SVG(1560, 900, "8. Security-group rule inventory",
+            "Every rule in the deployment, by group. IN = ingress, OUT = "
+            "egress. Groups not listed here do not exist.")
+
+    def card(x, y, name, stack, rules, border=GREEN, note=""):
+        h = 64 + 15 * len(rules) + (16 if note else 0)
+        s.node(x, y, 470, h, name, [], border=border)
+        s.chip(x + 470 - 46, y + 16, stack, color=SLATE_LT, size=9.5)
+        for i, r in enumerate(rules):
+            s.text(x + 18, y + 44 + i * 15, r, size=10.8, color=SLATE)
+        if note:
+            s.text(x + 18, y + 48 + len(rules) * 15, note, size=10,
+                   color=SLATE_LT)
+
+    c1, c2, c3 = 40, 545, 1050
+    card(c1, 96, "alb  (internal ALB)", "02", [
+        "IN   443   from ClientIngressCidr (developer networks)",
+        "OUT  8080  to svc (forward + health checks)",
+        "OUT  3000  to grafana  (rule added by 03)"])
+    card(c1, 268, "svc  (gateway tasks)", "02", [
+        "IN   8080       from alb",
+        "OUT  443        0.0.0.0/0 (Okta, AWS APIs via endpoints/egress)",
+        "OUT  proxy port 0.0.0.0/0 (only when HttpsProxyUrl set)",
+        "OUT  4317-4318  to collector  (rule added by 03)"],
+        note="also carries db-client (below) for 5432")
+    card(c1, 458, "db-admin  (bootstrap + rotation Lambdas)", "02", [
+        "IN   none",
+        "OUT  443  0.0.0.0/0 (Secrets Manager, ECS via endpoints)"],
+        note="also carries db-client (below) for 5432")
+    card(c1, 606, "endpoint  (shared, all 02 interface endpoints)", "02", [
+        "IN   443  from svc, db-admin",
+        "IN   443  from collector, grafana   (rules added by 03)",
+        "IN   443  from AdminClientSecurityGroupId (optional param)",
+        "OUT  none (endpoint ENIs never initiate)"])
+
+    card(c2, 96, "db-client  (attach to reach the DB)", "01", [
+        "IN   none",
+        "OUT  5432  to db"],
+        note="attached to: gateway tasks, both db-admin Lambdas")
+    card(c2, 244, "db  (RDS instance)", "01", [
+        "IN   5432  from db-client",
+        "OUT  none"])
+    card(c2, 376, "collector  (OTLP collector tasks)", "03", [
+        "IN   4317-4318  from svc (gateway OTLP forward)",
+        "OUT  443        0.0.0.0/0 (AMP remote_write, ECR, logs)"])
+    card(c2, 524, "grafana  (dashboard task)", "03", [
+        "IN   3000  from alb (path rule /grafana)",
+        "OUT  443   0.0.0.0/0 (AMP queries, Okta OAuth, ECR)"])
+    card(c2, 672, "amp-endpoint  (aps-workspaces endpoint)", "03", [
+        "IN   443  from collector (remote_write)",
+        "IN   443  from grafana (queries)",
+        "OUT  none"])
+
+    s.node(c3, 96, 470, 250, "Cross-stack rule writers", [], border=SLATE)
+    for i, ln in enumerate([
+            "03 adds rules to SGs it imports from 02:",
+            "  - AlbToGrafanaEgress:       alb  OUT 3000 -> grafana",
+            "  - GatewayToCollectorEgress: svc  OUT 4317-18 -> collector",
+            "  - CollectorToEndpointsIngress: endpoint IN 443",
+            "  - GrafanaToEndpointsIngress:   endpoint IN 443",
+            "02 param AdminClientSecurityGroupId:",
+            "  - AdminToEndpointsIngress:     endpoint IN 443",
+            "",
+            "Deploy order matters: the imported SGs must exist",
+            "(02 before 03), and CREATE_SUPPORTING_ENDPOINTS",
+            "must match between the two deploys."]):
+        s.text(c3 + 18, 130 + i * 17, ln, size=10.8, color=SLATE)
+    s.node(c3, 376, 470, 170, "Reading the map", [], border=SLATE)
+    for i, ln in enumerate([
+            "A connection works only when BOTH ends agree:",
+            "an egress rule on the source SG and an ingress",
+            "rule on the destination SG. Every SG here is",
+            "default-deny; the 127.0.0.1/32 egress entries in",
+            "the templates are deliberate no-op placeholders",
+            "that suppress the default allow-all egress."]):
+        s.text(c3 + 18, 410 + i * 17, ln, size=10.8, color=SLATE)
+
+    s.text(36, 876, "Accepted risk (SSP-scoped): the gateway->collector OTLP "
+           "hop (4317-4318) is plaintext, compensated by SG-to-SG scoping - "
+           "only gateway tasks can reach the collector ports. See "
+           "security-review C2.", size=11, color=SLATE_LT)
+    s.write("08-security-group-rules.svg")
+
+
+# =====================================================================
+# 9. Access-control layers beyond SGs
+# =====================================================================
+def d9():
+    s = SVG(1560, 700, "9. Layered access control - what each layer stops",
+            "One request traced through every gate: a gateway task reading "
+            "its DB secret through the Secrets Manager endpoint.")
+
+    gates = [
+        ("1. Source SG egress", "svc allows 443 out", GREEN),
+        ("2. Endpoint SG ingress", "only the named SGs\n(svc, db-admin, ...)",
+         GREEN),
+        ("3. Endpoint policy", "only THIS account's\nsecret ARNs", VIOLET),
+        ("4. IAM (execution role)", "only this task's own\nsecret ARNs",
+         VIOLET),
+        ("5. KMS key policy", "decrypt via the CMK,\ngrantees only", VIOLET),
+    ]
+    x = 250
+    s.node(50, 150, 170, 90, "Gateway task", ["wants its", "db-app secret"],
+           border=GREEN)
+    for i, (t, sub, col) in enumerate(gates):
+        gx = x + i * 230
+        s.node(gx, 128, 200, 134, t, [], border=col)
+        for j, ln in enumerate(sub.split("\n")):
+            s.text(gx + 100, 172 + j * 15, ln, size=10.5, color=SLATE,
+                   anchor="middle")
+        s.arrow([(gx - 60 if i else 220, 195), (gx, 195)], color=GREEN)
+    s.arrow([(x + 4 * 230 + 200, 195), (1510, 195)], color=GREEN)
+    s.node(1385, 150, 125, 90, "Secret", ["decrypted", "value"], border=GREEN,
+           cyl=True)
+
+    s.text(50, 320, "Why the layers are not redundant - each stops a "
+           "different failure:", size=13, color=INK, weight="bold")
+    rows = [
+        ("Compromised box in another subnet, ANY credentials",
+         "stopped at layer 2 - its SG is not in the endpoint SG ingress "
+         "(network path denied before authn)"),
+        ("Compromised workload using ATTACKER-OWNED AWS credentials "
+         "(exfiltration through the private endpoint)",
+         "stopped at layer 3 - the endpoint policy allows only this "
+         "account's resources; your IAM cannot judge foreign principals"),
+        ("Legitimate workload asking for a secret it does not own",
+         "stopped at layer 4 - execution roles enumerate exact ARNs "
+         "(gateway task cannot read the master secret: no task injects it)"),
+        ("Principal with a stolen ciphertext or over-broad S3/API access",
+         "stopped at layer 5 - the CMK key policy grants decrypt only to "
+         "the roles that need it"),
+    ]
+    y = 348
+    for attack, stop in rows:
+        s.text(66, y, "- " + attack, size=11.5, color=RED, weight="bold")
+        s.text(84, y + 17, stop, size=11, color=SLATE)
+        y += 48
+
+    s.node(50, 552, 1460, 104,
+           "Non-SG enforcement points elsewhere in the deployment", [],
+           border=VIOLET)
+    for i, ln in enumerate([
+            "bedrock-runtime endpoint policy: pinned to the TWO configured "
+            "model IDs + their inference profiles (not anthropic.*)   |   "
+            "ecs endpoint: NO policy (GovCloud unsupported) - IAM-side "
+            "scoping covers it",
+            "S3 gateway endpoint policy: ECR layer bucket + CloudFormation "
+            "custom-resource response buckets + this account's buckets only",
+            "ALB access-log bucket policy: exactly two writers (ELB "
+            "log-delivery service principal + legacy regional ELB account)   "
+            "|   AMP endpoint policy: this workspace's ARN only",
+            "Okta egress: Zscaler policy must ALLOW + not inspect the issuer "
+            "FQDN for server-originated traffic (org prerequisite - see the "
+            "networking request)"]):
+        s.text(70, 586 + i * 18, ln, size=10.8, color=SLATE)
+    s.write("09-access-control-layers.svg")
+
+
 if __name__ == "__main__":
-    d1(); d1a(); d1b(); d2(); d3(); d4(); d5(); d6()
+    d1(); d1a(); d1b(); d2(); d3(); d4(); d5(); d6(); d7(); d8(); d9()

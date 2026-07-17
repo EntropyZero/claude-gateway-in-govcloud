@@ -162,6 +162,11 @@ and the two `set-*-secret.sh` scripts roll their consuming service.
 Default egress is removed from **every** group (inline rules replace the
 allow-all); the table is the complete connectivity graph.
 
+> **Deep dive with diagrams:** [`network-access-controls.md`](network-access-controls.md)
+> maps every SG rule pair visually (diagram 7), inventories each group
+> (diagram 8), and traces one API call through all five enforcement layers -
+> SGs, endpoint SG, endpoint policies, IAM, KMS (diagram 9).
+
 | SG | Ingress | Egress |
 |---|---|---|
 | `alb` | 443 from `CLIENT_INGRESS_CIDR` (ZPA connector subnets) | 8080 → `svc`; 3000 → `grafana` (added by 03); otherwise none |
