@@ -97,6 +97,35 @@ matches how we deliver this app** (ZPA is preferred):
   public Zscaler proxy IPs (the client's private-network check fails
   otherwise).
 
+### Why the no-inspection ask is load-bearing (impact if inspection stays on)
+
+The Claude Code client **pins the SHA-256 fingerprint of the exact TLS leaf
+certificate** it receives from `<GATEWAY_FQDN>` (trust-on-first-use, per
+hostname, no configuration override). We publish the expected fingerprint to
+users, who confirm it at first login. Under TLS inspection the client
+receives the Zscaler-derived certificate instead, so:
+
+- The fingerprint **never matches the published value** — users following
+  instructions cannot log in at all; users who click through are being
+  trained to accept the exact signal that detects a real MITM, which
+  reduces the control's value to zero.
+- Zscaler-derived leaf certificates are **not stable** (they change with
+  intermediate rotation and can differ across service edges/nodes), so even
+  accepted pins fail again at the next rotation — recurring "Claude Code
+  stopped working" incidents at a cadence set by Zscaler cert policy, plus
+  fail-closed startup errors for signed-in sessions.
+- Inspection decrypts our developers' **source code, prompts, and gateway
+  bearer tokens** on a hop from an internal client to an internal ALB —
+  a new cleartext handling surface for our most sensitive content, with no
+  monitoring benefit: the gateway already produces identity-stamped usage
+  telemetry server-side, which is richer than anything a middlebox can see.
+
+In short: with inspection enabled on this FQDN, the rollout ships with a
+security control that is either fully blocking or being systematically
+bypassed by users. There is no client-side workaround. For ZPA (option A)
+this only requires **not enabling** AppProtection/TLS inspection on the new
+segment; for ZIA (option B) it requires the exemption above.
+
 ### Server-side egress: ALLOW + SSL-inspection exemption for the Okta issuer *(either option)*
 - The gateway and Grafana containers (in the workload VPC) call
   `<OKTA_ISSUER_FQDN>` for OIDC discovery and OAuth **token exchange**.
