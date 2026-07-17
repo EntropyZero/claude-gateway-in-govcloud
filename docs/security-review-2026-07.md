@@ -145,6 +145,18 @@ each is fixed and committed:
   `tests/templates/test_gateway_config.py`, which parses the embedded
   GATEWAY_CONFIG_B64 block (invisible to cfn-lint) and asserts the shape.
   Both verified against code.claude.com/docs/en/claude-apps-gateway-config.
+- **Gateway→RDS TLS trust** ("self signed certificate in certificate chain"
+  on every DB connect): the gateway's Postgres client ignores the libpq
+  `sslrootcert=` URL param and verifies against the runtime's default trust
+  (the docs commit only to `?sslmode=require`; the native binary reads the
+  OS store). RDS CAs are private, so verification always failed. Fixed in the
+  gateway Dockerfile: the fetched RDS bundle is installed into the OS trust
+  store (`update-ca-trust`) AND exported via `NODE_EXTRA_CA_CERTS` (the
+  documented CA-extension mechanism; extends, never replaces, default roots).
+  The URL keeps `verify-full&sslrootcert=` — harmless, documents intent. The
+  bootstrap Lambda was unaffected (pg8000 takes an explicit `cafile`).
+  `build-and-push-image.sh` gained `IMAGE_TAG` for same-version rebuilds
+  (immutable tags). Requires image rebuild + service roll.
 - **ALB access logs raced S3 bucket-policy propagation** (intermittent —
   worked several deploys, then AccessDenied on an identical template): ELB's
   create-time test-write can land before the just-created bucket policy is

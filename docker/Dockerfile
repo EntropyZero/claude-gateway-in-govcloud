@@ -45,8 +45,15 @@ COPY --chown=10001:10001 tls/ /etc/claude/tls/
 # checkout yields mode-600 sources that COPY preserves, breaking reads/exec as
 # the unprivileged gateway user). RUN chmod works on the legacy builder;
 # --chmod on COPY would require BuildKit.
+# It also installs the RDS CA bundle into the OS trust store: the gateway's
+# Postgres client does NOT honor the libpq sslrootcert= URL param - it
+# verifies against the runtime's default trust (the native binary reads the
+# OS store), and Amazon's RDS CAs are private, so without this every DB
+# connection fails with "self signed certificate in certificate chain".
 RUN chmod 0755 /usr/local/bin/claude /usr/local/bin/entrypoint.sh \
  && chmod 0644 /usr/local/share/rds-ca-bundle.pem \
+ && cp /usr/local/share/rds-ca-bundle.pem /etc/pki/ca-trust/source/anchors/rds-ca-bundle.pem \
+ && update-ca-trust \
  && printf 'gateway:x:10001:10001::/home/gateway:/sbin/nologin\n' >> /etc/passwd \
  && printf 'gateway:x:10001:\n' >> /etc/group \
  && mkdir -p /home/gateway \
@@ -54,5 +61,9 @@ RUN chmod 0755 /usr/local/bin/claude /usr/local/bin/entrypoint.sh \
 
 USER gateway
 ENV CLAUDE_CONFIG_DIR=/tmp/.claude
+# Belt-and-suspenders with the OS-store install above: NODE_EXTRA_CA_CERTS is
+# the documented CA-extension mechanism for the claude runtime (it EXTENDS the
+# default roots, so Okta/AWS TLS is unaffected).
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/rds-ca-bundle.pem
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

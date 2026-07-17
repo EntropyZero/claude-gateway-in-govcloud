@@ -45,9 +45,14 @@ urlencode() {
 }
 
 : "${PGHOST:?}" "${PGPORT:?}" "${PGDATABASE:?}" "${PGUSER:?}" "${PGPASSWORD:?}"
-# verify-full: encrypt AND validate the server certificate against the RDS
-# CA bundle baked into the image (plain 'require' accepts any cert - no
-# protection against an in-VPC MITM).
+# verify-full: encrypt AND validate the server certificate. NOTE: the
+# gateway's Postgres client ignores the libpq sslrootcert= param - the RDS
+# CA trust actually comes from the image's OS trust store + the
+# NODE_EXTRA_CA_CERTS env (see the Dockerfile); without those, every connect
+# fails "self signed certificate in certificate chain". The params stay:
+# harmless if ignored, they document intent, and they take effect if the
+# driver gains libpq-param support. Plain 'require' would accept any cert -
+# no protection against an in-VPC MITM.
 GATEWAY_POSTGRES_URL="postgres://$(urlencode "$PGUSER"):$(urlencode "$PGPASSWORD")@${PGHOST}:${PGPORT}/${PGDATABASE}?sslmode=verify-full&sslrootcert=/usr/local/share/rds-ca-bundle.pem"
 export GATEWAY_POSTGRES_URL
 unset PGPASSWORD GATEWAY_CONFIG_B64 GATEWAY_TELEMETRY_B64

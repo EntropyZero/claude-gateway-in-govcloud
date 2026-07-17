@@ -25,7 +25,10 @@ curl -fsSL "$RDS_CA_BUNDLE_URL" -o "${REPO_ROOT}/docker/rds-ca-bundle.pem"
 
 ensure_ecr_repo "$ECR_REPO_NAME"
 REGISTRY="$(ecr_login)"
-IMAGE="${REGISTRY}/${ECR_REPO_NAME}:${CLAUDE_VERSION}"
+# Tags are IMMUTABLE: to rebuild the same claude version (Dockerfile fix,
+# refreshed CA bundle) set IMAGE_TAG, e.g. IMAGE_TAG=2.1.207-r2. The pushed
+# URI is persisted to deploy.env below, so deploy-gateway.sh picks it up.
+IMAGE="${REGISTRY}/${ECR_REPO_NAME}:${IMAGE_TAG:-$CLAUDE_VERSION}"
 
 # Amazon Linux 2023 base by default; point at your mirror (pinned by digest)
 # for controlled networks: GATEWAY_BASE_IMAGE=<registry>/amazonlinux@sha256:...
