@@ -51,6 +51,7 @@ plaintext-but-SG-scoped; the TLS recipe is documented on the collector task).
 | `client/` | offline release mirror + `Install-ClaudeCode.ps1` (non-admin Windows) |
 | `scripts/` | `deploy.env`-driven runbook; `common.sh` holds the shared helpers |
 | `docs/architecture.md` | review package: 8 SVG diagrams + secrets/SG/encryption inventories |
+| `docs/conops.md` | ATO Concept of Operations: users/roles, operational scenarios, modes, accepted risks (references architecture, doesn't duplicate) |
 | `docs/diagrams/generate.py` | **source of the diagrams** — edit the script, re-run, commit both |
 | `docs/security-review-2026-07.md` | finding-by-finding status; the source of truth for what's done |
 | `docs/test-run-runbook.md` | the deploy runbook |
