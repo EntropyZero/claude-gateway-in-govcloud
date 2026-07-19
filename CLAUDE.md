@@ -54,6 +54,7 @@ plaintext-but-SG-scoped; the TLS recipe is documented on the collector task).
 | `docs/diagrams/generate.py` | **source of the diagrams** — edit the script, re-run, commit both |
 | `docs/security-review-2026-07.md` | finding-by-finding status; the source of truth for what's done |
 | `docs/test-run-runbook.md` | the deploy runbook |
+| `docs/om-runbooks.md` | steady-state O&M runbooks (cert/secret rotation, CA refresh, updates, backup/restore, alarms, teardown) |
 | `docs/networking-request-email.md` | cert/DNS/Zscaler request template |
 | `docs/okta-request-email.md` | Okta OIDC app request template (org server, Web app, groups) |
 | `tests/` + `Makefile` | test suites (`make test`); CI in `.github/workflows/tests.yml` |
