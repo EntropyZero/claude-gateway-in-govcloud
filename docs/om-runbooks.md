@@ -30,9 +30,11 @@ in `CLAUDE.md`.
   the endpoint-SG reachability model.
 - **[NEEDS TEST-RUN CONFIRMATION]** — doc-verified against the scripts and
   templates but **not yet exercised end to end**: gateway steady state + login,
-  secret rotation (DB app credential, Okta, Grafana), Grafana Okta login, the
-  activity archive, alarm firing, restore, and teardown. The asynchronous
-  db-secret rotation event shape is the standing example (`CLAUDE.md`).
+  secret rotation (DB app credential, Okta, Grafana, portal), Grafana Okta
+  login, the activity archive, alarm firing, restore, teardown, and the entire
+  **download portal** (stack `04`: live Okta round-trip with the groups claim,
+  real-size streamed downloads, audit-log wiring). The asynchronous db-secret
+  rotation event shape is the standing example (`CLAUDE.md`).
 
 Treat a whole runbook's tag as the ceiling; individual steps call out anything
 more specific.
@@ -141,11 +143,12 @@ never changes DNS name or listener config.
 
 ---
 
-## 2. Okta client-secret rotation (gateway & Grafana)
+## 2. Okta client-secret rotation (gateway, Grafana & portal)
 
 *Trigger / Frequency:* Okta client secret expiry/rotation policy, suspected
-exposure, or an Okta app re-key. Both the gateway OIDC secret and the Grafana
-SSO secret ride the same `put_secret_and_roll` helper (hidden prompt → mode-600
+exposure, or an Okta app re-key. The gateway OIDC secret, the Grafana SSO
+secret, and (when stack `04` is deployed) the download portal's OIDC secret
+all ride the same `put_secret_and_roll` helper (hidden prompt → mode-600
 `file://` write → forced ECS new-deployment). Status:
 **[NEEDS TEST-RUN CONFIRMATION]** (steady-state login not yet exercised).
 
@@ -157,7 +160,7 @@ SSO secret ride the same `put_secret_and_roll` helper (hidden prompt → mode-60
   secret without removing the old one, so there is no outage between "secret
   written to Secrets Manager" and "old secret retired in Okta".
 - `GATEWAY_STACK_NAME` deployed (gateway secret); `OBS_STACK_NAME` deployed
-  (Grafana secret).
+  (Grafana secret); `PORTAL_STACK_NAME` deployed (portal secret).
 
 *Steps (exact commands):*
 
@@ -181,6 +184,20 @@ SSO secret ride the same `put_secret_and_roll` helper (hidden prompt → mode-60
   If Grafana reuses the gateway's Okta app, this is the *same* secret value as
   `set-okta-secret.sh`.
 
+- **Portal OIDC secret** (when stack `04` is deployed) — reads
+  `PortalOidcSecretArn` + `PortalServiceName` from the portal stack and
+  `ClusterName` from the gateway stack (shared cluster), and rolls the portal
+  service:
+
+  ```bash
+  ./scripts/set-portal-oidc-secret.sh
+  #   prompts hidden — paste the NEW value
+  ```
+
+  If the portal reuses the gateway's Okta app (a documented option —
+  `scripts/deploy.env.example`), this is the *same* secret value as
+  `set-okta-secret.sh`; rotate **both** consumers in the same window.
+
 *Verification:*
 
 - Watch the roll to stable. The `put_secret_and_roll` helper echoes the exact
@@ -189,6 +206,8 @@ SSO secret ride the same `put_secret_and_roll` helper (hidden prompt → mode-60
 - Gateway: `scripts/verify-gateway.sh` step 3/3 — the OAuth endpoints respond
   and issue a device `user_code`.
 - Grafana: sign in at `https://${GATEWAY_FQDN}/grafana` via Okta.
+- Portal: sign in at `https://${GATEWAY_FQDN}/portal` via Okta and reach the
+  Team/Cost-Center page.
 
 *Rollback / recovery:* If login breaks after the roll, re-run the same script
 and paste the **previous** secret value (Okta still honours it during the
@@ -426,8 +445,21 @@ offline image builds are **[VERIFIED-LIVE]**.
    ./scripts/deploy-gateway.sh              # rolls the gateway service onto it
    ```
 
-3. **Distribute the Windows client.** Stage `mirror/2.1.208/claude.exe` +
-   `CHECKSUMS.txt` on the file share and install non-elevated per developer:
+3. **Publish to the download portal** (when stack `04` is deployed) — this is
+   how developers self-serve the new version. Reuses the verified mirror
+   output; uploads `claude.exe`, `manifest.json`, `CHECKSUMS.txt`, and the
+   installer to the portal's CMK-encrypted artifacts bucket, then pins the
+   portal to the new version:
+
+   ```bash
+   ./scripts/publish-portal-release.sh 2.1.208
+   # deploy.env: export PORTAL_RELEASE_VERSION="2.1.208"   (empty = CLAUDE_VERSION)
+   ./scripts/deploy-download-portal.sh      # only needed when the pinned version changes
+   ```
+
+4. **Distribute the Windows client (share/MDM route).** Stage
+   `mirror/2.1.208/claude.exe` + `CHECKSUMS.txt` on the file share and install
+   non-elevated per developer:
 
    ```powershell
    .\client\Install-ClaudeCode.ps1 `
@@ -436,7 +468,7 @@ offline image builds are **[VERIFIED-LIVE]**.
      -GatewayUrl https://<GATEWAY_FQDN> -DisableUpdates
    ```
 
-4. **Forcing the upgrade (optional).** To make the CLI refuse to start below the
+5. **Forcing the upgrade (optional).** To make the CLI refuse to start below the
    new version, bump `-RequiredMinimumVersion` in the managed-settings push
    (writes `requiredMinimumVersion` into `managed-settings.json`; default floor
    is `2.1.195`, the gateway's minimum):
@@ -456,12 +488,18 @@ offline image builds are **[VERIFIED-LIVE]**.
   then `scripts/verify-gateway.sh`.
 - Client: `claude --version` reports the new version; below-floor binaries
   refuse to start when `requiredMinimumVersion` is raised.
+- Portal (if published): download a ZIP from `https://${GATEWAY_FQDN}/portal`
+  and confirm it contains the new `claude.exe` and that the generated
+  `install.cmd` carries the new version's SHA-256; the download appears in the
+  portal audit log group (`/claude/${NAME_PREFIX}/portal-audit`).
 
 *Rollback / recovery:* Redeploy the previous `IMAGE_URI` (old immutable tag
 still in ECR) via `deploy.env` + `deploy-gateway.sh`; re-push managed settings
-with the prior `-RequiredMinimumVersion` if you raised the floor. Keep the prior
-`mirror/<version>/` directory until the new release is confirmed across the
-fleet.
+with the prior `-RequiredMinimumVersion` if you raised the floor. Portal: set
+`PORTAL_RELEASE_VERSION` back to the prior version and re-run
+`deploy-download-portal.sh` (earlier `releases/<version>/` prefixes stay in the
+artifacts bucket). Keep the prior `mirror/<version>/` directory until the new
+release is confirmed across the fleet.
 
 *Notes & pitfalls:*
 
@@ -496,6 +534,8 @@ expects it** (`.claude/rules/scripts.md`).
   (mirrors + pins `COLLECTOR_IMAGE` by digest) → `./scripts/deploy-observability.sh`.
 - **db-admin Lambda:** `DBADMIN_VERSION=<new> ./scripts/build-and-push-dbadmin.sh`
   → `./scripts/deploy-gateway.sh`.
+- **Download portal:** `PORTAL_VERSION=<new> ./scripts/build-and-push-portal.sh`
+  → `./scripts/deploy-download-portal.sh`.
 
 Each build script persists its new URI/tag into `deploy.env`, so the matching
 `deploy-*.sh` picks it up with no copy-paste.
@@ -516,16 +556,17 @@ Each build script persists its new URI/tag into `deploy.env`, so the matching
   while a downstream stack imports it — encryption-at-rest and resource names
   are day-one decisions.
 - **Placeholder `SecretString` resources must not be touched.** `OktaClientSecret`,
-  `GrafanaOidcClientSecret`, and `DbAppUserSecret` hold placeholder/managed
-  values; editing the `SecretString` literal (or the resource Name/Description)
-  re-applies the placeholder and clobbers the live secret. Rotate via the
-  scripts (runbooks 2–3), never the template.
+  `GrafanaOidcClientSecret`, `PortalOidcClientSecret`, and `DbAppUserSecret`
+  hold placeholder/managed values; editing the `SecretString` literal (or the
+  resource Name/Description) re-applies the placeholder and clobbers the live
+  secret. Rotate via the scripts (runbooks 2–3), never the template.
 - **`TaskCpu`/`TaskMemory` must stay a valid Fargate pairing** — the template's
   `Rules` section asserts this; an invalid combo fails deploy with an opaque
   error. Change them via `TASK_CPU`/`TASK_MEMORY` in `deploy.env`.
 
 *Verification:* `aws ecs wait services-stable` for the affected service
-(`$NAME_PREFIX-gateway`, `$NAME_PREFIX-grafana`, or `$NAME_PREFIX-otel`);
+(`$NAME_PREFIX-gateway`, `$NAME_PREFIX-grafana`, `$NAME_PREFIX-otel`, or
+`$NAME_PREFIX-portal`);
 `scripts/verify-gateway.sh` for the gateway; Grafana login + dashboards for
 Grafana. Confirm the CloudFormation events show `UPDATE_COMPLETE` with **no**
 replacement of `LoadBalancer` or `Database`.
@@ -558,6 +599,8 @@ master path.
 | `${NAME_PREFIX}/jwt-secret` (session signing) | 02 | **Not rotated automatically** (`GenerateSecretString` at create) | Manual — see below |
 | `${NAME_PREFIX}/grafana-oidc-client-secret` | 03 | **Manual** | `scripts/set-grafana-oidc-secret.sh` (runbook 2) |
 | `${NAME_PREFIX}/grafana-admin-password` | 03 | **Not rotated** (break-glass; login form disabled) | Regenerate manually (below) |
+| `${NAME_PREFIX}/portal-oidc-client-secret` | 04 | **Manual** | `scripts/set-portal-oidc-secret.sh` (runbook 2) |
+| `${NAME_PREFIX}/portal-session-secret` (cookie signing) | 04 | **Not rotated automatically** (`GenerateSecretString` at create) | Same file-based pattern as the JWT secret (below), then roll `$NAME_PREFIX-portal`; rotation invalidates portal sessions (users just re-login) |
 
 *Gateway JWT secret (manual rotation).* The template describes rotation as
 "prepend new value, roll, remove old." Whether the gateway honours two
@@ -743,10 +786,12 @@ nothing to roll back beyond the underlying runbook's own recovery.
 end of life). Rare and deliberate. Status:
 **[NEEDS TEST-RUN CONFIRMATION]**.
 
-*Order is the reverse of deploy: `03 → 02 → 01`.* There is intentionally **no
-teardown script**; delete stacks explicitly so each destructive step is a
-conscious act. Downstream stacks import upstream exports, so an out-of-order
-delete fails on the export lock.
+*Order is the reverse of deploy: `04 and 03 → 02 → 01`.* The portal (`04`) and
+observability (`03`) stacks both import from `02` and are independent of each
+other — delete them (in either order, or in parallel) before the gateway.
+There is intentionally **no teardown script**; delete stacks explicitly so each
+destructive step is a conscious act. Downstream stacks import upstream exports,
+so an out-of-order delete fails on the export lock.
 
 *Preconditions & the protection layers you must clear first:*
 
@@ -762,6 +807,10 @@ delete fails on the export lock.
 *Steps (exact commands):*
 
 ```bash
+# 4) Download portal (if deployed)
+aws cloudformation delete-stack --region "$AWS_REGION" --stack-name "$PORTAL_STACK_NAME"
+aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-name "$PORTAL_STACK_NAME"
+
 # 3) Observability
 aws cloudformation delete-stack --region "$AWS_REGION" --stack-name "$OBS_STACK_NAME"
 aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-name "$OBS_STACK_NAME"
@@ -784,6 +833,10 @@ aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-nam
 - **Activity-archive bucket** (`ActivityArchiveBucket`, 03) — `Retain`
   (CMK-encrypted).
 - **AMP workspace** (`Workspace`, 03) — `Retain`.
+- **Portal artifacts bucket** (`ArtifactsBucket`, 04) — `Retain`
+  (CMK-encrypted; holds the published release binaries). The portal's audit
+  and task log groups are **deleted** with the stack — export the download
+  audit trail first if retention obligations apply.
 - **RDS instance** (`Database`, 01) — `DeletionPolicy: Snapshot` → a **final
   snapshot** is taken; the running instance is removed. The snapshot persists.
 - Everything else (ALB, ECS services/cluster, secrets, log groups, VPC
@@ -799,6 +852,6 @@ keep them, or clean them up explicitly.
 final RDS snapshot (restore per runbook 8) and the retained buckets.
 
 *Notes & pitfalls:* Deleting a stack that another stack still imports from
-fails — always `03 → 02 → 01`, waiting for each delete to complete before the
-next. Retained resources are **not** free; account for the retained buckets,
-CMK, AMP workspace, and snapshots after teardown.
+fails — always `04 and 03 → 02 → 01`, waiting for each delete to complete
+before the next tier. Retained resources are **not** free; account for the
+retained buckets, CMK, AMP workspace, and snapshots after teardown.

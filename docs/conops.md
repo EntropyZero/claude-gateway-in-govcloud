@@ -93,13 +93,19 @@ At a glance (full detail in `architecture.md` §1–§2):
 - **Usage telemetry** (tokens, cost, model, and stamped user identity) flows
   from the gateway to an **ADOT collector**, into **AMP**, and is visualized in
   a self-hosted **Grafana** that also authenticates through Okta.
+- An optional **installer download portal** — a small ECS Fargate service on
+  the same ALB (path `/portal`) — lets developers self-serve a pre-configured
+  installer ZIP after Okta login and group check, with every download and
+  denial written to a dedicated audit log (`cloudformation/04-download-portal.yaml`;
+  §5.1, §5.4).
 - Everything at rest is encrypted with a single **customer-managed KMS key**
   (the one documented exception is the ALB access-logs bucket, which uses SSE-S3
   because ELB log delivery does not support KMS — `architecture.md` §9).
 
 The deployment is three CloudFormation stacks (`01` database, `02` gateway, `03`
-observability) plus four container images and a `deploy.env`-driven set of
-scripts. Stack dependencies and deploy order are in `architecture.md` §8.
+observability) plus an optional fourth (`04` download portal), five container
+images, and a `deploy.env`-driven set of scripts. Stack dependencies and deploy
+order are in `architecture.md` §8.
 
 ---
 
@@ -126,6 +132,12 @@ holds the RDS master credential.
   `managed:` sections). Reviewers should read gateway authorization today as
   "authenticated Okta user in an approved email domain," with per-group policy
   as an available, unexercised extension.
+- Obtain the installer either from an operator/MDM push or **self-service from
+  the download portal** (when stack `04` is deployed): they browse to
+  `/portal` on the gateway FQDN, authenticate through Okta, pick their **Team**
+  and **Cost Center** from configured dropdowns, and receive a single ZIP whose
+  generated `install.cmd` bakes those choices in (§5.1;
+  `cloudformation/04-download-portal.yaml`; `docker/portal/app.py`).
 
 ### 3.2 Platform operators
 
@@ -145,7 +157,8 @@ holds the RDS master credential.
 ### 3.3 Security and audit consumers
 
 - Read the **DB audit trail** (pgaudit → CloudWatch), **ALB access logs** (S3),
-  and, when enabled, the **AI activity stream** (see §5.4).
+  the **installer download-audit log** (when the portal is deployed — see
+  §5.4), and, when enabled, the **AI activity stream** (see §5.4).
 - The activity stream is treated as highly sensitive (bash commands, tool
   inputs, file paths per user): it is **opt-in**, IAM-only, CMK-encrypted, and
   flagged for SIEM subscription (`.claude/rules/security.md`;
@@ -169,6 +182,19 @@ Admin, and a user in no mapped group is **denied** (`architecture.md` §3;
 `cloudformation/03-observability.yaml`; `docs/okta-request-email.md`). The local
 login form is disabled; the bootstrap `admin` account is break-glass only,
 reachable only by redeploying with `GRAFANA_DISABLE_LOGIN_FORM=false`.
+
+### 3.6 Download-portal access group
+
+The portal (optional stack `04`) authorizes on a **single Okta group**: the
+`AccessGroup` parameter (`ACCESS_GROUP` in `deploy.env`, placeholder default
+`claude-gateway-users`). Members may download the installer; everyone else is
+denied — and the denial is audited (§5.4). The parameter is named generically
+so the **same group can gate the gateway** once its commented-out group policy
+(§3.1) is enabled, giving one org-managed membership list for both surfaces
+(`cloudformation/04-download-portal.yaml`; `scripts/deploy.env.example`).
+Unlike the gateway and Grafana, the portal's group check is enforced today,
+which makes the **Okta groups-claim configuration an operating prerequisite**
+for the portal (§8.2).
 
 ---
 
@@ -219,8 +245,24 @@ flow through the fielded system and cites the file that implements it.
    into an internal share; the mirror **fails closed** on integrity — it refuses
    to proceed without GPG verification unless `ALLOW_UNVERIFIED_MANIFEST=1` is
    set explicitly (`client/mirror-claude-release.sh`;
-   `.claude/rules/security.md`). The developer (or an MDM push) runs
-   `Install-ClaudeCode.ps1`, which installs the binary to the per-user profile
+   `.claude/rules/security.md`). The developer obtains the installer one of two
+   ways:
+   - **Self-service (portal, when stack `04` is deployed).** The developer
+     browses to `https://<gateway-fqdn>/portal`, signs in through Okta
+     (authorization-code flow with PKCE, enforced `AccessGroup` membership —
+     §3.6), selects **Team** and **Cost Center**, and downloads a single ZIP:
+     the verified `claude.exe`, `Install-ClaudeCode.ps1`, and a generated
+     `install.cmd` that invokes the installer with `-GatewayUrl`, `-Sha256`,
+     `-Team`, `-CostCenter` (and update lockdown) already baked in — one
+     double-click, no parameters to get wrong. The ZIP contents come from the
+     portal's CMK-encrypted artifacts bucket, published from the verified
+     mirror output by `scripts/publish-portal-release.sh` — the portal never
+     fetches from the internet (`docker/portal/app.py`;
+     `cloudformation/04-download-portal.yaml`).
+   - **Operator/MDM push.** The developer (or an MDM push) runs
+     `Install-ClaudeCode.ps1` directly from the internal share.
+
+   Either way, the installer places the binary in the per-user profile
    **without admin rights** and writes **managed settings** that point the CLI
    at the gateway and lock down auto-updates (`DISABLE_UPDATES=1`,
    `DISABLE_AUTOUPDATER=1`) (`client/Install-ClaudeCode.ps1`).
@@ -277,6 +319,14 @@ Three independent audit surfaces, at increasing sensitivity (`architecture.md`
 - **ALB access logs.** Source connector IPs, URIs, and timings land in an S3
   bucket (SSE-S3, IAM-only, lifecycle expiry) (`cloudformation/02-gateway.yaml`;
   `architecture.md` §9 note).
+- **Installer download audit (portal, when deployed).** Every portal download
+  **and every denial** writes one JSON record — timestamp, verified Okta
+  identity (`user_email`, `user_groups`), selected team and cost center,
+  release version, binary SHA-256, ALB-attested source IP, outcome — to a
+  **dedicated CMK-encrypted CloudWatch log group** (retention
+  `PORTAL_AUDIT_RETENTION_DAYS`, default 365; flag for SIEM). It is
+  deliberately separate from, and never routed into, the activity stream below
+  (`docker/portal/app.py`; `cloudformation/04-download-portal.yaml`).
 - **AI activity stream (opt-in, highly sensitive).** When
   `FORWARD_ACTIVITY_LOGS=true`, bash commands, tool inputs, and file paths per
   user are streamed to a CMK-encrypted CloudWatch window and archived to S3
@@ -302,11 +352,21 @@ Three independent audit surfaces, at increasing sensitivity (`architecture.md`
   (`docker/db-admin/app.py`; `architecture.md` §4). The previous credential
   stays valid until the next rotation. The first rotation fires at stack
   creation as an automatic end-to-end validation (asynchronous — see §8).
-- **Manual secret rotation.** Okta client secrets (gateway and Grafana) are set
-  out-of-band via `set-okta-secret.sh` / `set-grafana-oidc-secret.sh`, which
-  prompt hidden, write via mode-600 `file://`, and roll the consuming service
-  (`scripts/common.sh` `put_secret_and_roll`). The JWT session-signing secret
-  has a documented prepend → roll → remove runbook (`architecture.md` §6).
+- **Manual secret rotation.** Okta client secrets (gateway, Grafana, and — when
+  deployed — the download portal) are set out-of-band via
+  `set-okta-secret.sh` / `set-grafana-oidc-secret.sh` /
+  `set-portal-oidc-secret.sh`, which prompt hidden, write via mode-600
+  `file://`, and roll the consuming service (`scripts/common.sh`
+  `put_secret_and_roll`). The JWT session-signing secret has a documented
+  prepend → roll → remove runbook (`architecture.md` §6).
+- **Portal operations (optional stack `04`).** Deployed after `02` (independent
+  of `03`): build/push the portal image (`build-and-push-portal.sh`), deploy
+  `deploy-download-portal.sh`, set the portal's Okta secret, then publish the
+  pinned release to the artifacts bucket with
+  `publish-portal-release.sh <version>` — which reuses the GPG-verified mirror
+  output. Serving a **new client version** to developers is that one publish
+  command plus updating `PORTAL_RELEASE_VERSION` (`docs/om-runbooks.md` §5;
+  `docs/test-run-runbook.md`).
 
 ---
 
@@ -335,6 +395,10 @@ from Bedrock, telemetry flows to Grafana, and audit surfaces are recording.
 - **Collector redeploy → brief telemetry gap.** The collector runs ≥1 task
   (default 2, `CollectorDesiredCount`) specifically to avoid a telemetry
   blackout on redeploy (`security-review-2026-07.md` D6).
+- **Download portal down → no self-service installs, gateway unaffected.** The
+  portal is an optional, separate stack behind its own `/portal` listener rule;
+  its failure (or absence) does not touch the inference path. Installers remain
+  available from the internal share via the operator/MDM route (§5.1).
 
 ### 6.3 Maintenance
 
@@ -354,8 +418,7 @@ from Bedrock, telemetry flows to Grafana, and audit surfaces are recording.
   (`architecture.md` §8; `.claude/rules/cloudformation.md`).
 
 Detailed operations-and-maintenance procedures are collected in the O&M runbooks
-document, `docs/om-runbooks.md` (authored as a parallel deliverable; forward
-reference).
+document, `docs/om-runbooks.md`.
 
 ---
 
@@ -426,8 +489,16 @@ operate; templates for the requests exist in the repo:
   SSL-inspection exemption for the Okta issuer FQDN
   (`docs/networking-request-email.md` §3).
 - **Okta OIDC application** — a confidential Web app on the org authorization
-  server, both redirect URIs registered, groups returned, and the admin group
+  server, all redirect URIs registered (gateway, Grafana, and — if the portal
+  is deployed — `/portal/oauth/callback`), groups returned, and the admin group
   provisioned (`docs/okta-request-email.md`).
+- **Okta groups claim configured — hard prerequisite for the portal.** The
+  `groups` *scope* alone yields group membership in **neither** the ID token
+  nor userinfo on an org authorization server; an Okta admin must configure a
+  groups **claim**, or the portal denies every user. The gateway and Grafana
+  tolerate this today (email-domain gating; Grafana needs groups too but is
+  optional); the portal does not (`docs/okta-request-email.md`;
+  `docs/om-runbooks.md`).
 
 ### 8.3 Verification status — verified on paper vs. verified live
 
@@ -443,7 +514,10 @@ following is stated honestly for reviewers:
   which the gateway needs for OIDC discovery at boot (CLAUDE.md Status;
   `docs/networking-request-email.md`).
 - **Still unexercised** and therefore not yet claimed as fielded: gateway steady
-  state and end-to-end developer login, Grafana Okta login, secret rotation, and
-  the activity archive (CLAUDE.md Status; `security-review-2026-07.md` "What
-  remains"). The system is not production-ready until the runbook's validation
-  checklist (`docs/test-run-runbook.md` §9) is green.
+  state and end-to-end developer login, Grafana Okta login, secret rotation, the
+  activity archive, and the **download portal end-to-end** (live Okta
+  round-trip with the groups claim, a real ~100 MB streamed download through
+  the ALB, listener-rule and audit-log wiring) (CLAUDE.md Status;
+  `security-review-2026-07.md` "What remains"). The system is not
+  production-ready until the runbook's validation checklist
+  (`docs/test-run-runbook.md` §9) is green.
