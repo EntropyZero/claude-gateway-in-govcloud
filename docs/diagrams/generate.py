@@ -117,7 +117,7 @@ class SVG:
 # 1. System architecture & trust boundaries
 # =====================================================================
 def d1():
-    s = SVG(1500, 1010, "System architecture & trust boundaries",
+    s = SVG(1500, 950, "System architecture & trust boundaries",
             "Claude apps gateway in AWS GovCloud us-gov-west-1 — every arrow is TLS unless flagged")
 
     s.zone(40, 96, 340, 216, "Managed Windows fleet", BLUE, BLUE_T, "Zscaler ZPA")
@@ -139,7 +139,7 @@ def d1():
            ["HTTPS_PROXY_URL — only when the", "landing zone mandates it"],
            border=AMBER, dashed=True)
 
-    s.zone(432, 96, 640, 700, "AWS GovCloud VPC", GREEN, GREEN_T,
+    s.zone(432, 96, 640, 780, "AWS GovCloud VPC", GREEN, GREEN_T,
            "spoke · private subnets only · no IGW/NAT required")
     s.node(470, 150, 250, 76, "Internal ALB  :443",
            ["enterprise-CA cert (ACM import)", "IPv4-only · deletion-protected",
@@ -158,15 +158,19 @@ def d1():
     s.node(790, 420, 250, 76, "db-admin Lambdas",
            ["bootstrap app DB users +", "rotate secret & roll service"],
            border=GREEN)
-    s.node(470, 566, 570, 96, "Interface VPC endpoints — each with a resource policy",
+    s.node(470, 540, 250, 76, "Download portal ×2",
+           ["Okta OIDC + group authz (PKCE)", "TLS listener :8080, per-task cert"],
+           border=GREEN)
+    s.node(470, 646, 570, 90, "Interface VPC endpoints — each with a resource policy",
            ["bedrock-runtime (2 approved models only) · ecr.api · ecr.dkr · logs",
             "secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint"],
            border=GREEN)
-    s.node(470, 692, 570, 76, "KMS CMK  alias/<prefix>",
-           ["one customer-managed key: RDS, secrets, log groups,",
-            "activity archive, AMP, ECR (rotation enabled)"], border=GREEN)
+    s.node(470, 760, 570, 76, "KMS CMK  alias/<prefix>",
+           ["one customer-managed key: RDS, secrets, log groups, activity",
+            "archive, AMP, ECR, portal artifacts + audit (rotation enabled)"],
+           border=GREEN)
 
-    s.zone(1124, 96, 336, 564, "AWS regional services", VIOLET, VIOLET_T,
+    s.zone(1124, 96, 336, 624, "AWS regional services", VIOLET, VIOLET_T,
            "reached via endpoints / AWS backbone")
     s.node(1148, 152, 288, 56, "Managed Prometheus (AMP)",
            ["usage/cost metrics · CMK"], border=VIOLET)
@@ -180,10 +184,14 @@ def d1():
            ["SSE-KMS · 731-day retention"], border=VIOLET, cyl=True)
     s.node(1148, 534, 288, 56, "S3: ALB access logs",
            ["SSE-S3 — ELB delivery limitation"], border=VIOLET, cyl=True)
+    s.node(1148, 600, 288, 50, "S3: portal artifacts (04)",
+           ["SSE-KMS · installers + manifest"], border=VIOLET, cyl=True)
+    s.node(1148, 662, 288, 50, "CloudWatch: portal-audit (04)",
+           ["CMK · 365 d · flag for SIEM"], border=VIOLET)
 
-    s.zone(1124, 700, 336, 120, "External SaaS — the only public dependency",
+    s.zone(1124, 742, 336, 120, "External SaaS — the only public dependency",
            RED, RED_T)
-    s.node(1148, 744, 288, 58, "Okta",
+    s.node(1148, 786, 288, 58, "Okta",
            ["authorization server (org or custom)", "returns groups in token"], border=RED)
 
     # ---- flows
@@ -218,18 +226,27 @@ def d1():
     s.arrow([(790, 470), (720, 470)])
     s.arrow([(915, 496), (915, 520), (1136, 520), (1136, 338), (1148, 338)])
     s.chip(1024, 520, "manage app secret", VIOLET)
-    # gateway -> Okta (down the VPC's clear left margin, out the bottom)
-    s.arrow([(470, 330), (452, 330), (452, 830), (1180, 830), (1180, 802)])
-    s.chip(800, 830, "OIDC login + token exchange (TGW egress or proxy)", RED)
+    # ALB -> portal (:8080 re-encrypt), down the inter-column gap into portal's edge
+    s.arrow([(720, 190), (755, 190), (755, 578), (720, 578)])
+    s.chip(758, 512, ":8080 · /portal", GREEN)
+    # portal -> S3 artifacts and -> download-audit (right column free band + gap)
+    s.arrow([(720, 555), (1092, 555), (1092, 622), (1148, 622)])
+    s.chip(905, 543, "installers · S3 gw endpoint", VIOLET)
+    s.arrow([(720, 600), (1080, 600), (1080, 684), (1148, 684)])
+    s.chip(900, 588, "download-audit (CMK)", VIOLET)
+    # gateway + portal -> Okta (down the VPC's clear left margin, out the bottom)
+    s.arrow([(470, 330), (452, 330), (452, 858), (1200, 858), (1200, 844)])
+    s.arrow([(470, 578), (452, 578)])           # portal joins the same OIDC riser
+    s.chip(800, 858, "gateway + portal — OIDC login + token exchange (TGW egress or proxy)", RED)
     # Grafana -> Okta
-    s.arrow([(940, 226), (940, 274), (1096, 274), (1096, 760), (1148, 760)])
-    s.chip(1096, 690, "OAuth code exchange", RED)
+    s.arrow([(940, 226), (940, 274), (1096, 274), (1096, 800), (1148, 800)])
+    s.chip(1090, 732, "OAuth code exchange", RED)
     # optional proxy path
-    s.arrow([(356, 587), (410, 587), (410, 862), (1240, 862), (1240, 820)],
+    s.arrow([(356, 587), (410, 587), (410, 878), (1240, 878), (1240, 844)],
             dashed=True)
-    s.chip(700, 862, "proxy path when mandated", AMBER)
+    s.chip(700, 878, "proxy path when mandated", AMBER)
 
-    s.text(36, 980, "Boundary facts: no public ingress (internal ALB behind ZPA); "
+    s.text(36, 916, "Boundary facts: no public ingress (internal ALB behind ZPA); "
            "no public egress from the inference path (Bedrock endpoint, 2-model policy); "
            "clients never contact Anthropic (mirrored, verified binaries; updates disabled).",
            size=11.5, color=SLATE)
@@ -272,13 +289,41 @@ def d2():
         (10, "Grafana task", GREEN,
          "TLS :443 — OAuth code exchange (same egress path)",
          "Okta (public SaaS)", RED, False),
+        # ---- download portal (stack 04) — appended so hops 1–10 keep their numbers
+        (11, "Browser (laptop, via ZPA)", BLUE,
+         "TLS :443 — enterprise cert · GET https://<fqdn>/portal (path rule, pri 20)",
+         "Internal ALB", GREEN, False),
+        (12, "Internal ALB", GREEN,
+         "TLS :8080 — ALB re-encrypt, per-task self-signed cert",
+         "Portal task", GREEN, False),
+        (13, "Portal task", GREEN,
+         "TLS :443 — OIDC auth-code + PKCE + JWKS (TGW central egress or proxy)",
+         "Okta (public SaaS)", RED, False),
+        (14, "Portal task", GREEN,
+         "TLS :443 + SigV4 — installer read via S3 gateway endpoint",
+         "S3 artifacts (CMK)", VIOLET, False),
+        (15, "Portal task", GREEN,
+         "TLS :443 + SigV4 — download-audit stream via logs endpoint",
+         "CloudWatch (portal-audit)", VIOLET, False),
     ]
     top, step, rh = 120, 50, 38
-    s = SVG(1400, top + step * len(hops) + 76,
+    gap = 42          # extra space opening the download-portal section
+    n_before = 10     # rows 1–10 precede the portal group
+    s = SVG(1400, top + step * len(hops) + gap + 80,
             "Network flows, ports & TLS state — every hop in the system",
-            "one row per flow; row 6 is the only unencrypted hop")
+            "one row per flow; row 6 is the only unencrypted hop · rows 11–15 are "
+            "the download portal (stack 04)")
     for i, (n, src, sc, proto, dst, dc, red) in enumerate(hops):
-        y = top + i * step
+        extra = gap if i >= n_before else 0
+        y = top + i * step + extra
+        if i == n_before:
+            dy = y - 26
+            s.add(f'<line x1="36" y1="{dy}" x2="1364" y2="{dy}" stroke="{CHIP_BORDER}" '
+                  f'stroke-width="1.2" stroke-dasharray="6 5"/>')
+            s.text(64, dy - 8, "DOWNLOAD PORTAL — stack 04 · path rule /portal on "
+                   "the shared ALB · deployed after 02, independent of 03",
+                   size=11, color=SLATE_LT, weight="bold",
+                   style='letter-spacing="0.04em"')
         if red:
             s.add(f'<rect x="36" y="{y - 6}" width="1328" height="{rh + 12}" '
                   f'rx="8" fill="{RED_T}"/>')
@@ -294,12 +339,12 @@ def d2():
               f'fill="#FFFFFF" stroke="{dc}" stroke-width="1.3"/>')
         s.text(1231, y + rh / 2 + 4, dst, size=11.5, color=INK, weight="bold",
                anchor="middle")
-    fy = top + step * len(hops) + 30
+    fy = top + step * len(hops) + gap + 36
     s.text(48, fy, "TLS termination points: developer→ALB terminates on the "
            "enterprise cert (developers pin its fingerprint); ALB→task hops "
            "terminate on per-task ephemeral certs (ALBs do not validate "
            "target certs; keys never leave the task).", size=11.5, color=SLATE)
-    s.text(48, fy + 20, "All AWS-service hops (5, 7, 8) also carry SigV4 "
+    s.text(48, fy + 20, "All AWS-service hops (5, 7, 8, 14, 15) also carry SigV4 "
            "request signing on top of TLS. DNS to the VPC resolver is exempt "
            "from security-group evaluation (AWS platform behavior).",
            size=11.5, color=SLATE_LT)
@@ -502,6 +547,9 @@ def d6():
     s.node(1290, 150, 170, 90, "02 re-run",
            ["picks up", "OBSERVABILITY_OTLP_URL,", "starts forwarding"],
            border=GREEN)
+    s.node(980, 330, 230, 120, "04-download-portal",
+           ["Okta OIDC + group authz", "S3 artifacts (CMK) · audit log",
+            "ALB /portal rule · own SG"], border=GREEN)
 
     s.arrow([(248, 195), (318, 195)])
     s.arrow([(433, 260), (433, 330)])
@@ -530,11 +578,19 @@ def d6():
            anchor="middle")
     s.add(f'<path d="M1250 272 V 208" stroke="{CHIP_BORDER}" stroke-width="1" '
           f'stroke-dasharray="2 3" fill="none"/>')
+    # 02 -> 04 (deploy after 02, independent of 03; imports 02's SGs/listener/cluster).
+    # Start right-of-centre on 02's bottom edge to avoid the image-builds->02 line at x760.
+    s.arrow([(830, 260), (830, 395), (980, 395)])
+    s.text(762, 414, "02 exports to 04:", size=10.5, color=SLATE)
+    s.text(762, 429, "alb-sg · endpoint-sg", size=10.5, color=SLATE)
+    s.text(762, 444, "https-listener · cluster-arn", size=10.5, color=SLATE)
+    s.text(1095, 472, "deploy after 02 · independent of 03",
+           size=10, color=SLATE_LT, anchor="middle")
 
     s.text(48, 500, "Locks a reviewer should know: the RDS storage CMK is fixed at creation "
-           "(plus 01↔02 export locks) — a day-one decision; 03 must be deleted before "
-           "02 replacement-updates; the ALB and Database carry stack policies denying "
-           "Update:Replace / Update:Delete.", size=11.5, color=SLATE)
+           "(plus 01↔02 export locks) — a day-one decision; 03 and 04 must be deleted "
+           "before 02 replacement-updates; the ALB and Database carry stack policies "
+           "denying Update:Replace / Update:Delete.", size=11.5, color=SLATE)
     s.text(48, 522, "Full teardown/update ordering: README — Teardown & update order.",
            size=11.5, color=SLATE_LT)
     s.write("06-stack-dependencies-deploy-order.svg")
@@ -644,6 +700,9 @@ def d1b():
            border=GREEN)
     s.node(400, 440, 260, 70, "Grafana",
            ["Okta SSO · usage dashboard"], border=GREEN)
+    s.node(76, 440, 260, 80, "Download portal ×2",
+           ["reached via the internal ALB", "streams installer ZIP at /portal"],
+           border=GREEN)
     s.node(76, 560, 584, 80, "Interface VPC endpoints — each with a resource policy",
            ["bedrock-runtime (2 approved models only) · ecr.api · ecr.dkr · logs",
             "secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint"],
@@ -669,6 +728,10 @@ def d1b():
            ["one customer-managed key,", "rotation enabled — encrypts RDS,",
             "secrets, log groups, activity", "archive, AMP, ECR"],
            border=VIOLET)
+    s.node(1150, 358, 286, 56, "S3: portal artifacts (04)",
+           ["SSE-KMS · installers + manifest"], border=VIOLET, cyl=True)
+    s.node(1150, 447, 286, 56, "CloudWatch: portal-audit (04)",
+           ["CMK · 365 d · flag for SIEM"], border=VIOLET)
 
     # inference (corridor above both zones, entering Bedrock's top edge
     # to the right of the zone labels)
@@ -694,6 +757,13 @@ def d1b():
     s.arrow([(400, 345), (336, 345)])
     s.arrow([(660, 330), (750, 330), (750, 518), (810, 518)])
     s.chip(750, 540, "manage app secret", VIOLET)
+    # portal -> S3 artifacts and -> download-audit (right column, via the free
+    # bottom band + the zone right margin; risers stay left of the db-admin->
+    # secrets line at x750, and land in inter-box gap corridors on the right)
+    s.arrow([(200, 520), (200, 528), (690, 528), (690, 386), (1150, 386)])
+    s.chip(945, 386, "installers · S3 gw endpoint", VIOLET)
+    s.arrow([(244, 520), (244, 542), (712, 542), (712, 475), (1150, 475)])
+    s.chip(945, 475, "download-audit (CMK)", VIOLET)
 
     s.text(36, 726, "The gateway→collector OTLP hop is the only unencrypted "
            "flow (SG-to-SG scoped — accepted risk §10). Okta egress and the "
@@ -701,6 +771,10 @@ def d1b():
     s.text(36, 748, "Secrets are injected into tasks at launch by ECS "
            "(execution roles hold GetSecretValue + kms:Decrypt on exactly "
            "their own secrets — see §6).", size=11.5, color=SLATE_LT)
+    s.text(36, 770, "Download portal (04): serves the installer ZIP from the "
+           "CMK-encrypted artifacts bucket via the S3 gateway endpoint and writes a "
+           "download-audit stream; its Okta OIDC egress is on the access view.",
+           size=11.5, color=SLATE_LT)
     s.write("01b-workloads-data-services.svg")
 
 
@@ -708,7 +782,7 @@ def d1b():
 # 7. Security-group topology map
 # =====================================================================
 def d7():
-    s = SVG(1560, 1010, "7. Security groups - who may talk to whom",
+    s = SVG(1780, 1010, "7. Security groups - who may talk to whom",
             "Every arrow is an explicit SG rule pair (egress on the source + "
             "ingress on the destination). Everything else is denied.")
 
@@ -716,7 +790,7 @@ def d7():
     s.node(66, 150, 240, 84, "Developer laptops",
            ["ZPA / VPN networks", "ClientIngressCidr"], border=AMBER)
 
-    s.zone(36, 296, 1120, 660, "Workload VPC - private subnets", GREEN, GREEN_T)
+    s.zone(36, 296, 1330, 660, "Workload VPC - private subnets", GREEN, GREEN_T)
 
     s.node(96, 356, 250, 92, "Internal ALB", ["SG: alb", "TLS listener :443"],
            border=GREEN)
@@ -726,29 +800,31 @@ def d7():
            ["SG: grafana", "listener :3000 (TLS)"], border=GREEN)
     s.node(740, 520, 230, 100, "OTLP collector x2",
            ["SG: collector", "listeners :4317-4318"], border=GREEN)
+    s.node(1050, 520, 250, 100, "Download portal x2",
+           ["SG: portal", "listener :8080 (TLS)"], border=GREEN)
     s.node(140, 700, 206, 96, "db-admin Lambdas",
            ["SGs: db-admin", "+ db-client"], border=GREEN)
     s.node(430, 716, 220, 84, "RDS PostgreSQL",
            ["SG: db - IN 5432", "only from db-client"], border=GREEN, cyl=True)
-    s.node(975, 700, 170, 96, "Admin / build EC2",
+    s.node(1050, 700, 180, 96, "Admin / build EC2",
            ["SG: admin (param)", "runs deploy scripts"], border=GREEN,
            dashed=True, tsize=12)
 
     s.node(96, 862, 560, 80, "Interface VPC endpoints (shared SG: endpoint)",
            ["bedrock-runtime | ecr.api | ecr.dkr | logs | secretsmanager | ecs",
-            "IN 443 only from: svc, db-admin, grafana, collector, admin host"],
+            "IN 443 from: svc, db-admin, grafana, collector, portal, admin host"],
            border=VIOLET)
     s.node(740, 862, 230, 80, "AMP endpoint",
            ["SG: amp-endpoint",
             "IN 443: collector + grafana"], border=VIOLET)
 
-    s.zone(1196, 96, 328, 400, "External / regional", RED, RED_T)
-    s.node(1226, 150, 268, 78, "Okta issuer",
+    s.zone(1426, 96, 332, 400, "External / regional", RED, RED_T)
+    s.node(1456, 150, 272, 78, "Okta issuer",
            ["via central egress + Zscaler", "(ALLOW + no-inspect required)"],
            border=RED)
-    s.node(1226, 268, 268, 66, "AWS regional APIs",
+    s.node(1456, 268, 272, 66, "AWS regional APIs",
            ["behind the endpoints below"], border=VIOLET)
-    s.node(1226, 372, 268, 96, "Amazon S3 (gateway endpoint)",
+    s.node(1456, 372, 272, 96, "Amazon S3 (gateway endpoint)",
            ["route-table entry, no SG;", "policy: ECR layers, CFN responses,",
             "this account's buckets"], border=VIOLET, dashed=True)
 
@@ -759,12 +835,19 @@ def d7():
     s.chip(221, 487, "8080  alb->svc", color=GREEN)
     s.arrow([(346, 402), (545, 402), (545, 520)], color=GREEN)
     s.chip(545, 442, "3000  alb->grafana (03)", color=GREEN)
+    # alb -> portal (8080): long corridor above row B, into the portal's top
+    s.arrow([(346, 372), (1140, 372), (1140, 520)], color=GREEN)
+    s.chip(560, 372, "8080  alb->portal (04)", color=GREEN)
 
-    # -- corridors above row B: Okta egress (y470) and OTLP forward (y498)
-    s.arrow([(300, 520), (300, 470), (1090, 470), (1090, 200), (1226, 200)],
+    # -- corridors above row B: Okta egress (y470, riser in collector/portal gap)
+    # and OTLP forward (y498)
+    s.arrow([(300, 520), (300, 470), (1010, 470), (1010, 200), (1456, 200)],
             color=RED)
     s.arrow([(560, 520), (560, 470)], color=RED, dashed=True)
-    s.chip(900, 458, "443  gateway + grafana -> Okta (OIDC/OAuth)", color=RED)
+    s.chip(660, 458, "443  gateway + grafana -> Okta (OIDC/OAuth)", color=RED)
+    # portal -> Okta (its own riser up the right margin into Okta's left edge)
+    s.arrow([(1240, 520), (1240, 216), (1456, 216)], color=RED)
+    s.chip(1240, 360, "443  portal -> Okta", color=RED)
     s.arrow([(280, 520), (280, 498), (795, 498), (795, 520)], color=GREEN)
     s.chip(560, 498, "4317-4318  svc->collector (03)", color=GREEN)
 
@@ -779,8 +862,12 @@ def d7():
     s.arrow([(460, 620), (460, 668), (400, 668), (400, 862)], color=VIOLET)
     s.arrow([(770, 620), (770, 650), (690, 650), (690, 830), (600, 830),
              (600, 862)], color=VIOLET)
-    s.arrow([(1060, 796), (1060, 815), (615, 815), (615, 862)], color=VIOLET,
+    s.arrow([(1060, 796), (1060, 815), (655, 815), (655, 862)], color=VIOLET,
             dashed=True)
+    # portal -> shared endpoints (conditional: only when 02 made shared endpoints)
+    s.arrow([(1075, 620), (1075, 655), (1010, 655), (1010, 840), (540, 840),
+             (540, 862)], color=VIOLET, dashed=True)
+    s.chip(790, 840, "443  portal->endpoints (when shared)", color=VIOLET)
 
     # -- 443 to the AMP endpoint
     s.arrow([(855, 620), (855, 862)], color=VIOLET)
@@ -789,8 +876,8 @@ def d7():
 
     s.text(36, 986, "Not shown: every SG's default egress is a 127.0.0.1/32 "
            "placeholder (deny) unless a rule above exists; endpoint ENIs and "
-           "RDS initiate nothing. Dashed = optional/conditional "
-           "(admin-host param, AMP endpoint toggle, Grafana's Okta hop).",
+           "RDS initiate nothing. Dashed = optional/conditional (admin-host "
+           "param, AMP endpoint toggle, portal's shared-endpoint ingress).",
            size=11, color=SLATE_LT)
     s.write("07-security-groups-map.svg")
 
@@ -799,7 +886,7 @@ def d7():
 # 8. Security-group rule inventory
 # =====================================================================
 def d8():
-    s = SVG(1560, 900, "8. Security-group rule inventory",
+    s = SVG(1560, 940, "8. Security-group rule inventory",
             "Every rule in the deployment, by group. IN = ingress, OUT = "
             "egress. Groups not listed here do not exist.")
 
@@ -817,7 +904,8 @@ def d8():
     card(c1, 96, "alb  (internal ALB)", "02", [
         "IN   443   from ClientIngressCidr (developer networks)",
         "OUT  8080  to svc (forward + health checks)",
-        "OUT  3000  to grafana  (rule added by 03)"])
+        "OUT  3000  to grafana  (rule added by 03)",
+        "OUT  8080  to portal   (rule added by 04)"])
     card(c1, 268, "svc  (gateway tasks)", "02", [
         "IN   8080       from alb",
         "OUT  443        0.0.0.0/0 (Okta, AWS APIs via endpoints/egress)",
@@ -831,8 +919,13 @@ def d8():
     card(c1, 606, "endpoint  (shared, all 02 interface endpoints)", "02", [
         "IN   443  from svc, db-admin",
         "IN   443  from collector, grafana   (rules added by 03)",
+        "IN   443  from portal               (rule added by 04, when shared)",
         "IN   443  from AdminClientSecurityGroupId (optional param)",
         "OUT  none (endpoint ENIs never initiate)"])
+    card(c1, 760, "portal  (download portal task)", "04", [
+        "IN   8080  from alb (path rule /portal, /portal/*)",
+        "OUT  443   0.0.0.0/0 (Okta, S3, CloudWatch, ECR, Secrets Mgr)",
+        "OUT  proxy port 0.0.0.0/0 (only when HttpsProxyUrl set)"])
 
     card(c2, 96, "db-client  (attach to reach the DB)", "01", [
         "IN   none",
@@ -852,21 +945,24 @@ def d8():
         "IN   443  from grafana (queries)",
         "OUT  none"])
 
-    s.node(c3, 96, 470, 250, "Cross-stack rule writers", [], border=SLATE)
+    s.node(c3, 96, 470, 300, "Cross-stack rule writers", [], border=SLATE)
     for i, ln in enumerate([
             "03 adds rules to SGs it imports from 02:",
             "  - AlbToGrafanaEgress:       alb  OUT 3000 -> grafana",
             "  - GatewayToCollectorEgress: svc  OUT 4317-18 -> collector",
             "  - CollectorToEndpointsIngress: endpoint IN 443",
             "  - GrafanaToEndpointsIngress:   endpoint IN 443",
+            "04 adds rules to SGs it imports from 02:",
+            "  - AlbToPortalEgress:        alb  OUT 8080 -> portal",
+            "  - PortalToEndpointsIngress: endpoint IN 443 (when shared)",
             "02 param AdminClientSecurityGroupId:",
             "  - AdminToEndpointsIngress:     endpoint IN 443",
             "",
-            "Deploy order matters: the imported SGs must exist",
-            "(02 before 03), and CREATE_SUPPORTING_ENDPOINTS",
-            "must match between the two deploys."]):
+            "Deploy order matters: imported SGs must exist first",
+            "(02 before 03/04); CREATE_SUPPORTING_ENDPOINTS",
+            "must match across the deploys."]):
         s.text(c3 + 18, 130 + i * 17, ln, size=10.8, color=SLATE)
-    s.node(c3, 376, 470, 170, "Reading the map", [], border=SLATE)
+    s.node(c3, 430, 470, 170, "Reading the map", [], border=SLATE)
     for i, ln in enumerate([
             "A connection works only when BOTH ends agree:",
             "an egress rule on the source SG and an ingress",
@@ -874,9 +970,9 @@ def d8():
             "default-deny; the 127.0.0.1/32 egress entries in",
             "the templates are deliberate no-op placeholders",
             "that suppress the default allow-all egress."]):
-        s.text(c3 + 18, 410 + i * 17, ln, size=10.8, color=SLATE)
+        s.text(c3 + 18, 464 + i * 17, ln, size=10.8, color=SLATE)
 
-    s.text(36, 876, "Accepted risk (SSP-scoped): the gateway->collector OTLP "
+    s.text(36, 908, "Accepted risk (SSP-scoped): the gateway->collector OTLP "
            "hop (4317-4318) is plaintext, compensated by SG-to-SG scoping - "
            "only gateway tasks can reach the collector ports. See "
            "security-review C2.", size=11, color=SLATE_LT)

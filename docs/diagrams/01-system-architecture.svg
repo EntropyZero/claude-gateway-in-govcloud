@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1010" viewBox="0 0 1500 1010">
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="950" viewBox="0 0 1500 950">
 <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker></defs>
-<rect x="0.5" y="0.5" width="1499" height="1009" rx="14" fill="#FFFFFF" stroke="#E2E8F0"/>
+<rect x="0.5" y="0.5" width="1499" height="949" rx="14" fill="#FFFFFF" stroke="#E2E8F0"/>
 <text x="36" y="46" font-family="Helvetica, Arial, sans-serif" font-size="20" fill="#0F172A" font-weight="bold" text-anchor="start" >System architecture &amp; trust boundaries</text>
 <text x="36" y="68" font-family="Helvetica, Arial, sans-serif" font-size="12.5" fill="#64748B" font-weight="normal" text-anchor="start" >Claude apps gateway in AWS GovCloud us-gov-west-1 — every arrow is TLS unless flagged</text>
 <rect x="40" y="96" width="340" height="216" rx="12" fill="#EFF6FF" stroke="#2563EB" stroke-width="1.5"/>
@@ -28,7 +28,7 @@
 <text x="210.0" y="579" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Egress proxy (optional)</text>
 <text x="210.0" y="595" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >HTTPS_PROXY_URL — only when the</text>
 <text x="210.0" y="609" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >landing zone mandates it</text>
-<rect x="432" y="96" width="640" height="700" rx="12" fill="#ECFDF5" stroke="#047857" stroke-width="1.5"/>
+<rect x="432" y="96" width="640" height="780" rx="12" fill="#ECFDF5" stroke="#047857" stroke-width="1.5"/>
 <text x="448" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#047857" font-weight="bold" text-anchor="start" letter-spacing="0.06em">AWS GOVCLOUD VPC</text>
 <text x="448" y="139" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="start" >spoke · private subnets only · no IGW/NAT required</text>
 <rect x="470" y="150" width="250" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
@@ -57,15 +57,19 @@
 <text x="915.0" y="441" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >db-admin Lambdas</text>
 <text x="915.0" y="457" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bootstrap app DB users +</text>
 <text x="915.0" y="471" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >rotate secret &amp; roll service</text>
-<rect x="470" y="566" width="570" height="96" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
-<text x="755.0" y="587" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Interface VPC endpoints — each with a resource policy</text>
-<text x="755.0" y="603" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bedrock-runtime (2 approved models only) · ecr.api · ecr.dkr · logs</text>
-<text x="755.0" y="617" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint</text>
-<rect x="470" y="692" width="570" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
-<text x="755.0" y="713" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >KMS CMK  alias/&lt;prefix&gt;</text>
-<text x="755.0" y="729" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >one customer-managed key: RDS, secrets, log groups,</text>
-<text x="755.0" y="743" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >activity archive, AMP, ECR (rotation enabled)</text>
-<rect x="1124" y="96" width="336" height="564" rx="12" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.5"/>
+<rect x="470" y="540" width="250" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="595.0" y="561" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Download portal ×2</text>
+<text x="595.0" y="577" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Okta OIDC + group authz (PKCE)</text>
+<text x="595.0" y="591" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >TLS listener :8080, per-task cert</text>
+<rect x="470" y="646" width="570" height="90" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="755.0" y="667" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Interface VPC endpoints — each with a resource policy</text>
+<text x="755.0" y="683" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bedrock-runtime (2 approved models only) · ecr.api · ecr.dkr · logs</text>
+<text x="755.0" y="697" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint</text>
+<rect x="470" y="760" width="570" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="755.0" y="781" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >KMS CMK  alias/&lt;prefix&gt;</text>
+<text x="755.0" y="797" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >one customer-managed key: RDS, secrets, log groups, activity</text>
+<text x="755.0" y="811" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >archive, AMP, ECR, portal artifacts + audit (rotation enabled)</text>
+<rect x="1124" y="96" width="336" height="624" rx="12" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.5"/>
 <text x="1140" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#6D28D9" font-weight="bold" text-anchor="start" letter-spacing="0.06em">AWS REGIONAL SERVICES</text>
 <text x="1140" y="139" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="start" >reached via endpoints / AWS backbone</text>
 <rect x="1148" y="152" width="288" height="56" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
@@ -88,12 +92,19 @@
 <path d="M1148 543 a 144.0 9 0 0 0 288 0" fill="none" stroke="#6D28D9" stroke-width="1.4"/>
 <text x="1292.0" y="565" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >S3: ALB access logs</text>
 <text x="1292.0" y="581" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SSE-S3 — ELB delivery limitation</text>
-<rect x="1124" y="700" width="336" height="120" rx="12" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
-<text x="1140" y="726" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#B91C1C" font-weight="bold" text-anchor="start" letter-spacing="0.06em">EXTERNAL SAAS — THE ONLY PUBLIC DEPENDENCY</text>
-<rect x="1148" y="744" width="288" height="58" rx="8" fill="#FFFFFF" stroke="#B91C1C" stroke-width="1.4"/>
-<text x="1292.0" y="765" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Okta</text>
-<text x="1292.0" y="781" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >authorization server (org or custom)</text>
-<text x="1292.0" y="795" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >returns groups in token</text>
+<path d="M1148 609 a 144.0 9 0 0 1 288 0 v 32 a 144.0 9 0 0 1 -288 0 Z" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<path d="M1148 609 a 144.0 9 0 0 0 288 0" fill="none" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1292.0" y="631" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >S3: portal artifacts (04)</text>
+<text x="1292.0" y="647" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SSE-KMS · installers + manifest</text>
+<rect x="1148" y="662" width="288" height="50" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1292.0" y="683" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >CloudWatch: portal-audit (04)</text>
+<text x="1292.0" y="699" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >CMK · 365 d · flag for SIEM</text>
+<rect x="1124" y="742" width="336" height="120" rx="12" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
+<text x="1140" y="768" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#B91C1C" font-weight="bold" text-anchor="start" letter-spacing="0.06em">EXTERNAL SAAS — THE ONLY PUBLIC DEPENDENCY</text>
+<rect x="1148" y="786" width="288" height="58" rx="8" fill="#FFFFFF" stroke="#B91C1C" stroke-width="1.4"/>
+<text x="1292.0" y="807" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Okta</text>
+<text x="1292.0" y="823" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >authorization server (org or custom)</text>
+<text x="1292.0" y="837" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >returns groups in token</text>
 <path d="M210 212 L210 232" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M210 290 L210 360" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="170.5" y="326" width="79.0" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
@@ -131,14 +142,24 @@
 <path d="M915 496 L915 520 L1136 520 L1136 338 L1148 338" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="962.45" y="510" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="1024" y="523.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >manage app secret</text>
-<path d="M470 330 L452 330 L452 830 L1180 830 L1180 802" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="637.65" y="820" width="324.7" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="800" y="833.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >OIDC login + token exchange (TGW egress or proxy)</text>
-<path d="M940 226 L940 274 L1096 274 L1096 760 L1148 760" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="1028.15" y="680" width="135.7" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="1096" y="693.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >OAuth code exchange</text>
-<path d="M356 587 L410 587 L410 862 L1240 862 L1240 820" fill="none" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
-<rect x="616.4" y="852" width="167.2" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="700" y="865.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B45309" font-weight="normal" text-anchor="middle" >proxy path when mandated</text>
-<text x="36" y="980" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#334155" font-weight="normal" text-anchor="start" >Boundary facts: no public ingress (internal ALB behind ZPA); no public egress from the inference path (Bedrock endpoint, 2-model policy); clients never contact Anthropic (mirrored, verified binaries; updates disabled).</text>
+<path d="M720 190 L755 190 L755 578 L720 578" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="702.75" y="502" width="110.5" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="758" y="515.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >:8080 · /portal</text>
+<path d="M720 555 L1092 555 L1092 622 L1148 622" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="811.95" y="533" width="186.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="905" y="546.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >installers · S3 gw endpoint</text>
+<path d="M720 600 L1080 600 L1080 684 L1148 684" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="829.0" y="578" width="142.0" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="900" y="591.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >download-audit (CMK)</text>
+<path d="M470 330 L452 330 L452 858 L1200 858 L1200 844" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M470 578 L452 578" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="577.8" y="848" width="444.4" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="800" y="861.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >gateway + portal — OIDC login + token exchange (TGW egress or proxy)</text>
+<path d="M940 226 L940 274 L1096 274 L1096 800 L1148 800" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="1022.15" y="722" width="135.7" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1090" y="735.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >OAuth code exchange</text>
+<path d="M356 587 L410 587 L410 878 L1240 878 L1240 844" fill="none" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+<rect x="616.4" y="868" width="167.2" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="700" y="881.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B45309" font-weight="normal" text-anchor="middle" >proxy path when mandated</text>
+<text x="36" y="916" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#334155" font-weight="normal" text-anchor="start" >Boundary facts: no public ingress (internal ALB behind ZPA); no public egress from the inference path (Bedrock endpoint, 2-model policy); clients never contact Anthropic (mirrored, verified binaries; updates disabled).</text>
 </svg>

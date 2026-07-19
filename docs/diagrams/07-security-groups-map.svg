@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="1010" viewBox="0 0 1560 1010">
+<svg xmlns="http://www.w3.org/2000/svg" width="1780" height="1010" viewBox="0 0 1780 1010">
 <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker></defs>
-<rect x="0.5" y="0.5" width="1559" height="1009" rx="14" fill="#FFFFFF" stroke="#E2E8F0"/>
+<rect x="0.5" y="0.5" width="1779" height="1009" rx="14" fill="#FFFFFF" stroke="#E2E8F0"/>
 <text x="36" y="46" font-family="Helvetica, Arial, sans-serif" font-size="20" fill="#0F172A" font-weight="bold" text-anchor="start" >7. Security groups - who may talk to whom</text>
 <text x="36" y="68" font-family="Helvetica, Arial, sans-serif" font-size="12.5" fill="#64748B" font-weight="normal" text-anchor="start" >Every arrow is an explicit SG rule pair (egress on the source + ingress on the destination). Everything else is denied.</text>
 <rect x="36" y="96" width="300" height="170" rx="12" fill="#FFFBEB" stroke="#B45309" stroke-width="1.5"/>
@@ -9,7 +9,7 @@
 <text x="186.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Developer laptops</text>
 <text x="186.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >ZPA / VPN networks</text>
 <text x="186.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >ClientIngressCidr</text>
-<rect x="36" y="296" width="1120" height="660" rx="12" fill="#ECFDF5" stroke="#047857" stroke-width="1.5"/>
+<rect x="36" y="296" width="1330" height="660" rx="12" fill="#ECFDF5" stroke="#047857" stroke-width="1.5"/>
 <text x="52" y="322" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#047857" font-weight="bold" text-anchor="start" letter-spacing="0.06em">WORKLOAD VPC - PRIVATE SUBNETS</text>
 <rect x="96" y="356" width="250" height="92" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="221.0" y="377" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Internal ALB</text>
@@ -27,6 +27,10 @@
 <text x="855.0" y="541" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >OTLP collector x2</text>
 <text x="855.0" y="557" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SG: collector</text>
 <text x="855.0" y="571" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >listeners :4317-4318</text>
+<rect x="1050" y="520" width="250" height="100" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="1175.0" y="541" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Download portal x2</text>
+<text x="1175.0" y="557" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SG: portal</text>
+<text x="1175.0" y="571" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >listener :8080 (TLS)</text>
 <rect x="140" y="700" width="206" height="96" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="243.0" y="721" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >db-admin Lambdas</text>
 <text x="243.0" y="737" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SGs: db-admin</text>
@@ -36,32 +40,32 @@
 <text x="540.0" y="747" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >RDS PostgreSQL</text>
 <text x="540.0" y="763" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SG: db - IN 5432</text>
 <text x="540.0" y="777" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >only from db-client</text>
-<rect x="975" y="700" width="170" height="96" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4" stroke-dasharray="5 4"/>
-<text x="1060.0" y="721" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#0F172A" font-weight="bold" text-anchor="middle" >Admin / build EC2</text>
-<text x="1060.0" y="737" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SG: admin (param)</text>
-<text x="1060.0" y="751" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >runs deploy scripts</text>
+<rect x="1050" y="700" width="180" height="96" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="1140.0" y="721" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#0F172A" font-weight="bold" text-anchor="middle" >Admin / build EC2</text>
+<text x="1140.0" y="737" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SG: admin (param)</text>
+<text x="1140.0" y="751" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >runs deploy scripts</text>
 <rect x="96" y="862" width="560" height="80" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
 <text x="376.0" y="883" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Interface VPC endpoints (shared SG: endpoint)</text>
 <text x="376.0" y="899" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bedrock-runtime | ecr.api | ecr.dkr | logs | secretsmanager | ecs</text>
-<text x="376.0" y="913" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >IN 443 only from: svc, db-admin, grafana, collector, admin host</text>
+<text x="376.0" y="913" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >IN 443 from: svc, db-admin, grafana, collector, portal, admin host</text>
 <rect x="740" y="862" width="230" height="80" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
 <text x="855.0" y="883" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >AMP endpoint</text>
 <text x="855.0" y="899" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SG: amp-endpoint</text>
 <text x="855.0" y="913" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >IN 443: collector + grafana</text>
-<rect x="1196" y="96" width="328" height="400" rx="12" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
-<text x="1212" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#B91C1C" font-weight="bold" text-anchor="start" letter-spacing="0.06em">EXTERNAL / REGIONAL</text>
-<rect x="1226" y="150" width="268" height="78" rx="8" fill="#FFFFFF" stroke="#B91C1C" stroke-width="1.4"/>
-<text x="1360.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Okta issuer</text>
-<text x="1360.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >via central egress + Zscaler</text>
-<text x="1360.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >(ALLOW + no-inspect required)</text>
-<rect x="1226" y="268" width="268" height="66" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
-<text x="1360.0" y="289" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >AWS regional APIs</text>
-<text x="1360.0" y="305" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >behind the endpoints below</text>
-<rect x="1226" y="372" width="268" height="96" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4" stroke-dasharray="5 4"/>
-<text x="1360.0" y="393" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Amazon S3 (gateway endpoint)</text>
-<text x="1360.0" y="409" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >route-table entry, no SG;</text>
-<text x="1360.0" y="423" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >policy: ECR layers, CFN responses,</text>
-<text x="1360.0" y="437" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >this account's buckets</text>
+<rect x="1426" y="96" width="332" height="400" rx="12" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
+<text x="1442" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#B91C1C" font-weight="bold" text-anchor="start" letter-spacing="0.06em">EXTERNAL / REGIONAL</text>
+<rect x="1456" y="150" width="272" height="78" rx="8" fill="#FFFFFF" stroke="#B91C1C" stroke-width="1.4"/>
+<text x="1592.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Okta issuer</text>
+<text x="1592.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >via central egress + Zscaler</text>
+<text x="1592.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >(ALLOW + no-inspect required)</text>
+<rect x="1456" y="268" width="272" height="66" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1592.0" y="289" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >AWS regional APIs</text>
+<text x="1592.0" y="305" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >behind the endpoints below</text>
+<rect x="1456" y="372" width="272" height="96" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="1592.0" y="393" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Amazon S3 (gateway endpoint)</text>
+<text x="1592.0" y="409" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >route-table entry, no SG;</text>
+<text x="1592.0" y="423" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >policy: ECR layers, CFN responses,</text>
+<text x="1592.0" y="437" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >this account's buckets</text>
 <path d="M221 234 L221 356" fill="none" stroke="#B45309" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="127.95" y="290" width="186.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="221" y="303.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B45309" font-weight="normal" text-anchor="middle" >443  from ClientIngressCidr</text>
@@ -71,10 +75,16 @@
 <path d="M346 402 L545 402 L545 520" fill="none" stroke="#047857" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="464.55" y="432" width="160.9" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="545" y="445.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >3000  alb-&gt;grafana (03)</text>
-<path d="M300 520 L300 470 L1090 470 L1090 200 L1226 200" fill="none" stroke="#B91C1C" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M346 372 L1140 372 L1140 520" fill="none" stroke="#047857" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="482.7" y="362" width="154.6" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="560" y="375.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >8080  alb-&gt;portal (04)</text>
+<path d="M300 520 L300 470 L1010 470 L1010 200 L1456 200" fill="none" stroke="#B91C1C" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M560 520 L560 470" fill="none" stroke="#B91C1C" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
-<rect x="756.55" y="448" width="286.9" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="900" y="461.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >443  gateway + grafana -&gt; Okta (OIDC/OAuth)</text>
+<rect x="516.55" y="448" width="286.9" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="660" y="461.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >443  gateway + grafana -&gt; Okta (OIDC/OAuth)</text>
+<path d="M1240 520 L1240 216 L1456 216" fill="none" stroke="#B91C1C" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="1172.15" y="350" width="135.7" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1240" y="363.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >443  portal -&gt; Okta</text>
 <path d="M280 520 L280 498 L795 498 L795 520" fill="none" stroke="#047857" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="457.5" y="488" width="205.0" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="560" y="501.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >4317-4318  svc-&gt;collector (03)</text>
@@ -86,8 +96,11 @@
 <path d="M243 796 L243 862" fill="none" stroke="#6D28D9" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M460 620 L460 668 L400 668 L400 862" fill="none" stroke="#6D28D9" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M770 620 L770 650 L690 650 L690 830 L600 830 L600 862" fill="none" stroke="#6D28D9" stroke-width="1.6" marker-end="url(#arr)"/>
-<path d="M1060 796 L1060 815 L615 815 L615 862" fill="none" stroke="#6D28D9" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+<path d="M1060 796 L1060 815 L655 815 L655 862" fill="none" stroke="#6D28D9" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+<path d="M1075 620 L1075 655 L1010 655 L1010 840 L540 840 L540 862" fill="none" stroke="#6D28D9" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+<rect x="668.6" y="830" width="242.79999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="790" y="843.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >443  portal-&gt;endpoints (when shared)</text>
 <path d="M855 620 L855 862" fill="none" stroke="#6D28D9" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M660 585 L700 585 L700 640 L905 640 L905 862" fill="none" stroke="#6D28D9" stroke-width="1.6" marker-end="url(#arr)"/>
-<text x="36" y="986" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#64748B" font-weight="normal" text-anchor="start" >Not shown: every SG's default egress is a 127.0.0.1/32 placeholder (deny) unless a rule above exists; endpoint ENIs and RDS initiate nothing. Dashed = optional/conditional (admin-host param, AMP endpoint toggle, Grafana's Okta hop).</text>
+<text x="36" y="986" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#64748B" font-weight="normal" text-anchor="start" >Not shown: every SG's default egress is a 127.0.0.1/32 placeholder (deny) unless a rule above exists; endpoint ENIs and RDS initiate nothing. Dashed = optional/conditional (admin-host param, AMP endpoint toggle, portal's shared-endpoint ingress).</text>
 </svg>

@@ -25,6 +25,10 @@
 <rect x="400" y="440" width="260" height="70" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="530.0" y="461" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Grafana</text>
 <text x="530.0" y="477" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Okta SSO · usage dashboard</text>
+<rect x="76" y="440" width="260" height="80" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="206.0" y="461" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Download portal ×2</text>
+<text x="206.0" y="477" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >reached via the internal ALB</text>
+<text x="206.0" y="491" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >streams installer ZIP at /portal</text>
 <rect x="76" y="560" width="584" height="80" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="368.0" y="581" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Interface VPC endpoints — each with a resource policy</text>
 <text x="368.0" y="597" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bedrock-runtime (2 approved models only) · ecr.api · ecr.dkr · logs</text>
@@ -60,6 +64,13 @@
 <text x="1293.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >rotation enabled — encrypts RDS,</text>
 <text x="1293.0" y="215" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >secrets, log groups, activity</text>
 <text x="1293.0" y="229" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >archive, AMP, ECR</text>
+<path d="M1150 367 a 143.0 9 0 0 1 286 0 v 38 a 143.0 9 0 0 1 -286 0 Z" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<path d="M1150 367 a 143.0 9 0 0 0 286 0" fill="none" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1293.0" y="389" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >S3: portal artifacts (04)</text>
+<text x="1293.0" y="405" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SSE-KMS · installers + manifest</text>
+<rect x="1150" y="447" width="286" height="56" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
+<text x="1293.0" y="468" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >CloudWatch: portal-audit (04)</text>
+<text x="1293.0" y="484" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >CMK · 365 d · flag for SIEM</text>
 <path d="M280 150 L280 86 L1040 86 L1040 150" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="424.1" y="76" width="431.8" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="640" y="89.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >inference — SigV4 via bedrock-runtime endpoint · 2 approved models</text>
@@ -85,6 +96,13 @@
 <path d="M660 330 L750 330 L750 518 L810 518" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="688.45" y="530" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="750" y="543.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >manage app secret</text>
+<path d="M200 520 L200 528 L690 528 L690 386 L1150 386" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="851.95" y="376" width="186.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="945" y="389.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >installers · S3 gw endpoint</text>
+<path d="M244 520 L244 542 L712 542 L712 475 L1150 475" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="874.0" y="465" width="142.0" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="945" y="478.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >download-audit (CMK)</text>
 <text x="36" y="726" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#334155" font-weight="normal" text-anchor="start" >The gateway→collector OTLP hop is the only unencrypted flow (SG-to-SG scoped — accepted risk §10). Okta egress and the developer path are on the access view.</text>
 <text x="36" y="748" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748B" font-weight="normal" text-anchor="start" >Secrets are injected into tasks at launch by ECS (execution roles hold GetSecretValue + kms:Decrypt on exactly their own secrets — see §6).</text>
+<text x="36" y="770" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748B" font-weight="normal" text-anchor="start" >Download portal (04): serves the installer ZIP from the CMK-encrypted artifacts bucket via the S3 gateway endpoint and writes a download-audit stream; its Okta OIDC egress is on the access view.</text>
 </svg>
