@@ -9,7 +9,7 @@ files, never pre-rasterized PNGs.
 Deps (not part of the test toolchain):  pip install weasyprint markdown
 Usage:  python3 scripts/md-to-pdf.py [doc.md ...]
         default: docs/architecture.md docs/network-access-controls.md
-                 docs/om-runbooks.md
+                 docs/om-runbooks.md docs/conops.md
 Output: <doc>.pdf next to each source. Committed alongside the sources -
         regenerate in the same change whenever a doc or diagram changes.
 """
@@ -23,7 +23,8 @@ import weasyprint
 REPO = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT = [REPO / "docs" / "architecture.md",
            REPO / "docs" / "network-access-controls.md",
-           REPO / "docs" / "om-runbooks.md"]
+           REPO / "docs" / "om-runbooks.md",
+           REPO / "docs" / "conops.md"]
 
 CSS = """
 @page { size: letter landscape; margin: 14mm 12mm 16mm 12mm;
