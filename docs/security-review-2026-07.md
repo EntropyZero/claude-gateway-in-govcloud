@@ -623,6 +623,79 @@ digest-pin guidance + per-image `*_BASE_IMAGE` override for mirroring.
 
 ---
 
+## E. Installer download portal (04-download-portal.yaml) — new surface
+
+Added 2026-07-18. An **optional** stack: an Okta-secured internal website
+(`https://<FQDN>/portal`) that hands a developer a single, pre-configured
+Claude Code installer ZIP. New attack surface, and the controls on it:
+
+**What it is.** A small stdlib+boto3 ECS Fargate service behind the existing
+ALB via a path-based listener rule (`/portal*`, priority 20; Grafana is 10).
+Same cert/DNS/Zscaler entry as the gateway — **no new network prerequisite**.
+It streams a per-download ZIP (`claude.exe` stored + streamed from S3,
+`Install-ClaudeCode.ps1`, a generated `install.cmd` with the developer's Team /
+Cost Center + baked `-GatewayUrl`/`-Sha256`/`-DisableUpdates`, `README.txt`,
+optional bundled enterprise CA).
+
+**Authentication & authorization (AC-2/AC-3/IA-2).** The portal app runs the
+**full OIDC authorization-code flow itself** — `state` + PKCE (S256) + `nonce`,
+ID-token RS256 signature verified against the issuer's JWKS (cached, refetched
+once on an unknown `kid` for Okta key rotation), `iss`/`aud`/`exp`/`nonce`
+validated — then authorizes on **Okta group membership** (`AccessGroup`, a new
+parameterized group). The ALB does **not** use `authenticate-oidc`: it cannot
+evaluate a groups claim, and the app must check groups anyway, so the app owns
+the whole auth story (listener rule is a plain forward). Groups are read from
+the ID token with a `/userinfo` fallback (mirrors the gateway's
+`userinfo_fallback`). Non-members are denied **and audited**. The pure-Python
+RS256 verifier does public-key modular exponentiation only (no private-key
+material, no crypto dependency).
+
+**Session (SC-23).** Short-lived HMAC-signed HttpOnly + Secure + SameSite=Lax
+cookie (key = a stack-generated `portal-session-secret`, CMK-encrypted). No
+refresh tokens stored; re-auth on expiry. A separate short-TTL transaction
+cookie carries `state`/`nonce`/PKCE-verifier across the Okta round-trip.
+
+**At rest (SC-28).** OIDC client secret (placeholder-`SecretString` pattern,
+set out-of-band by `set-portal-oidc-secret.sh`) and session secret both
+CMK-encrypted. Artifacts S3 bucket is **CMK (SSE-KMS) + bucket key**, public
+access fully blocked, `BucketOwnerEnforced`, versioned, and a bucket policy
+**denies non-TLS** (`aws:SecureTransport=false`). Task role gets `s3:GetObject`
+on exactly that bucket (no `ListBucket`) + `kms:Decrypt`.
+
+**In transit (SC-8).** TLS terminates on the task (self-signed leaf baked into
+the image, ALB re-encrypts and does not validate it) — the ALB→task hop is
+encrypted like the gateway/Grafana. Continuous byte flow on the streamed
+download keeps the ALB idle timeout from tripping; the response is
+close-delimited (`Connection: close`, no `Content-Length`).
+
+**Audit (AU-2/AU-3/AU-9).** One JSON line per download **and per denial** —
+timestamp, verified `user_email`/`user_groups`, team, cost_center, version,
+exe SHA-256, source IP (X-Forwarded-For), user-agent, outcome — to a
+**dedicated** CMK-encrypted CloudWatch log group (`/claude/<prefix>/portal-audit`,
+retention parameterized). **Flag this group for SIEM.** It is deliberately
+NOT routed into the activity-log stream (that surface is never widened).
+
+**Integrity of the served binary.** The portal reads the win32-x64 SHA-256
+from the published `manifest.json` (never a client value) and bakes it into
+`install.cmd`; the installer verifies SHA-256 + Anthropic Authenticode before
+installing. `publish-portal-release.sh` re-verifies `claude.exe` against the
+manifest before upload, reusing the GPG-verified mirror output — the portal
+never fetches from the internet.
+
+**Egress note.** The portal reaches the Okta issuer outbound over the **same**
+server-side egress path (+ Zscaler SSL-inspection exemption) the gateway
+already requires — same in-flight prerequisite, not a new one. OIDC therefore
+**cannot be verified live until that exemption lands** (see Status /
+"needs test-run confirmation").
+
+**Deferred / not-yet-live:** the Okta OIDC round-trip and the streamed download
+at real (100+MB) size are not exercisable without a live deploy + the Zscaler
+exemption; both are flagged for test-run confirmation. Group-claim delivery
+(ID token vs `/userinfo`) depends on the Okta app's claim config and is
+doc-verified only.
+
+---
+
 ## Recommended sequencing
 
 1. ~~**A + D now**~~ — ✅ done 2026-07-15.
