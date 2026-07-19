@@ -207,7 +207,7 @@ empty database) fails fast.
 |---|---|---|
 | RDS storage + snapshots | SSE | CMK |
 | RDS master secret / all Secrets Manager secrets | SSE | CMK |
-| CloudWatch log groups (ECS gateway/collector/grafana/portal, activity, portal-audit) | SSE | CMK |
+| CloudWatch log groups (ECS gateway/collector/grafana/portal, activity, portal-audit, RDS postgresql/pgaudit, db-admin Lambdas) | SSE | CMK — every group is template-declared (never service-auto-created) precisely so the CMK and retention apply; all carry `DeletionPolicy: Retain` (operator decision 2026-07-18: no log group is destroyed by a teardown) |
 | Activity archive bucket | SSE-KMS + bucket key | CMK |
 | Portal artifacts bucket (04) | SSE-KMS + bucket key | CMK |
 | AMP workspace | SSE | CMK (`ENCRYPT_AMP_WITH_CMK`, creation-time) |

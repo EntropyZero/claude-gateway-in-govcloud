@@ -654,9 +654,19 @@ Resources:
 
   LogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub '/ecs/${NamePrefix}'
       RetentionInDays: 365
+      # The tag is load-bearing on already-deployed stacks: a change that
+      # touches ONLY DeletionPolicy/UpdateReplacePolicy can be dropped as a
+      # no-op (CFN coverage-roadmap #1543), silently leaving the old delete
+      # policy in force. The tag makes the update a real property diff so the
+      # Retain policies actually record. Do not remove it.
+      Tags:
+        - Key: retention-policy
+          Value: retain-on-teardown
       KmsKeyId:
         Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
 
@@ -979,8 +989,38 @@ Resources:
                 Action: ecs:UpdateService
                 Resource: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${Cluster}/${NamePrefix}-gateway'
 
+  # Pre-create the Lambdas' log groups (names fixed by Lambda:
+  # /aws/lambda/<FunctionName>) so the bootstrap/rotation history is
+  # CMK-encrypted, retention-managed, and survives teardown - Lambda
+  # otherwise auto-creates them with default SSE, no retention, and no
+  # CloudFormation ownership. Each function depends on its group because
+  # the bootstrap custom resource invokes DURING stack creation.
+  # EXISTING DEPLOYMENTS: if Lambda already auto-created these groups, the
+  # stack update FAILS on the name collision - export/delete the
+  # auto-created groups first (see the runbook note).
+  DbBootstrapLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${NamePrefix}-db-bootstrap'
+      RetentionInDays: 365
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+
+  DbRotationLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${NamePrefix}-db-rotation'
+      RetentionInDays: 365
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+
   DbBootstrapFunction:
     Type: AWS::Lambda::Function
+    DependsOn: DbBootstrapLogGroup
     Properties:
       FunctionName: !Sub '${NamePrefix}-db-bootstrap'
       Description: One-time creation of the least-privilege application DB users.
@@ -1024,6 +1064,7 @@ Resources:
 
   DbRotationFunction:
     Type: AWS::Lambda::Function
+    DependsOn: DbRotationLogGroup
     Properties:
       FunctionName: !Sub '${NamePrefix}-db-rotation'
       Description: Alternating-users rotation for the app DB secret; rolls the gateway service.

@@ -835,14 +835,24 @@ aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-nam
 - **AMP workspace** (`Workspace`, 03) — `Retain`.
 - **Portal artifacts bucket** (`ArtifactsBucket`, 04) — `Retain`
   (CMK-encrypted; holds the published release binaries).
-- **Portal download-audit log group** (`AuditLogGroup`, 04,
-  `/claude/${NAME_PREFIX}/portal-audit`) — `Retain` (it is an audit record;
-  deleting it is a deliberate manual act after teardown). The portal's
-  *operational* task log group is deleted with the stack.
+- **Every CloudWatch log group, in every stack** — `Retain` (operator
+  decision 2026-07-18: logs outlive stacks; a cfn-guard gate
+  `log_groups_survive_teardown` enforces it). This covers the ECS task
+  groups (gateway/collector/grafana/portal), the activity window, the
+  portal download-audit group, the RDS `postgresql`/pgaudit export group
+  (`/aws/rds/instance/${NAME_PREFIX}-store/postgresql`, pre-created by 01
+  with the CMK), and the db-admin Lambda groups (pre-created by 02 with the
+  CMK). Deleting a retained group afterwards is a deliberate manual act.
+  Note the redeploy consequence: the groups carry fixed names, so a later
+  **re-create collides** with the retained groups and the new stack fails —
+  export what you need, then delete them first (the test-run runbook §0 has
+  the command list). The adopted groups (RDS postgresql, Lambda) additionally
+  collide on the *first* deploy of this change into an account where the
+  services already auto-created them.
 - **RDS instance** (`Database`, 01) — `DeletionPolicy: Snapshot` → a **final
   snapshot** is taken; the running instance is removed. The snapshot persists.
-- Everything else (ALB, ECS services/cluster, secrets, log groups, VPC
-  endpoints, Lambdas, Firehose) is **deleted** with its stack.
+- Everything else (ALB, ECS services/cluster, secrets, VPC endpoints,
+  Lambdas, Firehose) is **deleted** with its stack.
 
 *Verification:* all three `stack-delete-complete` waits return; `aws
 cloudformation describe-stacks` reports the stacks gone; confirm the retained

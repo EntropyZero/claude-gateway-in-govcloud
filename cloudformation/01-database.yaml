@@ -83,6 +83,15 @@ Parameters:
       role/permission changes, and data modifications on the session/spend
       store; add 'read' for SELECT auditing at a real log-volume cost.
 
+  PgauditLogRetentionDays:
+    Type: Number
+    Default: 731
+    Description: >-
+      CloudWatch retention for the exported postgresql/pgaudit log group
+      (AU-11). The group is pre-created by this stack so it is CMK-encrypted
+      and retained on teardown; without that, RDS auto-creates it with
+      default SSE, no retention, and no CloudFormation ownership.
+
 Conditions:
   CreateKmsKey: !Equals [!Ref KmsKeyArn, '']
 
@@ -206,10 +215,28 @@ Resources:
         log_connections: '1'
         log_disconnections: '1'
 
+  # Pre-create the group RDS exports the postgresql/pgaudit log into, so the
+  # DB audit trail is CMK-encrypted, retention-managed, and survives teardown.
+  # The name is fixed by RDS: /aws/rds/instance/<DBInstanceIdentifier>/postgresql.
+  # RDS adopts an existing group instead of creating its own. Database depends
+  # on it so the export never races the group into existence first.
+  # EXISTING DEPLOYMENTS: if RDS already auto-created this group, the stack
+  # update FAILS on the name collision - export/delete the auto-created group
+  # first (see the runbook note).
+  PgauditLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub '/aws/rds/instance/${NamePrefix}-store/postgresql'
+      RetentionInDays: !Ref PgauditLogRetentionDays
+      KmsKeyId: !If [CreateKmsKey, !GetAtt KmsKey.Arn, !Ref KmsKeyArn]
+
   Database:
     Type: AWS::RDS::DBInstance
     DeletionPolicy: Snapshot
     UpdateReplacePolicy: Snapshot
+    DependsOn: PgauditLogGroup
     Properties:
       DBInstanceIdentifier: !Sub '${NamePrefix}-store'
       Engine: postgres

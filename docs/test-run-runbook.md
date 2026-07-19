@@ -27,6 +27,25 @@ Legend: ☐ = do it · 🔎 = checkpoint, confirm before moving on.
   scripts call `set-stack-policy`).
 - ☐ `docker`, `jq`, `openssl`, `aws` v2 present on the host.
 
+**Re-deploying into an account with earlier test runs (log-group adoption)**
+- ☐ The templates now pre-create three log groups that the services used to
+  auto-create: `/aws/rds/instance/${NAME_PREFIX}-store/postgresql` (01) and
+  `/aws/lambda/${NAME_PREFIX}-db-bootstrap` / `-db-rotation` (02). If a
+  previous run left the auto-created (or now-retained) versions behind, the
+  next 01/02 deploy **fails on the name collision**. Export anything you need
+  from them, then delete before deploying:
+
+  ```bash
+  for g in "/aws/rds/instance/${NAME_PREFIX}-store/postgresql" \
+           "/aws/lambda/${NAME_PREFIX}-db-bootstrap" \
+           "/aws/lambda/${NAME_PREFIX}-db-rotation"; do
+    aws logs delete-log-group --region "$AWS_REGION" --log-group-name "$g" || true
+  done
+  ```
+
+  (After teardown, ALL log groups now survive by design — the same applies to
+  the `/ecs/*` and `/claude/*` groups before any full re-create from scratch.)
+
 **Bedrock**
 - ☐ Model access enabled for Claude in the test account, and confirm the
   exact GovCloud inference-profile IDs:

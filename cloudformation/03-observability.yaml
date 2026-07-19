@@ -305,11 +305,18 @@ Resources:
 
   CollectorLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub '/ecs/${NamePrefix}-otel'
       RetentionInDays: 90
       KmsKeyId:
         Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+      # Load-bearing on already-deployed stacks (CFN no-op bug #1543) — see
+      # the gateway stack's LogGroup comment. Do not remove.
+      Tags:
+        - Key: retention-policy
+          Value: retain-on-teardown
 
   CollectorExecutionRole:
     Type: AWS::IAM::Role
@@ -476,11 +483,18 @@ Resources:
   # CloudWatch window for operational queries; durable copy in S3.
   ActivityLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub '/claude/${NamePrefix}/activity'
       RetentionInDays: !Ref ActivityLogWindowDays
       KmsKeyId:
         Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+      # Load-bearing on already-deployed stacks (CFN no-op bug #1543) — see
+      # the gateway stack's LogGroup comment. Do not remove.
+      Tags:
+        - Key: retention-policy
+          Value: retain-on-teardown
 
   ActivityArchiveBucket:
     Type: AWS::S3::Bucket
@@ -658,11 +672,18 @@ Resources:
 
   GrafanaLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub '/ecs/${NamePrefix}-grafana'
       RetentionInDays: 90
       KmsKeyId:
         Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+      # Load-bearing on already-deployed stacks (CFN no-op bug #1543) — see
+      # the gateway stack's LogGroup comment. Do not remove.
+      Tags:
+        - Key: retention-policy
+          Value: retain-on-teardown
 
   GrafanaExecutionRole:
     Type: AWS::IAM::Role

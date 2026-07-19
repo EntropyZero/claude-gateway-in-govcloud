@@ -115,6 +115,33 @@ own Lambda, with the service roll built into the rotation itself; the
 master secret became break-glass and its rotation affects no running
 task. See the C-batch header below for the item-by-item mapping.
 
+**Log-retention hardening (2026-07-18, operator decision).** Prompted by the
+test-run observation that some CloudWatch logs outlive teardown while others
+do not: (1) **every** `AWS::Logs::LogGroup` in all four templates now carries
+`DeletionPolicy`/`UpdateReplacePolicy: Retain` — no log group is destroyed by
+a stack teardown, enforced by a new cfn-guard gate
+(`log_groups_survive_teardown`); (2) the two **service-auto-created** groups
+that previously escaped template control entirely are now pre-created and
+adopted — the RDS `postgresql`/pgaudit export group (01, CMK + 731-day
+retention, closing the gap where the DB audit trail was the one group
+*without* the CMK) and the two db-admin Lambda groups (02, CMK + 365-day) —
+with `DependsOn` so RDS/first-invoke adopt them rather than racing to create
+their own. The CMK itself was already `Retain`. **Existing-deployment
+caveat:** where a service already auto-created one of those three groups, the
+next 01/02 stack update fails on the name collision — export and delete the
+auto-created group first (runbook §0 note). The adversarial review pass also
+surfaced a real trap it then fixed: a CloudFormation change touching ONLY
+`DeletionPolicy`/`UpdateReplacePolicy` on an already-deployed resource can be
+dropped as a no-op (coverage-roadmap #1543), silently leaving the old delete
+policy in force on the five pre-existing groups — so each of those groups
+gained a load-bearing `retention-policy: retain-on-teardown` tag that makes
+the update a real property diff (do not remove it; the templates say so
+inline). **Needs test-run confirmation:** (a) RDS adopts the pre-created
+CMK+retention group without error (universal provider practice, but no
+explicit AWS doc sentence); (b) after the next 02/03/04 update, the tag is
+visible on the live groups (proof the update was not a no-op and the Retain
+recorded).
+
 **Test-run deploy fixes (2026-07-16, first end-to-end run).** The first real
 deploy surfaced latent deploy-breakers that static checks could not catch;
 each is fixed and committed:

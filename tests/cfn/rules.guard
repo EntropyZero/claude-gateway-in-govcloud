@@ -14,6 +14,19 @@ rule log_groups_use_cmk {
     }
 }
 
+# No log group is destroyed by a stack teardown or replaced by an update
+# (AU-9; operator decision 2026-07-18: logs outlive stacks, deleting one is
+# a deliberate manual act).
+rule log_groups_survive_teardown {
+    let groups = Resources.*[ Type == 'AWS::Logs::LogGroup' ]
+    when %groups !empty {
+        %groups.DeletionPolicy == 'Retain'
+        <<Every AWS::Logs::LogGroup must set DeletionPolicy: Retain.>>
+        %groups.UpdateReplacePolicy == 'Retain'
+        <<Every AWS::Logs::LogGroup must set UpdateReplacePolicy: Retain.>>
+    }
+}
+
 # Every Secrets Manager secret is CMK-encrypted.
 rule secrets_use_cmk {
     let secrets = Resources.*[ Type == 'AWS::SecretsManager::Secret' ]

@@ -277,11 +277,18 @@ Resources:
 
   PortalLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub '/ecs/${NamePrefix}-portal'
       RetentionInDays: !Ref PortalLogRetentionDays
       KmsKeyId:
         Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+      # Load-bearing on already-deployed stacks (CFN no-op bug #1543) — see
+      # the gateway stack's LogGroup comment. Do not remove.
+      Tags:
+        - Key: retention-policy
+          Value: retain-on-teardown
 
   # -------------------------------------------------------------- networking
   PortalSecurityGroup:
