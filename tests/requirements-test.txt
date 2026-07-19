@@ -5,3 +5,6 @@ moto[secretsmanager]>=5
 pg8000>=1.31
 cfn-lint>=1
 pyyaml>=6
+# Portal tests mint RSA-signed test ID tokens + JWKS (the portal app itself
+# verifies RS256 in pure Python with no crypto dependency).
+cryptography>=41

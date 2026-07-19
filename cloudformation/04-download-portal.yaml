@@ -1,0 +1,566 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Okta-secured Claude Code installer download portal. A small ECS Fargate
+  service behind the existing gateway ALB (path-based, at /portal), sharing the
+  cert/DNS/Zscaler entry - no new org requests. The portal app runs the full
+  OIDC authorization-code flow (PKCE + JWKS verification) and Okta GROUP
+  authorization itself (the ALB's authenticate-oidc cannot evaluate a groups
+  claim), then streams a single pre-configured ZIP (claude.exe +
+  Install-ClaudeCode.ps1 + a generated install.cmd) from a CMK-encrypted S3
+  artifacts bucket, logging every download to a dedicated CMK-encrypted audit
+  log group. Deploy after 02-gateway.yaml (same NamePrefix); independent of 03.
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: claude-gw
+    Description: Must match the NamePrefix used by 01/02 (cross-stack imports).
+    AllowedPattern: '[a-z][a-z0-9-]{1,20}'
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets for the portal tasks (same subnets as the gateway).
+
+  GatewayFqdn:
+    Type: String
+    Description: >-
+      The corporate CNAME developers use (same value as the gateway stack). The
+      portal is served at https://<GatewayFqdn>/portal and its Okta redirect URI
+      is https://<GatewayFqdn>/portal/oauth/callback.
+    AllowedPattern: '^[a-z0-9.-]+\.[a-z]{2,}$'
+
+  PortalImage:
+    Type: String
+    AllowedPattern: '.+'
+    Description: Portal image URI built from docker/portal/ by scripts/build-and-push-portal.sh.
+
+  PortalDesiredCount:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    Description: >-
+      Portal task count. 2 keeps the portal reachable through rollouts and
+      spreads across AZs; 1 is fine if brief unavailability on redeploy is OK.
+
+  OktaIssuer:
+    Type: String
+    # IDENTICAL pattern to 02/03: the same OKTA_ISSUER feeds all stacks, so a
+    # value that passes there must pass here. Requires https://, allows the bare
+    # org domain or a custom /oauth2/<id> server, rejects a trailing slash. The
+    # portal discovers its endpoints from <issuer>/.well-known/openid-configuration,
+    # so this works for both the org and a custom authorization server.
+    AllowedPattern: '^https://[a-zA-Z0-9.-]+(/oauth2/[a-zA-Z0-9._-]+)?$'
+    ConstraintDescription: >-
+      Must be an https Okta issuer with NO trailing slash. Org server:
+      https://your-org.okta.com. Custom server: https://your-org.okta.com/oauth2/<id>.
+    Description: >-
+      Okta issuer URL - INCLUDE the https:// scheme. Usually the same value as
+      the gateway stack's OktaIssuer.
+
+  PortalOktaClientId:
+    Type: String
+    Description: >-
+      Okta OIDC client ID for the portal. A DEDICATED Okta web app is the
+      default (clean rotation / least privilege, like Grafana); reusing the
+      gateway's app (add the portal redirect URI to it) is an option that
+      couples secret rotation. Redirect URI: https://<GatewayFqdn>/portal/oauth/callback.
+
+  AccessGroup:
+    Type: String
+    Default: claude-gateway-users
+    Description: >-
+      Okta group required to download the installer. A member of this group is
+      authorized; everyone else is denied (and the denial is audited). Named
+      generically on purpose so the gateway can share it when group filtering is
+      enabled there later - one deploy.env value, not a portal-only name.
+
+  PortalTeams:
+    Type: String
+    Default: 'platform,data,security'
+    Description: >-
+      Comma-delimited Team dropdown options (placeholder examples - set your
+      real teams in deploy.env). Values must contain no spaces or commas (they
+      become OTEL_RESOURCE_ATTRIBUTES labels). Server-side validation rejects
+      anything not in this list.
+
+  PortalCostCenters:
+    Type: String
+    Default: 'CC-1000,CC-2000,CC-3000'
+    Description: >-
+      Comma-delimited Cost Center dropdown options (placeholder examples). Same
+      rules as PortalTeams.
+
+  ReleaseVersion:
+    Type: String
+    Default: 2.1.207
+    Description: >-
+      The pinned Claude Code version the portal serves. Must match a release
+      published to the artifacts bucket by scripts/publish-portal-release.sh
+      (releases/<version>/claude.exe + manifest.json).
+
+  BundleExtraCa:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Include the enterprise/TLS-inspection root CA (extra-ca.pem) in each ZIP
+      and wire install.cmd's -ExtraCaCertPath to it. Set true only when
+      publish-portal-release.sh uploaded an extra-ca.pem (EXTRA_CA_CERT_PATH set).
+
+  DisableUpdates:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Bake -DisableUpdates into install.cmd so laptops stay on the distributed version.
+
+  SessionTtlHours:
+    Type: Number
+    Default: 8
+    MinValue: 1
+    MaxValue: 24
+    Description: Portal session cookie lifetime. Re-auth on expiry (no refresh tokens stored).
+
+  PortalAuditRetentionDays:
+    Type: Number
+    Default: 365
+    MinValue: 1
+    Description: >-
+      CloudWatch retention for the dedicated download-audit log group (one JSON
+      line per download/denial). Flag this group for SIEM ingestion.
+
+  PortalLogRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: CloudWatch retention for the portal task's operational (stdout) log group.
+
+  ListenerRulePriority:
+    Type: Number
+    Default: 20
+    MinValue: 1
+    MaxValue: 50000
+    Description: >-
+      Priority of the /portal listener rule on the shared HTTPS listener. Must
+      not collide with other rules on that listener (03-observability uses 10
+      for /grafana). Lower evaluates first; unmatched paths fall through to the
+      listener's default action (the gateway).
+
+  HttpsProxyUrl:
+    Type: String
+    Default: ''
+    Description: >-
+      Same meaning as the gateway stack's HttpsProxyUrl, for the portal task:
+      its server-side OIDC calls to Okta (discovery/token/jwks/userinfo) are
+      public egress, so a proxy-mandated landing zone needs it. S3/CloudWatch
+      stay direct via NO_PROXY.
+
+  HttpsProxyPort:
+    Type: String
+    Default: ''
+    AllowedPattern: '^[0-9]*$'
+    Description: Port of HttpsProxyUrl - portal task egress is scoped to tcp/443 plus this port.
+
+  CreateSupportingEndpoints:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      MUST match the value passed to 02-gateway. When 02 created the shared
+      ecr/logs/secretsmanager interface endpoints (PrivateDnsEnabled), their DNS
+      resolves VPC-wide, so the portal task is forced onto them for image pull,
+      awslogs, and secret injection. This stack then adds its SG as 443 ingress
+      on 02's endpoint SG (imported); without it the task never starts. Leave
+      'false' on a NAT/TGW profile.
+
+Conditions:
+  HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
+  HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
+  WantSharedEndpoints: !Equals [!Ref CreateSupportingEndpoints, 'true']
+
+Resources:
+
+  # ------------------------------------------------------------------ secrets
+  # Okta OIDC client secret. Placeholder at creation (the placeholder-SecretString
+  # pattern in .claude/rules/cloudformation.md) - the real value is written
+  # out-of-band by scripts/set-portal-oidc-secret.sh, and editing this literal
+  # (or the Name/Description) on a later deploy would clobber it.
+  PortalOidcClientSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/portal-oidc-client-secret'
+      Description: >-
+        Okta OIDC client secret for the download portal. Placeholder at
+        creation - set the real value with scripts/set-portal-oidc-secret.sh.
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+      SecretString: 'REPLACE-ME-run-scripts-set-portal-oidc-secret.sh'
+
+  # Session-signing secret (HMAC key for the portal's signed cookies), generated
+  # in-stack like the gateway's JwtSecret. No task ever needs the plaintext
+  # beyond injection.
+  PortalSessionSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/portal-session-secret'
+      Description: Portal session cookie signing secret (HMAC).
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  # -------------------------------------------------------------- artifacts S3
+  # CMK-encrypted, public access fully blocked, TLS-only. Holds the verified
+  # mirror output (claude.exe + manifest per version) and the installer,
+  # uploaded by scripts/publish-portal-release.sh. Retained on stack delete so a
+  # teardown/redeploy does not force a re-publish.
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID:
+                Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration:
+        Status: Enabled
+
+  ArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt ArtifactsBucket.Arn
+              - !Sub '${ArtifactsBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+
+  # ------------------------------------------------------------- log groups
+  # Dedicated download-audit trail (one JSON line per download/denial with the
+  # VERIFIED OIDC identity). Separate from the activity-log stream by design
+  # (never widen that surface); flag THIS group for SIEM. CMK-encrypted.
+  AuditLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/claude/${NamePrefix}/portal-audit'
+      RetentionInDays: !Ref PortalAuditRetentionDays
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+
+  PortalLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${NamePrefix}-portal'
+      RetentionInDays: !Ref PortalLogRetentionDays
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+
+  # -------------------------------------------------------------- networking
+  PortalSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} - download portal tasks'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub '${NamePrefix}-alb-sg'
+          Description: TLS (ALB re-encrypt) from the ALB only
+      SecurityGroupEgress:
+        # Okta OIDC (public) + S3/CloudWatch Logs/ECR/Secrets Manager - all TLS,
+        # via VPC endpoints or the NAT/TGW path.
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS to Okta and AWS services
+        - !If
+          - HaveProxyPort
+          - IpProtocol: tcp
+            FromPort: !Ref HttpsProxyPort
+            ToPort: !Ref HttpsProxyPort
+            CidrIp: 0.0.0.0/0
+            Description: Egress proxy port
+          - !Ref 'AWS::NoValue'
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-portal'
+
+  # The ALB's egress is scoped in 02; this opens its path to the portal tasks.
+  AlbToPortalEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Fn::ImportValue: !Sub '${NamePrefix}-alb-sg'
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      DestinationSecurityGroupId: !Ref PortalSecurityGroup
+      Description: Forward/health-check to the download portal
+
+  # Let the portal task reach 02's shared interface endpoints (ecr/logs/
+  # secretsmanager) for image pull, awslogs, and secret injection. Same
+  # cross-stack pattern 03 uses for its tasks; only when 02 created those
+  # endpoints (CreateSupportingEndpoints=true).
+  PortalToEndpointsIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WantSharedEndpoints
+    Properties:
+      GroupId:
+        Fn::ImportValue: !Sub '${NamePrefix}-endpoint-sg'
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref PortalSecurityGroup
+      Description: TLS from the download portal tasks
+
+  # ------------------------------------------------------------------ IAM
+  PortalExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-portal-execution'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+      Policies:
+        - PolicyName: read-portal-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref PortalOidcClientSecret
+                  - !Ref PortalSessionSecret
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource:
+                  Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+
+  PortalTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-portal-task'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: read-artifacts
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Read exactly the artifacts bucket (the exe, installer, manifest,
+              # optional CA). No ListBucket - the portal addresses known keys.
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${ArtifactsBucket.Arn}/*'
+              # The bucket is SSE-KMS; reading its objects needs the CMK.
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource:
+                  Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+        - PolicyName: write-audit
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                # The log-group Arn attribute already ends in :* (covers streams).
+                Resource: !GetAtt AuditLogGroup.Arn
+
+  # ------------------------------------------------------------------ ECS
+  PortalTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${NamePrefix}-portal'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '512'
+      Memory: '1024'
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt PortalExecutionRole.Arn
+      TaskRoleArn: !GetAtt PortalTaskRole.Arn
+      ContainerDefinitions:
+        - Name: portal
+          Image: !Ref PortalImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref PortalLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: portal
+          Environment:
+            # Egress proxy for the outbound Okta OIDC calls. NO_PROXY keeps S3 +
+            # CloudWatch on the AWS path (VPC endpoints resolve under
+            # .amazonaws.com), mirroring the gateway/Grafana tasks.
+            - !If
+              - HaveProxy
+              - Name: HTTP_PROXY
+                Value: !Ref HttpsProxyUrl
+              - !Ref 'AWS::NoValue'
+            - !If
+              - HaveProxy
+              - Name: HTTPS_PROXY
+                Value: !Ref HttpsProxyUrl
+              - !Ref 'AWS::NoValue'
+            - !If
+              - HaveProxy
+              - Name: NO_PROXY
+                Value: 'localhost,127.0.0.1,169.254.169.254,169.254.170.2,.amazonaws.com'
+              - !Ref 'AWS::NoValue'
+            - Name: OIDC_ISSUER
+              Value: !Ref OktaIssuer
+            - Name: OIDC_CLIENT_ID
+              Value: !Ref PortalOktaClientId
+            - Name: PUBLIC_URL
+              Value: !Sub 'https://${GatewayFqdn}'
+            - Name: GATEWAY_URL
+              Value: !Sub 'https://${GatewayFqdn}'
+            - Name: ACCESS_GROUP
+              Value: !Ref AccessGroup
+            - Name: PORTAL_TEAMS
+              Value: !Ref PortalTeams
+            - Name: PORTAL_COST_CENTERS
+              Value: !Ref PortalCostCenters
+            - Name: ARTIFACTS_BUCKET
+              Value: !Ref ArtifactsBucket
+            - Name: RELEASE_VERSION
+              Value: !Ref ReleaseVersion
+            - Name: BUNDLE_EXTRA_CA
+              Value: !Ref BundleExtraCa
+            - Name: DISABLE_UPDATES
+              Value: !Ref DisableUpdates
+            - Name: SESSION_TTL_HOURS
+              Value: !Ref SessionTtlHours
+            - Name: AUDIT_LOG_GROUP
+              Value: !Ref AuditLogGroup
+            - Name: PORTAL_PORT
+              Value: '8080'
+          Secrets:
+            - Name: OIDC_CLIENT_SECRET
+              ValueFrom: !Ref PortalOidcClientSecret
+            - Name: SESSION_SECRET
+              ValueFrom: !Ref PortalSessionSecret
+
+  # No Name (a protocol change replaces the group; a fixed name self-collides
+  # mid-update). HTTPS: the portal image's TLS entrypoint serves a per-task
+  # self-signed cert; ALBs don't validate target certs. HealthCheckProtocol
+  # HTTPS is explicit - ALB health checks default to HTTP even on an HTTPS
+  # target group, so without it no target ever goes healthy.
+  PortalTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      Protocol: HTTPS
+      Port: 8080
+      TargetType: ip
+      HealthCheckProtocol: HTTPS
+      HealthCheckPath: /portal/healthz
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+
+  PortalListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn:
+        Fn::ImportValue: !Sub '${NamePrefix}-https-listener'
+      Priority: !Ref ListenerRulePriority
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values: ['/portal', '/portal/*']
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref PortalTargetGroup
+
+  PortalService:
+    Type: AWS::ECS::Service
+    DependsOn: PortalListenerRule
+    Properties:
+      ServiceName: !Sub '${NamePrefix}-portal'
+      Cluster:
+        Fn::ImportValue: !Sub '${NamePrefix}-cluster-arn'
+      # Required for the default (rolling) deployment controller; !Ref returns
+      # the task-def ARN incl. revision so updates roll the service.
+      TaskDefinition: !Ref PortalTaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: !Ref PortalDesiredCount
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref PortalSecurityGroup
+      LoadBalancers:
+        - ContainerName: portal
+          ContainerPort: 8080
+          TargetGroupArn: !Ref PortalTargetGroup
+
+Outputs:
+  PortalUrl:
+    Description: Portal URL - sign in with Okta (access = AccessGroup membership).
+    Value: !Sub 'https://${GatewayFqdn}/portal'
+  PortalOidcRedirectUri:
+    Description: Register this redirect URI on the Okta app used for the portal.
+    Value: !Sub 'https://${GatewayFqdn}/portal/oauth/callback'
+  PortalOidcSecretArn:
+    Description: 'Set the real client secret: scripts/set-portal-oidc-secret.sh'
+    Value: !Ref PortalOidcClientSecret
+  ArtifactsBucketName:
+    Description: CMK-encrypted bucket for the published release + installer (publish-portal-release.sh).
+    Value: !Ref ArtifactsBucket
+  PortalServiceName:
+    Description: ECS service name (set-portal-oidc-secret.sh rolls it after a secret change).
+    Value: !GetAtt PortalService.Name
+  AuditLogGroupName:
+    Description: Dedicated download-audit log group (flag for SIEM).
+    Value: !Ref AuditLogGroup

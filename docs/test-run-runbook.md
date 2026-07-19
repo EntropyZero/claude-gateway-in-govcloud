@@ -185,6 +185,9 @@ cp mirror/2.1.207/claude docker/claude
 #     pushes to your ECR (CMK-encrypted, immutable), and PERSISTS a
 #     digest-pinned COLLECTOR_IMAGE into deploy.env automatically.
 ADOT_VERSION=v0.43.0 ./scripts/mirror-collector.sh
+
+# 3e. Download-portal image (only if deploying the optional portal, step 11)
+./scripts/build-and-push-portal.sh                 # persists PORTAL_IMAGE
 ```
 🔎 After this, `deploy.env` has all four image vars set by the scripts —
 `IMAGE_URI`, `DBADMIN_IMAGE`, `GRAFANA_IMAGE`, and a digest-pinned
@@ -306,6 +309,42 @@ guard now sees the obs stack exists and keeps the OTLP URL.)
 
 ---
 
+## 9b. Optional: installer download portal (04)
+
+Independent of the observability stack — deploy any time **after** the gateway
+(02). Shares the ALB / FQDN / cert / Zscaler entry (path-based at `/portal`),
+so it needs **no new DNS or Zscaler request**. It does reach the Okta issuer
+outbound over the **same** server-side egress path (+ SSL-inspection exemption)
+the gateway already requires — same prerequisite, so OIDC can't be verified
+live until that lands.
+
+Prereqs: portal image built (step 3e), and the Okta app has the
+`https://<FQDN>/portal/oauth/callback` redirect URI + the `<ACCESS_GROUP>`
+group populated (see `docs/okta-request-email.md`). **Critically, the app must
+have a groups claim configured** on the authorization server (ID token, matches
+regex `.*`) — the `groups` scope alone is *not* enough on the Okta org server,
+and without the claim the portal denies **everyone** (groups arrive in neither
+the ID token nor `/userinfo`), which looks like an authz bug but is Okta config.
+
+```bash
+./scripts/deploy-download-portal.sh                       # creates the stack + CMK artifacts bucket
+./scripts/publish-portal-release.sh 2.1.207               # uploads the verified mirror output + installer
+./scripts/set-portal-oidc-secret.sh                       # paste the portal client secret; rolls the service
+```
+🔎 Stack `CREATE_COMPLETE`; the target group goes `healthy` on the **HTTPS**
+`/portal/healthz` check; `PortalOidcRedirectUri` matches Okta; `deploy.env` now
+has `PORTAL_ARTIFACTS_BUCKET`. The publish step re-verifies `claude.exe`
+against the manifest SHA-256 before upload.
+
+- ☐ **Portal login + download** (needs the Okta round-trip, so only after the
+  Zscaler exemption lands): browse `https://<FQDN>/portal` → Okta SSO → pick
+  Team + Cost Center → the ZIP downloads → `install.cmd` inside it carries the
+  baked `-GatewayUrl` / `-Sha256` / `-Team` / `-CostCenter` / `-DisableUpdates`.
+- ☐ **Access denied path**: a user NOT in `<ACCESS_GROUP>` is denied, and the
+  denial lands in the `/claude/<prefix>/portal-audit` log group.
+- ☐ **Audit trail**: a successful download writes one JSON line (user, groups,
+  team, cost_center, version, sha256, source IP) to that same group.
+
 ## 10. If something breaks
 
 - **Custom resource / stack hung**: check the relevant Lambda log group
@@ -338,8 +377,9 @@ guard now sees the obs stack exists and keeps the OTLP URL.)
   test run) before debugging the bucket policy — the policy grants both ELB
   delivery principals. To iterate on the DB itself in a throwaway
   test account, see the teardown-order notes below.
-- **Teardown order** (test account cleanup): delete **03 first**, then 02,
-  then 01. Caveats: the db-admin Lambda ENIs can linger ~20 min and are
+- **Teardown order** (test account cleanup): delete the optional stacks
+  **03 and 04 first** (either order — both only import from 02), then 02, then
+  01. Caveats: the db-admin Lambda ENIs can linger ~20 min and are
   attached to 01's db-client SG — if a 01 delete fails with a dependency
   violation, wait and retry. Named Secrets Manager secrets enter a 7–30 day
   recovery window; to redeploy the same `NAME_PREFIX` immediately, first
@@ -370,4 +410,9 @@ guard now sees the obs stack exists and keeps the OTLP URL.)
 ./scripts/deploy-observability.sh
 ./scripts/set-grafana-oidc-secret.sh
 ./scripts/deploy-gateway.sh          # re-run: enables telemetry forwarding
+#   ... optional installer download portal (independent of 03) ...
+./scripts/build-and-push-portal.sh
+./scripts/deploy-download-portal.sh
+./scripts/publish-portal-release.sh 2.1.207
+./scripts/set-portal-oidc-secret.sh
 ```

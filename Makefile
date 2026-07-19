@@ -2,13 +2,16 @@
 # (.github/workflows/tests.yml) runs the same commands per job.
 # Tooling expected on PATH: python3 + pytest, bats, cfn-lint, cfn-guard, pwsh.
 
-.PHONY: test test-lambda test-bash test-cfn test-powershell docs-pdf
+.PHONY: test test-lambda test-portal test-bash test-cfn test-powershell docs-pdf
 
-test: test-lambda test-bash test-cfn test-powershell
+test: test-lambda test-portal test-bash test-cfn test-powershell
 	@echo "All test suites passed."
 
 test-lambda:
 	python3 -m pytest tests/lambda tests/templates -q
+
+test-portal:
+	python3 -m pytest tests/portal -q
 
 test-bash:
 	bats tests/bash

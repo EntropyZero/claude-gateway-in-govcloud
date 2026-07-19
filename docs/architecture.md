@@ -146,7 +146,9 @@ noted.
 | App DB user | `<prefix>/db-app-user` | Bootstrap Lambda | Gateway tasks (ECS injection at launch) | Stack's rotation Lambda, 90 d default, alternating users + service roll |
 | Okta client secret (gateway) | `<prefix>/oidc-client-secret` | Stack (placeholder) → `set-okta-secret.sh` | Gateway tasks | Manual, in Okta + script (rolls service) |
 | Okta client secret (Grafana) | `<prefix>/grafana-oidc-client-secret` | Stack (placeholder) → `set-grafana-oidc-secret.sh` | Grafana task | Manual, same pattern |
+| Okta client secret (portal) | `<prefix>/portal-oidc-client-secret` | Stack 04 (placeholder) → `set-portal-oidc-secret.sh` | Portal tasks | Manual, same pattern |
 | JWT session-signing secret | `<prefix>/jwt-secret` | Stack (generated) | Gateway tasks | Manual runbook: prepend → roll → remove |
+| Portal session-signing secret | `<prefix>/portal-session-secret` | Stack 04 (generated) | Portal tasks | Manual (regenerate + roll) |
 | Grafana `admin` password | `<prefix>/grafana-admin-password` | Stack (generated) | Break-glass only (login form disabled) | Manual |
 | TLS: enterprise leaf + key | ACM import | Enterprise CA via `import-enterprise-cert.sh` | ALB listener | Manual re-import; `DaysToExpiry` alarm at 30 d |
 | TLS: per-task certs | Generated in-container at startup | Gateway / Grafana entrypoints | ALB target connections | Every task launch; keys never leave the task |
@@ -169,14 +171,15 @@ allow-all); the table is the complete connectivity graph.
 
 | SG | Ingress | Egress |
 |---|---|---|
-| `alb` | 443 from `CLIENT_INGRESS_CIDR` (ZPA connector subnets) | 8080 → `svc`; 3000 → `grafana` (added by 03); otherwise none |
+| `alb` | 443 from `CLIENT_INGRESS_CIDR` (ZPA connector subnets) | 8080 → `svc`; 3000 → `grafana` (added by 03); 8080 → `portal` (added by 04); otherwise none |
 | `svc` (gateway tasks) | 8080 from `alb` | 443 → 0.0.0.0/0 (Okta + AWS via endpoints/TGW); proxy port when configured; 4317–4318 → `collector` (added by 03); 5432 via attached `db-client` |
 | `db-client` (attached to tasks + db-admin Lambdas) | — | 5432 → `db` only |
 | `db` | 5432 from `db-client` | none |
 | `db-admin` (Lambdas) | — | 443 → 0.0.0.0/0 (Secrets Manager, ECS APIs) |
 | `collector` | 4317–4318 from `svc` | 443 → 0.0.0.0/0 (AMP, CloudWatch) |
 | `grafana` | 3000 from `alb` | 443 → 0.0.0.0/0 (AMP, Okta); proxy port when configured |
-| `endpoints` / `amp-endpoint` | 443 from `svc` / `db-admin` (resp. `collector`+`grafana`) | none |
+| `portal` (download portal, 04) | 8080 from `alb` | 443 → 0.0.0.0/0 (Okta, S3, CloudWatch); proxy port when configured |
+| `endpoints` / `amp-endpoint` | 443 from `svc` / `db-admin` (resp. `collector`+`grafana`+`portal`) | none |
 
 DNS to the VPC resolver is exempt from SG evaluation (AWS platform
 behavior) and is why no port-53 rules appear.
@@ -204,8 +207,9 @@ empty database) fails fast.
 |---|---|---|
 | RDS storage + snapshots | SSE | CMK |
 | RDS master secret / all Secrets Manager secrets | SSE | CMK |
-| CloudWatch log groups (ECS ×3, activity) | SSE | CMK |
+| CloudWatch log groups (ECS gateway/collector/grafana/portal, activity, portal-audit) | SSE | CMK |
 | Activity archive bucket | SSE-KMS + bucket key | CMK |
+| Portal artifacts bucket (04) | SSE-KMS + bucket key | CMK |
 | AMP workspace | SSE | CMK (`ENCRYPT_AMP_WITH_CMK`, creation-time) |
 | ECR repositories | SSE-KMS at creation | CMK (when created after 01) |
 | ALB access-logs bucket | SSE-S3 (AES-256) | **AWS-managed — ELB log delivery does not support KMS** |

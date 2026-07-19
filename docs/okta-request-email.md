@@ -18,9 +18,10 @@ email.*
 Hi <name>,
 
 We're deploying an internal application (the Claude apps gateway, with a
-Grafana admin dashboard) that signs users in via Okta OIDC against our org
-authorization server. Could you set up the following OIDC application and
-send back the details at the bottom? Happy to hop on a call.
+Grafana admin dashboard and an installer **download portal**) that signs users
+in via Okta OIDC against our org authorization server. Could you set up the
+following OIDC application and send back the details at the bottom? Happy to
+hop on a call.
 
 ## 1. Application — OIDC **Web** app (confidential)
 
@@ -31,14 +32,18 @@ send back the details at the bottom? Happy to hop on a call.
 - **Grant type:** **Authorization Code**. (Our clients also send PKCE (S256) —
   fine to leave PKCE allowed; it's used *in addition to* the secret, not
   instead of it.)
-- **Sign-in redirect URIs** — register **both** on this one app:
+- **Sign-in redirect URIs** — register **all three** on this one app:
   - `https://<FQDN>/oauth/callback`  (the gateway)
   - `https://<FQDN>/grafana/login/generic_oauth`  (the Grafana dashboard)
+  - `https://<FQDN>/portal/oauth/callback`  (the installer download portal)
 - **Sign-out redirect URI:** not required.
 
-*One app covers both the gateway and Grafana (both redirect URIs above). If
-you'd rather isolate them, a second Web app dedicated to Grafana also works —
-then we'd need a second client ID/secret. Either is fine; one app is simpler.*
+*One app can cover the gateway, Grafana, and the portal (all three redirect
+URIs above). If you'd rather isolate them, a dedicated Web app per service also
+works — then we'd need a client ID/secret per app. The **download portal
+defaults to its own dedicated Web app** (clean secret rotation, least
+privilege) — if you set that up, register only `https://<FQDN>/portal/oauth/callback`
+on it and send back a separate client ID/secret. Either is fine.*
 
 ## 2. Authorization server — the **org** server
 
@@ -46,21 +51,29 @@ then we'd need a second client ID/secret. Either is fine; one app is simpler.*
   `https://<OKTA_DOMAIN>`). **Please do not create a custom authorization
   server** — our deployment is configured for the org server.
 
-## 3. Groups — needed for dashboard role mapping
+## 3. Groups — needed for dashboard role mapping and portal access
 
-Grafana maps Okta group membership to its roles, so the app needs to return
-the user's groups:
+Both Grafana (role mapping) and the download portal (access gating) authorize
+on Okta group membership, so the app needs to return the user's groups:
 
-- On the app's OIDC settings, configure the **groups claim** so the user's
-  Okta group memberships are returned when the `groups` scope is requested
-  (the org server's built-in `groups` scope). A filter of **Matches regex**
-  `.*` is simplest, or restrict to a prefix (e.g. groups starting with
-  `grafana`/`claude`). Grafana requests the `groups` scope automatically.
+- On the app's OIDC settings (on **each** app you create, if you split them),
+  configure the **groups claim** so the user's Okta group memberships are
+  returned when the `groups` scope is requested (the org server's built-in
+  `groups` scope). A filter of **Matches regex** `.*` is simplest, or restrict
+  to a prefix (e.g. groups starting with `grafana`/`claude`). Grafana and the
+  portal both request the `groups` scope automatically. *(The portal checks
+  the ID token first and falls back to the `/userinfo` endpoint, so either
+  delivery works — but the groups claim must be configured on the app or the
+  portal denies everyone.)*
 - Create (or confirm) the admin group **`<GRAFANA_ADMIN_GROUP>`** (default
   name `grafana-admins`) and add our test user `<TEST_USER>` plus the
   intended dashboard admins. *(Role mapping is strict — a user in none of the
   mapped groups is denied the dashboard, so the test user must be in this
   group.)*
+- Create (or confirm) the portal-access group **`<ACCESS_GROUP>`** (default
+  name `claude-gateway-users`) and add every developer who should be able to
+  download the installer, including `<TEST_USER>`. *(The portal denies — and
+  audits — anyone not in this group.)*
 
 ## 4. Assignment & email domains
 
@@ -97,11 +110,13 @@ Best,
 | `<FQDN>` | `GATEWAY_FQDN` in `scripts/deploy.env` (e.g. `claude-gateway.<domain>`) |
 | `<OKTA_DOMAIN>` | your Okta org domain, e.g. `customerlogin.thecustomer.gov` |
 | `<GRAFANA_ADMIN_GROUP>` | `GRAFANA_ADMIN_GROUP` in `deploy.env` (default `grafana-admins`) |
+| `<ACCESS_GROUP>` | `ACCESS_GROUP` in `deploy.env` (default `claude-gateway-users`; gates the download portal) |
 | `<TEST_USER>` | the user you'll log in with during the test run |
 | `<ALLOWED_EMAIL_DOMAINS>` | `ALLOWED_EMAIL_DOMAINS` in `deploy.env` |
 
 What you'll receive maps to `deploy.env` as: Client ID → `OKTA_CLIENT_ID`
-(and `GRAFANA_OKTA_CLIENT_ID` = the same if one app); Client Secret →
-entered at the `set-okta-secret.sh` / `set-grafana-oidc-secret.sh` prompts
-(never stored in `deploy.env`); issuer → `OKTA_ISSUER` (the bare domain, with
-`OKTA_AUTH_SERVER_TYPE=org`).
+(and `GRAFANA_OKTA_CLIENT_ID` / `PORTAL_OKTA_CLIENT_ID` = the same if one app,
+or their own values if you registered dedicated apps); Client Secret →
+entered at the `set-okta-secret.sh` / `set-grafana-oidc-secret.sh` /
+`set-portal-oidc-secret.sh` prompts (never stored in `deploy.env`); issuer →
+`OKTA_ISSUER` (the bare domain, with `OKTA_AUTH_SERVER_TYPE=org`).

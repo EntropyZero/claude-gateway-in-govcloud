@@ -97,12 +97,15 @@ def _okta_issuer_pattern(template):
 
 
 def test_okta_issuer_pattern_identical_across_stacks():
-    # The same OKTA_ISSUER env var feeds both stacks, so a value that passes
-    # 02 must pass 03 (and vice versa). Divergence let a trailing-slash issuer
-    # deploy the gateway but break Grafana's derived /oauth2/v1 URLs.
+    # The same OKTA_ISSUER env var feeds every stack, so a value that passes
+    # 02 must pass 03 and 04 (and vice versa). Divergence let a trailing-slash
+    # issuer deploy the gateway but break Grafana's derived /oauth2/v1 URLs.
     p02 = _okta_issuer_pattern("02-gateway.yaml")
     p03 = _okta_issuer_pattern("03-observability.yaml")
-    assert p02 == p03, f"OktaIssuer patterns diverge:\n 02: {p02}\n 03: {p03}"
+    p04 = _okta_issuer_pattern("04-download-portal.yaml")
+    assert p02 == p03 == p04, (
+        f"OktaIssuer patterns diverge:\n 02: {p02}\n 03: {p03}\n 04: {p04}"
+    )
 
 
 def test_okta_issuer_pattern_rejects_trailing_slash_and_scheme_less():

@@ -33,6 +33,12 @@ unexercised: gateway steady state + end-to-end login, Grafana Okta login,
 secret rotation, activity archive. Not production-ready until the runbook's
 validation checklist is green.
 
+**Added 2026-07-18: the optional installer download portal (stack 04).**
+Code-complete with a full test suite (`tests/portal`) green; NOT deploy-verified
+— the Okta OIDC round-trip and the streamed download at real size need the live
+test run (and the same in-flight Zscaler/Okta egress exemption the gateway
+needs). Its new surface + controls are in `docs/security-review-2026-07.md` §E.
+
 The full security review (`docs/security-review-2026-07.md`) is implemented:
 batches A (deploy-breakers), B (ZPA/landing-zone prerequisites), C (FedRAMP
 hardening C1–C11), D (correctness), and C12 (least-privilege app DB user +
@@ -47,7 +53,8 @@ plaintext-but-SG-scoped; the TLS recipe is documented on the collector task).
 | `cloudformation/01-database.yaml` | RDS PG16, the **KMS CMK** (created here, exported), db SGs, pgaudit |
 | `cloudformation/02-gateway.yaml` | ALB+TLS, ECS gateway, IAM, secrets, VPC endpoints, **db bootstrap + rotation Lambdas** |
 | `cloudformation/03-observability.yaml` | AMP, ADOT collector, Grafana (Okta SSO), activity-archive chain |
-| `docker/` | gateway image + entrypoint; `db-admin/` (bootstrap+rotation Lambda); `grafana/` |
+| `cloudformation/04-download-portal.yaml` | **optional** Okta-secured installer download portal (ECS Fargate at `/portal`, in-app OIDC + group auth, CMK S3 artifacts + audit log) |
+| `docker/` | gateway image + entrypoint; `db-admin/` (bootstrap+rotation Lambda); `grafana/`; `portal/` (download-portal app) |
 | `client/` | offline release mirror + `Install-ClaudeCode.ps1` (non-admin Windows) |
 | `scripts/` | `deploy.env`-driven runbook; `common.sh` holds the shared helpers |
 | `docs/architecture.md` | review package: 8 SVG diagrams + secrets/SG/encryption inventories |
@@ -66,8 +73,12 @@ Order is load-bearing: **cert → 01 database → build all four images → 02
 gateway → DNS/Zscaler → verify → 03 observability → Grafana secret → 02
 re-run**. 01 is first because it creates and persists the CMK so the ECR
 repos are born encrypted. Scripts persist their outputs back into
-`deploy.env` (`set_env_var`) so there are no copy-paste steps. Teardown is the
-reverse (03 → 02 → 01).
+`deploy.env` (`set_env_var`) so there are no copy-paste steps. The **optional
+download portal (04)** is a fifth image + stack that slots in any time after
+02 (independent of 03): `build-and-push-portal.sh → deploy-download-portal.sh
+→ publish-portal-release.sh → set-portal-oidc-secret.sh`; it reuses the ALB /
+FQDN / cert / Zscaler entry (path-based at `/portal`). Teardown is the reverse
+(04 and 03 → 02 → 01).
 
 ## How to work here
 
@@ -82,6 +93,10 @@ reverse (03 → 02 → 01).
     Secrets Manager + faked pg/ECS): alternating-user flip, idempotency
     guards, error propagation. **The code with real bug history — extend it
     when you touch `docker/db-admin/app.py`.**
+  - `tests/portal` — pytest for the download-portal app (`docker/portal/app.py`):
+    OIDC/JWT verification (RS256 against a `cryptography`-minted test JWKS),
+    cookie/PKCE, group authz, dropdown validation, install.cmd/ZIP generation,
+    and full HTTP-handler flows. Extend it when you touch the portal app.
   - `tests/bash` — bats for `common.sh` helpers (`proxy_port`, `set_env_var`,
     `require_vars`).
   - `tests/cfn` — `cfn-lint` + a **cfn-guard** ruleset encoding the security
