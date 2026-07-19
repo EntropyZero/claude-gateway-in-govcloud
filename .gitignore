@@ -29,3 +29,6 @@ docker/grafana/tls/
 
 # Generated gateway listener TLS cert (built per-run by build-and-push-image.sh)
 docker/tls/
+
+# Generated portal listener TLS cert (built per-run by build-and-push-portal.sh)
+docker/portal/tls/
