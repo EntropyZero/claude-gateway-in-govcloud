@@ -17,6 +17,17 @@ jobs:
       - run: pip install -r tests/requirements-test.txt
       - run: python -m pytest tests/lambda tests/templates -q
 
+  portal:
+    name: Portal (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install -r tests/requirements-test.txt
+      - run: python -m pytest tests/portal -q
+
   bash:
     name: Shell helpers (bats)
     runs-on: ubuntu-latest
