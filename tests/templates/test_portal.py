@@ -65,6 +65,17 @@ def test_log_groups_are_cmk_encrypted():
         assert "KmsKeyId" in blk and "-kms-key-arn" in blk, name
 
 
+def test_audit_log_group_survives_stack_delete_and_replace():
+    t = _text()
+    # The download-audit trail is an audit record: it must not vanish on
+    # teardown (DeletionPolicy) or on a LogGroupName-changing update
+    # (UpdateReplacePolicy). The operational PortalLogGroup deliberately has
+    # neither - only the audit group is retained.
+    blk = t[t.index("AuditLogGroup:"):][: t[t.index("AuditLogGroup:"):].index("PortalLogGroup:")]
+    assert "DeletionPolicy: Retain" in blk
+    assert "UpdateReplacePolicy: Retain" in blk
+
+
 def test_audit_log_group_is_dedicated_not_activity_stream():
     t = _text()
     # The audit trail is its OWN dedicated group...

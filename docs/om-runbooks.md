@@ -834,9 +834,11 @@ aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-nam
   (CMK-encrypted).
 - **AMP workspace** (`Workspace`, 03) — `Retain`.
 - **Portal artifacts bucket** (`ArtifactsBucket`, 04) — `Retain`
-  (CMK-encrypted; holds the published release binaries). The portal's audit
-  and task log groups are **deleted** with the stack — export the download
-  audit trail first if retention obligations apply.
+  (CMK-encrypted; holds the published release binaries).
+- **Portal download-audit log group** (`AuditLogGroup`, 04,
+  `/claude/${NAME_PREFIX}/portal-audit`) — `Retain` (it is an audit record;
+  deleting it is a deliberate manual act after teardown). The portal's
+  *operational* task log group is deleted with the stack.
 - **RDS instance** (`Database`, 01) — `DeletionPolicy: Snapshot` → a **final
   snapshot** is taken; the running instance is removed. The snapshot persists.
 - Everything else (ALB, ECS services/cluster, secrets, log groups, VPC

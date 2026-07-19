@@ -262,8 +262,13 @@ Resources:
   # Dedicated download-audit trail (one JSON line per download/denial with the
   # VERIFIED OIDC identity). Separate from the activity-log stream by design
   # (never widen that surface); flag THIS group for SIEM. CMK-encrypted.
+  # Retained on stack delete/replace: this is an audit record, and losing it
+  # on teardown would defeat its purpose. Deleting a retained group later is
+  # an explicit manual act. (Object-level WORM remains a C9-scope decision.)
   AuditLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub '/claude/${NamePrefix}/portal-audit'
       RetentionInDays: !Ref PortalAuditRetentionDays
