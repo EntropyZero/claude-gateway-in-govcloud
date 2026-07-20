@@ -20,6 +20,9 @@ __pycache__/
 # Playwright MCP scratch
 .playwright-mcp/
 
+# Local task/handoff briefs (working notes, not repo documentation)
+tasks/
+
 # Test artifacts
 .pytest_cache/
 tests/**/__pycache__/
