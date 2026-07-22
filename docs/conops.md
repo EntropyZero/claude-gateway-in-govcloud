@@ -44,8 +44,11 @@ laptops without a public internet dependency on the AI provider.
 - An **RDS PostgreSQL** store for session and spend state
   (`cloudformation/01-database.yaml`).
 - An **offline Windows client rollout**: a mirrored, integrity-verified
-  `claude` binary and a non-admin installer that writes managed settings
-  (`client/mirror-claude-release.sh`, `client/Install-ClaudeCode.ps1`).
+  `claude` binary and a **no-admin, user-scope installer** — it writes the
+  binary and a user-settings `env` block (telemetry tags, update lockdown, CA
+  trust) and needs no elevation; forced gateway login, when wanted, is a
+  separate GPO/MDM admin channel (`client/mirror-claude-release.sh`,
+  `client/Install-ClaudeCode.ps1`; [`client-config.md`](client-config.md)).
 - An **optional usage/cost observability stack**: Amazon Managed Prometheus
   (AMP) and a self-hosted Grafana behind the same ALB and IdP
   (`cloudformation/03-observability.yaml`). Usage metrics reach AMP through an
@@ -62,8 +65,10 @@ laptops without a public internet dependency on the AI provider.
   5).
 - **Not dependent on Anthropic-hosted infrastructure at runtime.** The client
   fleet never contacts Anthropic: binaries are mirrored and verified, and all
-  auto-update paths are disabled by managed settings
-  (`client/mirror-claude-release.sh`, `client/Install-ClaudeCode.ps1`).
+  auto-update paths are disabled by the user-settings `env` block the installer
+  writes (`DISABLE_UPDATES`/`DISABLE_AUTOUPDATER`), backstopped by the
+  mirror-only network path (`client/mirror-claude-release.sh`,
+  `client/Install-ClaudeCode.ps1`).
 - **Not a Node/npm distribution.** By decision (2026-07-15), only the
   precompiled native `claude` binary is fielded (CLAUDE.md "User decisions").
 
@@ -119,10 +124,12 @@ holds the RDS master credential.
 
 ### 3.1 End-user developers
 
-- Run `claude` on managed, Zscaler-secured Windows laptops via a **non-admin**
-  install to the per-user profile (`client/Install-ClaudeCode.ps1`; the
-  installer refuses a SYSTEM-context binary install and offers a settings-only
-  mode for MDM pushes).
+- Run `claude` on managed, Zscaler-secured Windows laptops via a **no-admin**,
+  entirely user-scope install to the per-user profile
+  (`client/Install-ClaudeCode.ps1`; the installer refuses a SYSTEM-context run
+  and writes no machine/policy settings — only a user-settings `env` block).
+  Forced gateway login, when the org wants it, is delivered separately by
+  GPO/MDM ([`client-config.md`](client-config.md)).
 - Authenticate interactively through **Okta SSO** at first `/login` and receive
   a gateway session (`cloudformation/02-gateway.yaml` `oidc:` and `session:`
   blocks).
@@ -267,9 +274,13 @@ flow through the fielded system and cites the file that implements it.
      `Install-ClaudeCode.ps1` directly from the internal share.
 
    Either way, the installer places the binary in the per-user profile
-   **without admin rights** and writes **managed settings** that point the CLI
-   at the gateway and lock down auto-updates (`DISABLE_UPDATES=1`,
-   `DISABLE_AUTOUPDATER=1`) (`client/Install-ClaudeCode.ps1`).
+   **without admin rights** and writes a **user-settings `env` block** that
+   locks down auto-updates (`DISABLE_UPDATES=1`, `DISABLE_AUTOUPDATER=1`) and
+   stamps telemetry tags; the developer points the CLI at the gateway
+   interactively at first `/login` (step 2 below), and the gateway pushes central
+   config after login via `/managed/settings`. Forced gateway-only login, when
+   the org wants a client-side lock, is delivered by GPO/MDM, not this installer
+   (`client/Install-ClaudeCode.ps1`; [`client-config.md`](client-config.md)).
 2. **First login (Okta OIDC).** The developer runs `claude`, chooses the cloud
    gateway login, and is taken through the Okta authorization-code flow (PKCE,
    org authorization server). On success the gateway issues a session JWT that
@@ -301,9 +312,10 @@ public egress (`architecture.md` §1).
 
 ### 5.3 Usage and cost monitoring
 
-Each developer's managed settings can stamp **OTEL resource attributes** —
-`cost_center` and `team` — via `OTEL_RESOURCE_ATTRIBUTES`, set by the installer's
-`-CostCenter` / `-Team` parameters (`client/Install-ClaudeCode.ps1`). The
+Each developer's user-settings `env` block can stamp **OTEL resource
+attributes** — `cost_center` and `team` — via `OTEL_RESOURCE_ATTRIBUTES`, set by
+the installer's `-CostCenter` / `-Team` parameters
+(`client/Install-ClaudeCode.ps1`). The
 gateway additionally stamps **identity** (`user.id` / `user.email` /
 `user.groups` from the Okta session) onto every telemetry export
 (`architecture.md` §3, §5). Metrics flow gateway → **co-resident ADOT collector

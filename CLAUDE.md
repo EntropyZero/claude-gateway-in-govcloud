@@ -76,6 +76,7 @@ VERIFICATION.
 | `docs/security-review-2026-07.md` | finding-by-finding status; the source of truth for what's done |
 | `docs/test-run-runbook.md` | the deploy runbook |
 | `docs/om-runbooks.md` | steady-state O&M runbooks (cert/secret rotation, CA refresh, updates, backup/restore, alarms, teardown) |
+| `docs/client-config.md` | **client config & enforcement model**: no-admin user-scope installer, one-time `/login` flow, gateway `/managed/settings` push (`MANAGED_CLI_GROUPS`), and the **GPO/MDM forced-login** path (ops how-to; not in the PDF set) |
 | `docs/networking-request-email.md` | cert/DNS/Zscaler request template |
 | `docs/okta-request-email.md` | Okta OIDC app request template (org server, Web app, groups) |
 | `tests/` + `Makefile` | test suites (`make test`); CI in `.github/workflows/tests.yml` |
@@ -122,8 +123,8 @@ FQDN / cert / Zscaler entry (path-based at `/portal`). Teardown is the reverse
     target-group health-check protocol, RDS/S3/ALB posture). A template
     change that violates a rule fails CI.
   - `tests/powershell` — Pester for `Install-ClaudeCode.ps1`'s
-    `Build-ManagedSettings` (dot-sourced via the `CLAUDE_INSTALLER_DOTSOURCE`
-    guard); runs on Linux pwsh.
+    `Build-UserEnv` + `Write-UserSettings` (dot-sourced via the
+    `CLAUDE_INSTALLER_DOTSOURCE` guard); runs on Linux pwsh.
   Toolchain is pip/npm/tarball-installable (pytest+moto+pg8000, `bats`,
   `cfn-lint`, `cfn-guard`, `pwsh`+Pester); CI runs the same commands per job
   on `ubuntu-latest`.

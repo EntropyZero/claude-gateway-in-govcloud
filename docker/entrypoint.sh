@@ -22,6 +22,16 @@ if [ -n "${GATEWAY_TELEMETRY_B64:-}" ]; then
   printf '%s' "$GATEWAY_TELEMETRY_B64" | base64 -d >> /etc/claude/gateway.yaml
 fi
 
+# Optional managed-settings block (update lockdown, keyed on Okta group),
+# rendered as a separate env var by CloudFormation when ManagedCliGroups is
+# set. Appended the same way as telemetry. NOTE: adding this block here means
+# a gateway image REBUILD + immutable tag bump is required before the
+# GATEWAY_MANAGED_B64 task-def change can take effect.
+if [ -n "${GATEWAY_MANAGED_B64:-}" ]; then
+  printf '\n' >> /etc/claude/gateway.yaml
+  printf '%s' "$GATEWAY_MANAGED_B64" | base64 -d >> /etc/claude/gateway.yaml
+fi
+
 # The listener's self-signed TLS cert (paths match the listen.tls block in
 # the rendered config) is baked into the image at /etc/claude/tls by the
 # build - the image carries no openssl. The ALB re-encrypts to the target
@@ -56,7 +66,7 @@ urlencode() {
 # an in-VPC MITM.
 GATEWAY_POSTGRES_URL="postgres://$(urlencode "$PGUSER"):$(urlencode "$PGPASSWORD")@${PGHOST}:${PGPORT}/${PGDATABASE}?sslmode=verify-full"
 export GATEWAY_POSTGRES_URL
-unset PGPASSWORD GATEWAY_CONFIG_B64 GATEWAY_TELEMETRY_B64
+unset PGPASSWORD GATEWAY_CONFIG_B64 GATEWAY_TELEMETRY_B64 GATEWAY_MANAGED_B64
 
 echo "[entrypoint] starting claude gateway ($(claude --version 2>/dev/null || echo version-unknown))"
 exec claude gateway --config /etc/claude/gateway.yaml

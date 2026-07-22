@@ -483,16 +483,22 @@ offline image builds are **[VERIFIED-LIVE]**.
      -GatewayUrl https://<GATEWAY_FQDN> -DisableUpdates
    ```
 
-5. **Forcing the upgrade (optional).** To make the CLI refuse to start below the
-   new version, bump `-RequiredMinimumVersion` in the managed-settings push
-   (writes `requiredMinimumVersion` into `managed-settings.json`; default floor
-   is `2.1.195`, the gateway's minimum):
+5. **Forcing the upgrade (optional).** The installer is user-scope only and has
+   no settings-push mode; a client-side version floor is a **managed setting**,
+   delivered by GPO/MDM (see [`client-config.md`](client-config.md) §2). To
+   raise the floor, bump `requiredMinimumVersion` in the managed-settings JSON
+   the GPO already delivers (default floor is `2.1.195`, the gateway's minimum):
 
-   ```powershell
-   .\client\Install-ClaudeCode.ps1 -SettingsOnly `
-     -GatewayUrl https://<GATEWAY_FQDN> -DisableUpdates `
-     -RequiredMinimumVersion 2.1.208
+   ```json
+   {"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<GATEWAY_FQDN>","requiredMinimumVersion":"2.1.208"}
    ```
+
+   Update the GPP Registry value `Settings` under
+   `HKLM\SOFTWARE\Policies\ClaudeCode` (or the `%ProgramFiles%\ClaudeCode\managed-settings.json`
+   file) with the new floor; clients pick it up on the next Group Policy
+   refresh. The gateway also enforces its own minimum client version
+   server-side regardless, so a below-floor client is refused at the gateway
+   even without the GPO lock.
 
 *Verification:*
 
@@ -509,8 +515,9 @@ offline image builds are **[VERIFIED-LIVE]**.
   portal audit log group (`/claude/${NAME_PREFIX}/portal-audit`).
 
 *Rollback / recovery:* Redeploy the previous `IMAGE_URI` (old immutable tag
-still in ECR) via `deploy.env` + `deploy-gateway.sh`; re-push managed settings
-with the prior `-RequiredMinimumVersion` if you raised the floor. Portal: set
+still in ECR) via `deploy.env` + `deploy-gateway.sh`; lower
+`requiredMinimumVersion` back in the GPO managed-settings JSON if you raised the
+floor ([`client-config.md`](client-config.md) §2). Portal: set
 `PORTAL_RELEASE_VERSION` back to the prior version and re-run
 `deploy-download-portal.sh` (earlier `releases/<version>/` prefixes stay in the
 artifacts bucket). Keep the prior `mirror/<version>/` directory until the new
@@ -521,19 +528,28 @@ release is confirmed across the fleet.
 - Update lockdown (`-DisableUpdates` → `DISABLE_UPDATES=1` +
   `DISABLE_AUTOUPDATER=1`) is what keeps users on the distributed version — do
   not drop it, or clients will self-update off the pinned build.
-- SYSTEM-context (Intune/SCCM device) pushes must use `-SettingsOnly`; the
-  binary install must run in **user** context (the installer throws otherwise).
-- **Managed settings on hardened / GPO-managed fleets — deliver them by
-  admin channel, not a user-run install.** A standard user cannot write
-  `HKCU\SOFTWARE\Policies\ClaudeCode` (the `Policies` subtree is ACL-locked on
-  STIG/CIS baselines), so a user-run install (incl. the portal ZIP) installs
-  the binary but **cannot apply the forced-login policy** — it now warns and
-  continues rather than aborting. Push the managed settings machine-wide
-  instead: run the installer elevated / `-SettingsOnly` in SYSTEM context, or
-  have MDM/GPO write the managed-settings file. **Machine path:**
-  `%ProgramFiles%\ClaudeCode\managed-settings.json` (Claude Code moved it here
-  from `%ProgramData%` at v2.1.75, admin-write-only = tamper-resistant; verified
-  against the mirrored binary). The binary stays user-installable either way.
+- **The installer is user-scope only** — it must run in the developer's own
+  (non-elevated) context. A SYSTEM-context run is **refused outright** (it would
+  install the binary into SYSTEM's profile and PATH, which no developer sees),
+  and there is no settings-push mode: the installer writes only the user
+  settings `env` block (`DISABLE_UPDATES`/`DISABLE_AUTOUPDATER`,
+  `OTEL_RESOURCE_ATTRIBUTES`, `NODE_EXTRA_CA_CERTS`), never a machine/policy
+  source. For a device-context binary push use the MDM "user" install behavior
+  (Intune) or the download portal.
+- **Forced gateway login on hardened / GPO-managed fleets — an admin-channel
+  concern, not the installer's.** `forceLoginMethod` / `forceLoginGatewayUrl` /
+  `requiredMinimumVersion` are honored only from a **managed source**, and on
+  hardened fleets the `Policies` subtree (even `HKCU\SOFTWARE\Policies\ClaudeCode`)
+  is ACL-locked under STIG/CIS baselines — which is why the installer no longer
+  writes any policy source. When the org wants the client-side lock, deliver the
+  managed settings by GPO/MDM: a GPP Registry `REG_SZ` value `Settings` under
+  `HKLM\SOFTWARE\Policies\ClaudeCode`, or a GPP Files copy of
+  `managed-settings.json` to `%ProgramFiles%\ClaudeCode\` (Claude Code moved off
+  `%ProgramData%` at v2.1.75; admin-write-only = tamper-resistant; verified
+  against the mirrored 2.1.211 binary). Full AD-admin steps are in
+  [`client-config.md`](client-config.md) §2. Without it, the network (gateway
+  FQDN only) + the gateway's server-side Okta/domain/min-version checks are the
+  enforcement. The binary stays user-installable either way.
 - Never bypass GPG verification as a matter of routine; `ALLOW_UNVERIFIED_MANIFEST=1`
   is for a deliberately air-gapped one-off only.
 
