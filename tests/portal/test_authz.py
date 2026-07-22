@@ -24,13 +24,53 @@ def test_groups_scalar_coerced_to_list(app):
 
 
 def test_authorized_true_when_member(app):
-    assert app.is_authorized(["x", "claude-gateway-users"], "claude-gateway-users")
+    assert app.is_authorized(["x", "claude-gateway-users"], ["claude-gateway-users"])
 
 
 def test_authorized_false_when_not_member(app):
-    assert not app.is_authorized(["x", "y"], "claude-gateway-users")
-    assert not app.is_authorized([], "claude-gateway-users")
-    assert not app.is_authorized(None, "claude-gateway-users")
+    assert not app.is_authorized(["x", "y"], ["claude-gateway-users"])
+    assert not app.is_authorized([], ["claude-gateway-users"])
+    assert not app.is_authorized(None, ["claude-gateway-users"])
+
+
+# --- multiple access groups (any-of) --------------------------------------
+
+def test_authorized_true_when_member_of_any_group(app):
+    allowed = ["claude-gateway-users", "platform-eng", "contractors"]
+    assert app.is_authorized(["everyone", "platform-eng"], allowed)   # 2nd
+    assert app.is_authorized(["contractors"], allowed)                # last
+    assert app.is_authorized(["claude-gateway-users"], allowed)       # first
+
+
+def test_authorized_false_when_member_of_no_listed_group(app):
+    allowed = ["claude-gateway-users", "platform-eng"]
+    assert not app.is_authorized(["everyone", "some-other-team"], allowed)
+    assert not app.is_authorized([], allowed)
+    assert not app.is_authorized(None, allowed)
+
+
+def test_authorized_scalar_access_group_still_works(app):
+    # A single group passed as a bare string is coerced, never iterated as
+    # characters (regression guard against set("solo")).
+    assert app.is_authorized(["solo"], "solo")
+    assert not app.is_authorized(["s", "o", "l"], "solo")
+
+
+def test_access_group_single_value_parses_to_one_element(app, env):
+    env["ACCESS_GROUP"] = "claude-gateway-users"
+    assert app.Config(env).access_groups == ["claude-gateway-users"]
+
+
+def test_access_group_comma_list_parses_and_trims(app, env):
+    env["ACCESS_GROUP"] = "claude-gateway-users, platform-eng ,contractors"
+    assert app.Config(env).access_groups == [
+        "claude-gateway-users", "platform-eng", "contractors"]
+
+
+def test_access_group_empty_fails_fast(app, env):
+    env["ACCESS_GROUP"] = "   "
+    with pytest.raises(ValueError):
+        app.Config(env)
 
 
 def test_validate_selection_accepts_configured_values(app, config):

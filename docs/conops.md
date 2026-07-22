@@ -185,12 +185,13 @@ reachable only by redeploying with `GRAFANA_DISABLE_LOGIN_FORM=false`.
 
 ### 3.6 Download-portal access group
 
-The portal (optional stack `04`) authorizes on a **single Okta group**: the
+The portal (optional stack `04`) authorizes on **Okta group membership**: the
 `AccessGroup` parameter (`ACCESS_GROUP` in `deploy.env`, placeholder default
-`claude-gateway-users`). Members may download the installer; everyone else is
+`claude-gateway-users`) names **one or more groups** (comma-separated), and a
+member of **any** listed group may download the installer; everyone else is
 denied — and the denial is audited (§5.4). The parameter is named generically
-so the **same group can gate the gateway** once its commented-out group policy
-(§3.1) is enabled, giving one org-managed membership list for both surfaces
+so the **same group(s) can gate the gateway** once its commented-out group
+policy (§3.1) is enabled, giving one org-managed membership set for both surfaces
 (`cloudformation/04-download-portal.yaml`; `scripts/deploy.env.example`).
 Unlike the gateway and Grafana, the portal's group check is enforced today,
 which makes the **Okta groups-claim configuration an operating prerequisite**

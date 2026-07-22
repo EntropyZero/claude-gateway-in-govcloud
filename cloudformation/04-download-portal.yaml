@@ -72,10 +72,11 @@ Parameters:
     Type: String
     Default: claude-gateway-users
     Description: >-
-      Okta group required to download the installer. A member of this group is
-      authorized; everyone else is denied (and the denial is audited). Named
-      generically on purpose so the gateway can share it when group filtering is
-      enabled there later - one deploy.env value, not a portal-only name.
+      Okta group(s) allowed to download the installer - one name, or several
+      comma-separated. A member of ANY listed group is authorized; everyone
+      else is denied (and the denial is audited). Named generically on purpose
+      so the gateway can share it when group filtering is enabled there later -
+      one deploy.env value, not a portal-only name.
 
   PortalTeams:
     Type: String

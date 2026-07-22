@@ -70,10 +70,11 @@ on Okta group membership, so the app needs to return the user's groups:
   intended dashboard admins. *(Role mapping is strict — a user in none of the
   mapped groups is denied the dashboard, so the test user must be in this
   group.)*
-- Create (or confirm) the portal-access group **`<ACCESS_GROUP>`** (default
-  name `claude-gateway-users`) and add every developer who should be able to
-  download the installer, including `<TEST_USER>`. *(The portal denies — and
-  audits — anyone not in this group.)*
+- Create (or confirm) the portal-access group(s) **`<ACCESS_GROUP>`** (default
+  name `claude-gateway-users`; this may be one group or several) and add every
+  developer who should be able to download the installer, including
+  `<TEST_USER>`. *(The portal allows a member of any listed group and denies —
+  and audits — everyone else.)*
 
 ## 4. Assignment & email domains
 

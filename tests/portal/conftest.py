@@ -119,6 +119,13 @@ def app():
 
 
 @pytest.fixture
+def env():
+    """A fresh, mutable copy of the test environment (tweak a key, build a
+    Config)."""
+    return dict(TEST_ENV)
+
+
+@pytest.fixture
 def config(app):
     return app.Config(dict(TEST_ENV))
 

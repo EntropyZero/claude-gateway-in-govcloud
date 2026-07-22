@@ -70,7 +70,13 @@ class Config:
         self.session_secret = env.get("SESSION_SECRET", "")
         self.public_url = env["PUBLIC_URL"].rstrip("/")
         self.redirect_uri = self.public_url + "/portal/oauth/callback"
-        self.access_group = env["ACCESS_GROUP"]
+        # One or more Okta groups (comma-separated); a member of ANY is
+        # allowed. A single group name is the common case and parses to a
+        # one-element list. Empty is a misconfiguration that would deny
+        # everyone - fail fast at boot rather than silently lock out.
+        self.access_groups = _split_list(env["ACCESS_GROUP"])
+        if not self.access_groups:
+            raise ValueError("ACCESS_GROUP must name at least one Okta group")
         # Session TTL is configured in hours (CFN parameter); transaction cookie
         # lifetime stays in seconds (short, internal).
         self.session_ttl_seconds = int(env.get("SESSION_TTL_HOURS", "8")) * 3600
@@ -382,8 +388,17 @@ def groups_from_claims(id_claims, userinfo_claims):
     return out
 
 
-def is_authorized(groups, access_group):
-    return access_group in (groups or [])
+def is_authorized(groups, access_groups):
+    """True if the user belongs to ANY of the configured access groups.
+
+    access_groups is a list; a bare string is coerced to a single-group list
+    so callers (and tests) passing one group name still work - and never fall
+    into set("name") iterating characters.
+    """
+    if isinstance(access_groups, str):
+        access_groups = [access_groups]
+    user = set(groups or [])
+    return any(g in user for g in access_groups)
 
 
 # ---------------------------------------------------------------- selection
@@ -678,8 +693,8 @@ def denied_page(email):
     return (
         "<!doctype html><html><head><meta charset='utf-8'><title>Access denied</title></head>"
         "<body style='font-family:system-ui;max-width:36rem;margin:3rem auto'>"
-        "<h1>Access denied</h1><p>Your account (%s) is not a member of the group "
-        "required to download the Claude Code installer. Contact your administrator "
+        "<h1>Access denied</h1><p>Your account (%s) is not a member of a group "
+        "authorized to download the Claude Code installer. Contact your administrator "
         "to request access.</p></body></html>" % html.escape(email)
     )
 
@@ -857,8 +872,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                 log.warning("userinfo fetch failed: %s", exc)
         email = claims.get("email") or (userinfo or {}).get("email") or claims.get("sub", "")
 
-        if not is_authorized(groups, self.config.access_group):
-            self._audit_denied(email, groups, "not in access group %s" % self.config.access_group)
+        if not is_authorized(groups, self.config.access_groups):
+            self._audit_denied(email, groups, "not in any access group (%s)"
+                               % ", ".join(self.config.access_groups))
             return self._send_html(403, denied_page(email), extra=[lambda: self._clear_cookie("portal_txn")])
 
         session = {

@@ -146,6 +146,29 @@ def test_callback_denies_non_member_and_audits(app, config, audit, key):
     assert "access group" in audit.records[0]["reason"]
 
 
+def test_callback_allows_member_of_any_configured_group(app, env, audit, key):
+    # Two groups configured; the user is a member of the SECOND one only.
+    cfg = app.Config({**env, "ACCESS_GROUP": "platform-eng,claude-gateway-users"})
+    txn = {"state": "s", "nonce": "n", "cv": "cv"}
+    tok = key.id_token(ISS, AUD, nonce="n", groups=["claude-gateway-users"])
+    (status, headers, _, _), _ = _callback(
+        app, cfg, audit, key, token_resp={"id_token": tok, "access_token": "at"}, txn=txn
+    )
+    assert status == 302 and headers["Location"] == "/portal"
+
+
+def test_callback_multi_group_denial_reason_lists_all_groups(app, env, audit, key):
+    cfg = app.Config({**env, "ACCESS_GROUP": "platform-eng,contractors"})
+    txn = {"state": "s", "nonce": "n", "cv": "cv"}
+    tok = key.id_token(ISS, AUD, nonce="n", groups=["some-other-group"])
+    (status, _, _, body), _ = _callback(
+        app, cfg, audit, key, token_resp={"id_token": tok, "access_token": "at"}, txn=txn
+    )
+    assert status == 403 and b"Access denied" in body
+    reason = audit.records[0]["reason"]
+    assert "platform-eng" in reason and "contractors" in reason
+
+
 def test_callback_uses_userinfo_fallback_for_groups(app, config, audit, key):
     txn = {"state": "s", "nonce": "n", "cv": "cv"}
     # ID token has NO groups claim (Okta org-server behaviour).

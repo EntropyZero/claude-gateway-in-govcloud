@@ -669,7 +669,8 @@ optional bundled enterprise CA).
 ID-token RS256 signature verified against the issuer's JWKS (cached, refetched
 once on an unknown `kid` for Okta key rotation), `iss`/`aud`/`exp`/`nonce`
 validated — then authorizes on **Okta group membership** (`AccessGroup`, a new
-parameterized group). The ALB does **not** use `authenticate-oidc`: it cannot
+parameter naming one or more groups; a member of any is allowed). The ALB does
+**not** use `authenticate-oidc`: it cannot
 evaluate a groups claim, and the app must check groups anyway, so the app owns
 the whole auth story (listener rule is a plain forward). Groups are read from
 the ID token with a `/userinfo` fallback (mirrors the gateway's
