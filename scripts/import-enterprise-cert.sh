@@ -5,6 +5,9 @@
 # Workflow with your enterprise CA:
 #   1. Generate key + CSR here (or on your PKI workstation):
 #        ./import-enterprise-cert.sh csr claude-gateway.example.com
+#      Key type defaults to EC P-256. If your CA only issues RSA, append the
+#      key type (rsa2048 or rsa3072):
+#        ./import-enterprise-cert.sh csr claude-gateway.example.com rsa2048
 #   2. Have the enterprise CA sign the CSR (serverAuth EKU). Collect:
 #        - the leaf certificate  (leaf.pem)
 #        - the CA chain, intermediates first, root last (chain.pem)
@@ -29,6 +32,28 @@ usage() { grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
 case "$CMD" in
   csr)
+    # Key type (3rd arg): EC P-256 by default; rsa2048 / rsa3072 for CAs that
+    # only issue RSA. keyUsage differs by algorithm: RSA server certs
+    # conventionally carry keyEncipherment (used only if a static-RSA cipher
+    # suite is ever negotiated - this ALB's TLS13 policies are ECDHE-only, so
+    # the bit is for interop/portability, not required here); an EC key cannot
+    # do keyEncipherment (RFC 5480 s3), so it gets digitalSignature only. The
+    # CA's own profile may override these requested bits regardless.
+    KEYTYPE="${3:-ec}"
+    case "$KEYTYPE" in
+      ec|ec-p256|p256|prime256v1)
+        KEYSPEC=(-newkey ec -pkeyopt ec_paramgen_curve:prime256v1)
+        KEYUSAGE="digitalSignature"; KEYDESC="EC P-256" ;;
+      rsa2048|rsa)
+        KEYSPEC=(-newkey rsa:2048)
+        KEYUSAGE="digitalSignature,keyEncipherment"; KEYDESC="RSA 2048" ;;
+      rsa3072)
+        KEYSPEC=(-newkey rsa:3072)
+        KEYUSAGE="digitalSignature,keyEncipherment"; KEYDESC="RSA 3072" ;;
+      *)
+        echo "FATAL: unknown key type '$KEYTYPE' (use: ec | rsa2048 | rsa3072)" >&2
+        exit 2 ;;
+    esac
     # umask before creation so the key is never briefly world-readable on a
     # shared host - and remove any pre-existing key file first, because
     # umask only governs NEW files (openssl overwriting an existing 644 key
@@ -36,14 +61,14 @@ case "$CMD" in
     (
       umask 077
       rm -f "${FQDN}.key.pem"
-      openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+      openssl req "${KEYSPEC[@]}" -nodes \
         -keyout "${FQDN}.key.pem" -out "${FQDN}.csr" \
         -subj "/CN=${FQDN}" \
         -addext "subjectAltName=DNS:${FQDN}" \
-        -addext "keyUsage=digitalSignature" \
+        -addext "keyUsage=${KEYUSAGE}" \
         -addext "extendedKeyUsage=serverAuth"
     )
-    echo "CSR written to ${FQDN}.csr - submit to the enterprise CA."
+    echo "CSR (${KEYDESC}) written to ${FQDN}.csr - submit to the enterprise CA."
     echo "SAN must be exactly: DNS:${FQDN} (the corporate CNAME, not the ALB name)."
     ;;
 

@@ -78,13 +78,15 @@ the initial import path is **[VERIFIED-LIVE]**.
 *Steps (exact commands):*
 
 1. Generate a fresh key + CSR. The script does this under `umask 077` and
-   removes any pre-existing key first, so the P-256 key is never briefly
+   removes any pre-existing key first, so the key is never briefly
    world-readable:
 
    ```bash
    ./scripts/import-enterprise-cert.sh csr "$GATEWAY_FQDN"
    #   writes ${GATEWAY_FQDN}.key.pem (0600) + ${GATEWAY_FQDN}.csr
    #   SAN is exactly DNS:${GATEWAY_FQDN} (the corporate CNAME, not the ALB name)
+   #   Key type defaults to EC P-256; append rsa2048 (or rsa3072) if the CA
+   #   only issues RSA:  ...csr "$GATEWAY_FQDN" rsa2048
    ```
 
 2. Submit `${GATEWAY_FQDN}.csr` to the enterprise CA (serverAuth EKU). Collect

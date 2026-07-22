@@ -103,7 +103,8 @@ Legend: ☐ = do it · 🔎 = checkpoint, confirm before moving on.
 ## 1. Certificate
 
 ```bash
-./scripts/import-enterprise-cert.sh csr <FQDN>          # writes <FQDN>.key.pem + .csr
+./scripts/import-enterprise-cert.sh csr <FQDN>          # writes <FQDN>.key.pem + .csr (EC P-256)
+#    append rsa2048 (or rsa3072) as a 3rd arg if the CA only issues RSA
 #    → hand the CSR to the enterprise CA (serverAuth EKU); collect leaf + chain
 ./scripts/import-enterprise-cert.sh import <FQDN> leaf.pem <FQDN>.key.pem chain.pem
 ```
@@ -127,7 +128,7 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
   -keyout "${FQDN}.key.pem" -out "${FQDN}.crt.pem" -days 90 \
   -subj "/CN=${FQDN}" \
   -addext "subjectAltName=DNS:${FQDN}" \
-  -addext "keyUsage=digitalSignature,keyEncipherment" \
+  -addext "keyUsage=digitalSignature" \
   -addext "extendedKeyUsage=serverAuth"
 
 # 2. Import into ACM (no chain for a self-signed cert) and record the ARN
