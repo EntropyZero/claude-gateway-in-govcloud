@@ -8,9 +8,6 @@ rather than hand-editing the SVGs.
 
 **Accepted risks, up front** (SSP-scoped decisions, not oversights):
 
-- The gateway→collector OTLP hop (4317–4318) is **plaintext**, compensated by
-  SG-to-SG scoping — only gateway tasks can reach the collector ports
-  (security review C2; the TLS recipe is documented on the collector task).
 - The `ecs` interface endpoint carries **no endpoint policy** — GovCloud does
   not support one there; IAM-side scoping covers it.
 - The ALB access-logs bucket is SSE-S3, not CMK — ELB log delivery does not
@@ -50,19 +47,26 @@ Reading tips:
 | SG | Stack | Attached to | Ingress | Egress |
 |---|---|---|---|---|
 | `alb` | 02 | internal ALB | 443 from `ClientIngressCidr` | 8080→`svc`; 3000→`grafana` (03) |
-| `svc` | 02 | gateway tasks | 8080 from `alb` | 443 anywhere; proxy port (optional); 4317-18→`collector` (03) |
+| `svc` | 02 | gateway tasks (incl. the co-resident **ADOT collector sidecar**) | 8080 from `alb` | 443 anywhere; proxy port (optional); 443→`amp-endpoint` (03) |
 | `db-client` | 01 | gateway tasks, db-admin Lambdas | — | 5432→`db` |
 | `db` | 01 | RDS instance | 5432 from `db-client` | — |
 | `db-admin` | 02 | bootstrap + rotation Lambdas | — | 443 anywhere |
-| `endpoint` | 02 | all 02 interface endpoints | 443 from `svc`, `db-admin`, `collector` (03), `grafana` (03), admin host (param) | — |
-| `collector` | 03 | OTLP collector tasks | 4317-18 from `svc` | 443 anywhere |
+| `endpoint` | 02 | all 02 interface endpoints | 443 from `svc`, `db-admin`, `grafana` (03), admin host (param) | — |
 | `grafana` | 03 | Grafana task | 3000 from `alb` | 443 anywhere |
-| `amp-endpoint` | 03 | aps-workspaces endpoint | 443 from `collector`, `grafana` | — |
+| `amp-endpoint` | 03 | aps-workspaces endpoint | 443 from `svc` (gateway sidecar), `grafana` | — |
+
+There is **no `collector` security group**: the ADOT collector is a
+co-resident sidecar inside the gateway task, reached over loopback
+(`127.0.0.1:4318`), so its OTLP receiver is never on the network and needs no
+SG rule (this eliminated the former plaintext gateway→collector hop — security
+review C2, resolved 2026-07-22). The sidecar's remote-write to AMP rides the
+gateway `svc` SG.
 
 Cross-stack rule writers (03 and the admin-host parameter modify imported 02
 SGs as separate `SecurityGroup{In,E}gress` resources): `AlbToGrafanaEgress`,
-`GatewayToCollectorEgress`, `CollectorToEndpointsIngress`,
-`GrafanaToEndpointsIngress`, `AdminToEndpointsIngress`. Deploy order (02
+`GrafanaToEndpointsIngress`, `GatewayToAmpEndpointEgress` (the sidecar's
+remote-write path, which replaced the former `GatewayToCollectorEgress` /
+`CollectorToEndpointsIngress`), `AdminToEndpointsIngress`. Deploy order (02
 before 03) and a matching `CREATE_SUPPORTING_ENDPOINTS` across both deploys
 are what make these land correctly.
 
