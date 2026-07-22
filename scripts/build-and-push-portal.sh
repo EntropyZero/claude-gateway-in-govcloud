@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Build the download-portal image from docker/portal/ and push to ECR.
 # For controlled networks, mirror the Python base image into your registry
-# first and pass PORTAL_BASE_IMAGE pointing at it (pin by digest).
+# first and pass PORTAL_BASE_IMAGE pointing at it (pin by digest). The base
+# image is the ONLY egress requirement: boto3 is installed from vendored
+# wheels (docker/portal/vendor/) and the TLS leaf is generated here, so the
+# image build itself needs no PyPI or other package-repo access.
 source "$(dirname "$0")/common.sh"
 
 # The repo is tag-IMMUTABLE: bump PORTAL_VERSION for every app.py change (a

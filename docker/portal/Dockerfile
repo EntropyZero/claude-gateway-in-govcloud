@@ -13,10 +13,14 @@ ARG PORTAL_BASE_IMAGE=public.ecr.aws/docker/library/python:3.12-slim
 FROM ${PORTAL_BASE_IMAGE}
 
 # boto3 (S3 GetObject for the artifacts + CloudWatch Logs for the audit trail)
-# is the only non-stdlib dependency. Pinned; the build host needs egress to
-# PyPI (mirror it for locked-down build networks). --no-cache-dir keeps the
-# layer small.
-RUN pip install --no-cache-dir boto3==1.34.162
+# is the only non-stdlib dependency, installed from vendored wheels so the
+# build needs NO PyPI access - same offline posture as docker/db-admin. vendor/
+# holds boto3 + its transitive deps as universal (py3-none-any) wheels committed
+# to the repo. Refresh with:
+#   pip download boto3==1.34.162 -d docker/portal/vendor
+COPY vendor/ /tmp/vendor/
+RUN pip install --no-cache-dir --no-index --find-links /tmp/vendor boto3==1.34.162 \
+ && rm -rf /tmp/vendor
 
 # Optional enterprise/TLS-inspection root CA (e.g. Zscaler), staged by
 # build-and-push-portal.sh from EXTRA_CA_CERT_PATH (empty file when unset).
