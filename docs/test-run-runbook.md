@@ -320,16 +320,50 @@ the obs stack exists and keeps the AMP params set.)
 > **Migrating an already-deployed environment to the sidecar** (the collector
 > moved out of 03 and into the 02 gateway task, 2026-07-22). The order is the
 > reverse of a fresh deploy — **update 03 FIRST, then re-run 02:**
+> 0. **Pre-drain the collector service to zero BEFORE updating 03** (prevents
+>    the most likely migration failure). `AWS::ServiceDiscovery::Service`
+>    deletion fails while any instance is still registered, and ECS
+>    deregisters the collector's Cloud Map instance only as its task drains —
+>    if CloudFormation reaches the discovery-service delete before ECS has
+>    finished draining, the **whole 03 update rolls back** (taking the new
+>    alarm and the endpoint-SG rewire with it). You cannot intervene
+>    mid-update, so drain first:
+>    ```
+>    aws ecs update-service --cluster <prefix>-cluster \
+>      --service <prefix>-otel --desired-count 0 --region us-gov-west-1
+>    aws ecs wait services-stable --cluster <prefix>-cluster \
+>      --services <prefix>-otel --region us-gov-west-1
+>    ```
+>    Confirm the Cloud Map instance is gone (`aws servicediscovery
+>    list-instances`) before step 1. If step 1 still rolls back on the
+>    discovery-service delete, re-run it — the drain will have completed by
+>    the retry.
 > 1. `./scripts/deploy-observability.sh` — this update **removes** the dead
 >    standalone collector service, its task/roles, the collector SG + the
 >    gateway↔collector SG-rule pair, and the Cloud Map namespace, and adds the
->    new AMP outputs. Watch the Cloud Map deletion: the **discovery service must
->    delete before its namespace** — if the namespace delete stalls, confirm the
->    collector service (and thus its Cloud Map instance) is fully gone first.
+>    new AMP outputs + the missing-telemetry alarm. Watch the Cloud Map
+>    deletion: the **discovery service must delete before its namespace** — if
+>    the namespace delete stalls, confirm the collector service (and thus its
+>    Cloud Map instance) is fully gone first (step 0 should have ensured this).
 >    The three `OBSERVABILITY_AMP_*` vars are persisted on success.
 > 2. `./scripts/deploy-gateway.sh` — re-run to attach the sidecar with those
 >    params. Doing 02 first would point it at an endpoint SG rule 03 hasn't
 >    rewired yet; 03-first keeps the AMP path reachable when forwarding starts.
+>    (Between steps 1 and 2 the still-running old gateway's `forward_to`
+>    resolves to the now-deleted collector name; benign here — the old
+>    off-localhost forward never booted, which is the reason for this change,
+>    and the gateway treats forward failures as non-fatal.)
+>
+> **First-boot posture (avoids a hung deploy).** On the FIRST telemetry-enabled
+> 02 re-run, deploy with `TELEMETRY_FAIL_CLOSED=false`. Fail-closed makes the
+> gateway wait on the collector reporting HEALTHY, and with
+> `MinimumHealthyPercent: 100` and no deployment circuit breaker a wrong
+> `/healthcheck` path or health_check-extension config would hang the rollout
+> at `services-stable` indefinitely, surfaced only as a generic "task not
+> healthy." Deploy fail-open first, confirm the `otel-collector` container
+> reports HEALTHY (it runs the same health check in both postures), THEN flip
+> `TELEMETRY_FAIL_CLOSED=true` and re-run. This is the single highest-risk
+> item on the telemetry path for the live run.
 
 ---
 

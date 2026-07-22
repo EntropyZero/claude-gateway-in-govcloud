@@ -336,7 +336,12 @@ Parameters:
       'false' prefers gateway availability: the sidecar still self-heals via
       its restart policy, but its failure never stops traffic - telemetry
       can silently gap. Policy decision; record it in the SSP either way.
-      No effect unless the sidecar is enabled.
+      No effect unless the sidecar is enabled. FIRST-BOOT CAUTION: fail-closed
+      makes the gateway wait on the collector HEALTHY, and with
+      MinimumHealthyPercent 100 + no deployment circuit breaker a wrong
+      health check would hang the rollout at services-stable. Deploy 'false'
+      first, confirm the otel-collector container reports HEALTHY, then flip
+      to 'true' (test-run-runbook migration note).
 
   ForwardActivityLogs:
     Type: String
@@ -1030,8 +1035,9 @@ Resources:
             # in this account's ECR (mirror-collector.sh) BEFORE the
             # telemetry-enabled 02 re-run. See SECURITY_REVIEW C2 / the O&M
             # runbook. NOTE: even fail-closed only proves the collector is
-            # healthy, not that AMP is ingesting - pair with the missing-
-            # telemetry alarm (AlarmSnsTopicArn) for end-to-end assurance.
+            # healthy, not that AMP is ingesting - the end-to-end control is
+            # 03's missing-telemetry alarm (AWS/Usage ResourceCount /
+            # Resource=IngestionRate on the workspace; MissingTelemetryAlarmMinutes).
             Essential: !If [WantTelemetryFailClosed, true, false]
             RestartPolicy:
               Enabled: true

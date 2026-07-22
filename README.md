@@ -607,6 +607,19 @@ is localhost, which is exactly the sidecar). The collector's onward
 calls made with the task role. See the `otel-collector` container comment in
 `02-gateway.yaml` and `docs/security-review-2026-07.md` (C2).
 
+The sidecar **fails closed by default** (`TELEMETRY_FAIL_CLOSED=true`, AU-5):
+it is marked Essential and health-checked, and the gateway container waits on
+it `HEALTHY`, so the gateway never serves traffic while telemetry/audit
+processing is down — a persistently failed or unhealthy collector stops the
+task and ECS replaces it (the ALB routes to the peer task meanwhile). Set
+`TELEMETRY_FAIL_CLOSED=false` to prefer availability (telemetry may then gap
+silently) and record that deviation in the SSP. Because container health only
+proves the collector is *alive*, not that data is *landing*, stack 03 defines
+a **missing-telemetry alarm** (`${NAME_PREFIX}-missing-telemetry`: `AWS/Usage
+ResourceCount` / `Resource=IngestionRate` scoped to the workspace, fires after
+`MISSING_TELEMETRY_ALARM_MINUTES` of ingestion silence, wired to
+`ALARM_SNS_TOPIC_ARN`) as the end-to-end backstop.
+
 ### Hardening roadmap (post-deploy)
 
 Not yet wired in, planned as policy firms up: per-Okta-group

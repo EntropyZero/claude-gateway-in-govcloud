@@ -50,8 +50,14 @@ host is localhost, so that network hop could never boot — so the accepted risk
 is **withdrawn as unimplementable**. The ADOT collector now runs as a
 **localhost sidecar** inside the gateway task (loopback within one Fargate
 network namespace), which satisfies SC-8 by absence of network transmission — a
-stronger posture than TLS, with no new PKI. Sidecar end-to-end (metrics landing
-in AMP through the sidecar) NEEDS LIVE VERIFICATION.
+stronger posture than TLS, with no new PKI. The sidecar **fails closed by
+default** (`TelemetryFailClosed=true`, AU-5): it is Essential + health-checked
+and the gateway waits on it HEALTHY, so the gateway will not serve traffic while
+telemetry/audit processing is down; a **missing-telemetry alarm** (03,
+`AWS/Usage ResourceCount`/`IngestionRate` on the workspace) is the end-to-end
+backstop that container health cannot provide. Sidecar end-to-end (metrics
+landing in AMP; the fail-closed chain; the alarm's OK→ALARM→OK) NEEDS LIVE
+VERIFICATION.
 
 ## Repo map
 

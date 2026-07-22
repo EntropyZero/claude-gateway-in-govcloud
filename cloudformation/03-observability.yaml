@@ -138,6 +138,46 @@ Parameters:
       mapping. Role mapping is STRICT - an Okta user in none of these
       groups is denied login even after Okta authenticates them.
 
+  AlarmSnsTopicArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional SNS topic for this stack's alarms (same variable the gateway
+      stack uses: ALARM_SNS_TOPIC_ARN). Empty = alarms still exist and show
+      state in the console, but notify nobody.
+
+  MissingTelemetryAlarmMinutes:
+    Type: Number
+    Default: 15
+    MinValue: 0
+    MaxValue: 1440
+    Description: >-
+      Fire the missing-telemetry alarm after this many consecutive minutes
+      with NO samples ingested into the AMP workspace - the end-to-end
+      backstop for the fail-closed telemetry posture (a healthy collector
+      whose writes are not landing is invisible to container health checks;
+      this alarm is what sees it). 0 disables the alarm. Expect it to fire
+      legitimately between deploying this stack and the telemetry-enabled
+      02 re-run, and during full-fleet gateway outages (no tasks = no
+      telemetry).
+
+  ActivityLogsAlarmMinutes:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 1440
+    Description: >-
+      Optional cessation alarm for the AI-activity AUDIT stream (separate
+      from the metrics alarm above). Fire after this many consecutive
+      minutes with NO events delivered to the activity log group. 0 (default)
+      disables it. Leave OFF unless the audit stream is enabled
+      (FORWARD_ACTIVITY_LOGS=true) AND the deployment has continuous
+      activity - the stream is intermittent, so a window shorter than your
+      longest idle gap will false-fire. Set it longer than that gap; it
+      detects delivery cessation and cannot alone tell a broken pipeline
+      from an idle fleet (correlate with usage metrics; watch collector
+      exporter errors for the direct AU-5 signal).
+
   EncryptAmpWithCmk:
     Type: String
     Default: 'true'
@@ -178,6 +218,9 @@ Conditions:
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
   HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
   WantAmpCmk: !Equals [!Ref EncryptAmpWithCmk, 'true']
+  HaveAlarmTopic: !Not [!Equals [!Ref AlarmSnsTopicArn, '']]
+  WantMissingTelemetryAlarm: !Not [!Equals [!Ref MissingTelemetryAlarmMinutes, 0]]
+  WantActivityLogsAlarm: !Not [!Equals [!Ref ActivityLogsAlarmMinutes, 0]]
   # Org server: endpoints are <issuer>/oauth2/v1/...; custom: <issuer>/v1/...
   OrgAuthServer: !Equals [!Ref OktaAuthServerType, 'org']
 
@@ -200,6 +243,103 @@ Resources:
         - WantAmpCmk
         - Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
         - !Ref 'AWS::NoValue'
+
+  # Missing-telemetry alarm - the END-TO-END backstop for the fail-closed
+  # telemetry posture (SECURITY_REVIEW C2 / AU-5). The sidecar's container
+  # health check proves the collector process is healthy; only this alarm
+  # proves samples are actually LANDING in the workspace (it also covers
+  # sidecar-disabled-by-mistake, IAM/endpoint breakage, and AMP-side
+  # ingestion failure). AMP vends usage metrics to CloudWatch as
+  # AWS/Usage ResourceCount with Resource=IngestionRate, scoped to this
+  # workspace via ResourceId. CRITICAL: when nothing is ingested the metric
+  # goes MISSING rather than reporting 0 ("a metric not existing or missing
+  # is the same as the value of that metric being 0" - AMP docs), so
+  # TreatMissingData MUST be breaching; the CloudWatch default ('missing')
+  # would park a dead pipeline in INSUFFICIENT_DATA forever. GovCloud
+  # emission of the vended metrics is doc-implied but needs the live check:
+  #   aws cloudwatch list-metrics --namespace AWS/Usage \
+  #     --dimensions Name=Service,Value=Prometheus --region us-gov-west-1
+  MissingTelemetryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: WantMissingTelemetryAlarm
+    Properties:
+      AlarmName: !Sub '${NamePrefix}-missing-telemetry'
+      AlarmDescription: !Sub >-
+        No usage/cost METRICS have been ingested into the ${NamePrefix} AMP
+        workspace for ${MissingTelemetryAlarmMinutes} minutes. (Scope: the
+        AMP metrics pipeline only - the activity AUDIT stream is a separate
+        collector pipeline watched by ${NamePrefix}-missing-activity-logs
+        when ActivityLogsAlarmMinutes > 0.) Triage order (O&M runbook 9): gateway
+        service running? otel-collector container healthy (otel/ log
+        streams)? task role / aps endpoint reachable? AMP throttling
+        (DiscardedSamples)? Expected to fire between deploying this stack and
+        the telemetry-enabled gateway re-run, and during full gateway outages.
+      Namespace: AWS/Usage
+      MetricName: ResourceCount
+      Dimensions:
+        - { Name: Service, Value: Prometheus }
+        - { Name: Resource, Value: IngestionRate }
+        - { Name: Type, Value: Resource }
+        - { Name: Class, Value: 'None' }
+        - { Name: ResourceId, Value: !GetAtt Workspace.WorkspaceId }
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: !Ref MissingTelemetryAlarmMinutes
+      Threshold: 0
+      ComparisonOperator: LessThanOrEqualToThreshold
+      # Missing = not ingesting = the alarm condition (see the note above).
+      TreatMissingData: breaching
+      AlarmActions: !If [HaveAlarmTopic, [!Ref AlarmSnsTopicArn], !Ref 'AWS::NoValue']
+      OKActions: !If [HaveAlarmTopic, [!Ref AlarmSnsTopicArn], !Ref 'AWS::NoValue']
+
+  # Companion cessation alarm for the AI-activity AUDIT stream (AU-2/AU-12).
+  # The missing-telemetry alarm above watches only the AMP METRICS pipeline;
+  # the audit stream is a SEPARATE collector pipeline (awscloudwatchlogs
+  # exporter -> this ActivityLogGroup -> SubscriptionFilter -> Firehose ->
+  # S3), so a logs-only failure - the exporter erroring while metrics keep
+  # flowing, or forwarding silently not taking - is invisible to both the
+  # metrics alarm and the collector's health check. This alarm can close that
+  # gap by watching AWS/Logs IncomingLogEvents on the group.
+  # OFF BY DEFAULT (ActivityLogsAlarmMinutes=0), and deliberately NOT auto-
+  # enabled with activity forwarding, because UNLIKE metrics (the gateway
+  # emits those continuously) the audit stream is INTERMITTENT - it only
+  # produces events when developers actually run tools, so a short window
+  # would false-fire every idle night/weekend and train operators to ignore
+  # it. Enable it (set the window > your longest expected quiet gap) ONLY on
+  # deployments with continuous activity, and understand its inherent limit:
+  # it detects cessation of DELIVERY and cannot by itself distinguish a
+  # broken pipeline from genuine inactivity - correlate with usage metrics
+  # and watch the collector's otel/ streams for awscloudwatchlogs exporter
+  # errors (the more direct AU-5 signal). GovCloud emission of AWS/Logs
+  # metrics is doc-implied; confirm live alongside the AMP check.
+  MissingActivityLogsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: WantActivityLogsAlarm
+    Properties:
+      AlarmName: !Sub '${NamePrefix}-missing-activity-logs'
+      AlarmDescription: !Sub >-
+        The AI-activity AUDIT stream has delivered NO events to
+        ${NamePrefix}'s activity log group for ${ActivityLogsAlarmMinutes}
+        minutes - the audit trail may not be recording even if usage metrics
+        still flow. Triage (O&M runbook 9): gateway/collector healthy?
+        awscloudwatchlogs exporter errors in the otel/ streams? task role
+        logs: permissions on the activity group? NOTE: a genuinely idle fleet
+        also reads as silence - correlate with usage metrics before declaring
+        a fault.
+      Namespace: AWS/Logs
+      MetricName: IncomingLogEvents
+      Dimensions:
+        - { Name: LogGroupName, Value: !Ref ActivityLogGroup }
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: !Ref ActivityLogsAlarmMinutes
+      Threshold: 0
+      ComparisonOperator: LessThanOrEqualToThreshold
+      # AWS/Logs stops emitting IncomingLogEvents when no events arrive, so
+      # missing = no audit delivery = the alarm condition.
+      TreatMissingData: breaching
+      AlarmActions: !If [HaveAlarmTopic, [!Ref AlarmSnsTopicArn], !Ref 'AWS::NoValue']
+      OKActions: !If [HaveAlarmTopic, [!Ref AlarmSnsTopicArn], !Ref 'AWS::NoValue']
 
   # ------------------------------------------------------------ collector
   # The OTLP collector is NO LONGER a service here. It runs as a loopback

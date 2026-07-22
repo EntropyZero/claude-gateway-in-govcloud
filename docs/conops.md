@@ -423,8 +423,16 @@ from Bedrock, telemetry flows to Grafana, and audit surfaces are recording.
   (telemetry may then gap silently while inference keeps serving) and record
   that deviation in the SSP. On every task stop — including secret-rotation
   service rolls — stop ordering is gateway-first, collector-last with a
-  120 s drain, so the final telemetry buffer is flushed to AMP/CloudWatch,
-  not dropped (`security-review-2026-07.md` C2).
+  120 s drain, so the final telemetry buffer gets a best-effort flush to
+  AMP/CloudWatch rather than being dropped on the spot (delivery is not
+  guaranteed — a failing AMP endpoint at shutdown can still lose the last
+  batch). The **end-to-end control is the missing-telemetry alarm**
+  (observability stack): container health proves the collector is alive,
+  while the alarm proves samples are actually landing in AMP — it fires
+  after `MISSING_TELEMETRY_ALARM_MINUTES` (default 15) of ingestion
+  silence, covering IAM/endpoint breakage, misconfiguration, and AMP-side
+  failure that no health check can see (`security-review-2026-07.md` C2;
+  O&M runbook 9 triage).
 - **Download portal down → no self-service installs, gateway unaffected.** The
   portal is an optional, separate stack behind its own `/portal` listener rule;
   its failure (or absence) does not touch the inference path. Installers remain

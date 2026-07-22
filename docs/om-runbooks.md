@@ -791,11 +791,44 @@ test run.
    **runbook 3** recovery. The threshold intentionally tolerates the single
    expected Inactive-image error per scheduled rotation.
 
-*No other CloudWatch alarms are defined in the templates* (03-observability has
-Cloud Map health checks and target-group health thresholds, but no
-`AWS::CloudWatch::Alarm` resources). Operational surfaces to watch manually:
-ECS service events / `services-stable`, and the gateway (which now also carries
-the collector sidecar's `otel`-prefixed streams) and Grafana log groups.
+3. **`${NAME_PREFIX}-missing-telemetry`** (`03-observability.yaml`) — no
+   samples ingested into the AMP workspace for
+   `MISSING_TELEMETRY_ALARM_MINUTES` (default 15) consecutive minutes
+   (`AWS/Usage` `ResourceCount` / `Resource=IngestionRate` scoped to the
+   workspace; missing data = breaching, because AMP stops emitting the
+   metric when nothing arrives). This is the **end-to-end backstop for the
+   fail-closed telemetry posture** — container health only proves the
+   collector is alive; this proves data is landing. *Response — triage in
+   this order:* (1) is the gateway service running at all? (a full outage
+   also silences telemetry — check the service first, this alarm may be a
+   symptom); (2) `otel/`-prefixed log streams in the gateway log group for
+   collector/export errors; (3) collector container health in the task
+   detail (fail-closed replaces the task; fail-open leaves it running
+   UNHEALTHY); (4) task-role `aps:RemoteWrite` + `aps-workspaces` endpoint
+   reachability; (5) AMP-side rejection — check `AWS/Prometheus`
+   `DiscardedSamples` for the workspace (throttling/validation). *Expected
+   (not actionable) firings:* between the 03 deploy and the
+   telemetry-enabled 02 re-run, and during deliberate gateway downtime.
+
+4. **`${NAME_PREFIX}-missing-activity-logs`** (`03-observability.yaml`,
+   **off by default**) — only created when `ACTIVITY_LOGS_ALARM_MINUTES` > 0.
+   No events delivered to the activity audit log group for that many minutes
+   (`AWS/Logs` `IncomingLogEvents`, missing = breaching). This is the
+   audit-stream (AU-2/AU-12) counterpart to alarm 3 — alarm 3 watches
+   *metrics*, this watches the *audit logs* pipeline, which alarm 3 and the
+   collector health check cannot see. *Response:* same triage as alarm 3,
+   plus check the collector's `awscloudwatchlogs` exporter for errors in the
+   `otel/` streams. **Before declaring a fault, confirm the fleet was
+   actually active** — this stream is intermittent, so genuine idleness also
+   reads as silence; correlate with the usage metrics (a live metrics stream
+   + dead audit stream = real fault; both quiet = probably just idle). Left
+   off by default for exactly this reason; enable only on continuously-active
+   fleets with a window longer than the longest expected quiet gap.
+
+*No other CloudWatch alarms are defined in the templates.* Operational
+surfaces to watch manually: ECS service events / `services-stable`, and the
+gateway (which now also carries the collector sidecar's `otel`-prefixed
+streams) and Grafana log groups.
 
 *General verification after responding:* confirm the alarm returns to `OK`
 (`aws cloudwatch describe-alarms --alarm-names <name> --query

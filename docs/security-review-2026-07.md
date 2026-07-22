@@ -151,8 +151,50 @@ Mechanics:
   `RestartAttemptPeriod` escalates. `TelemetryFailClosed=false` flips the
   trade (availability over auditability; telemetry can silently gap) and
   must be recorded in the SSP if chosen. Fail-closed proves the collector is
-  healthy, **not** that AMP is ingesting — the missing-telemetry alarm is
-  the end-to-end control.
+  healthy, **not** that AMP is ingesting — that gap is closed by the next
+  bullet.
+- **Missing-telemetry alarm (added 2026-07-22): the end-to-end control.**
+  03 now defines `${NamePrefix}-missing-telemetry`: `AWS/Usage
+  ResourceCount` with `Resource=IngestionRate` scoped to the workspace via
+  `ResourceId`, ≤0 for `MissingTelemetryAlarmMinutes` (default 15)
+  consecutive 60 s periods, **`TreatMissingData: breaching`** — load-bearing,
+  because AMP *stops emitting* the metric when nothing is ingested ("a
+  metric not existing or missing is the same as the value of that metric
+  being 0", AMP docs) and the CloudWatch default would park a dead pipeline
+  in INSUFFICIENT_DATA forever. Notifies `AlarmSnsTopicArn` when set (same
+  variable as 02's alarms); `0` disables. It catches what container health
+  cannot: IAM/endpoint breakage, a mis-disabled sidecar, AMP-side ingestion
+  failure — and, deliberately, a full gateway outage (no tasks = no
+  telemetry; triage order in O&M runbook 9). Known benign firing: the window
+  between the 03 deploy and the telemetry-enabled 02 re-run.
+  **Scope — metrics only.** This alarm watches the AMP *metrics* pipeline
+  (`AWS/Usage IngestionRate`); the AI-activity **audit** stream is a
+  separate collector pipeline (`awscloudwatchlogs` → activity log group →
+  Firehose → S3) that it does **not** see. A companion, **off-by-default**
+  alarm `${NamePrefix}-missing-activity-logs` (`ActivityLogsAlarmMinutes`,
+  `AWS/Logs IncomingLogEvents` on the activity group) covers audit-stream
+  cessation when enabled. It is off by default and deliberately **not**
+  auto-enabled with `FORWARD_ACTIVITY_LOGS`, because the audit stream is
+  *intermittent* (events only on real tool use), so a short window would
+  false-fire on idle periods; enable it only on continuously-active fleets
+  with a window longer than the longest expected quiet gap. It cannot alone
+  distinguish a broken pipeline from an idle fleet — the collector's
+  `awscloudwatchlogs` exporter errors (in the `otel/` streams) are the more
+  direct AU-5 signal, and the audit stream's integrity at rest is separately
+  covered by the CMK + IAM-only + Retain posture on the archive.
+  **Surfaced limits (not buried):** (1) it detects *total cessation*, not
+  degradation — `Average ≤ 0` resets on any non-zero minute, so a pipeline
+  dropping 99% of samples does not fire (a floor, not a coverage guarantee);
+  (2) it is a *fail-loud* control while unverified — if the AMP vended-metric
+  dimensions or GovCloud emission differ from the doc-implied values, the
+  metric is permanently missing → `breaching` → the alarm sits in ALARM (or
+  flaps), so **verify with `list-metrics` before wiring it to a paging
+  topic** (live-verification item (f)); (3) compound-config hazard — with
+  `TelemetryFailClosed=false` AND (`AlarmSnsTopicArn` unset **or**
+  `MissingTelemetryAlarmMinutes=0`) there is *no* task-stop and *no*
+  notification on telemetry loss: total silent loss, an AU-5/AU-12 hole. Do
+  not choose fail-open without a live alarm topic; record the deviation in
+  the SSP.
 - **Shutdown flush (added 2026-07-22).** The gateway→collector `DependsOn`
   also reverses ECS's stop order: on every task stop — including the service
   roll that **every secret rotation forces** — the gateway is SIGTERMed and
@@ -189,7 +231,13 @@ through the loopback receiver; (b) container `RestartPolicy`
 fail-closed chain — collector health check goes green at start
 (`/healthcheck` against loopback `:13133`), gateway waits on HEALTHY, and a
 deliberately-broken collector config stops the task; (e) shutdown flush — a
-forced service roll loses no tail-of-window metrics in AMP.
+forced service roll loses no tail-of-window metrics in AMP; (f) the AMP
+vended metrics (`AWS/Usage` / `Service=Prometheus`) actually emit in
+GovCloud `us-gov-west-1` — doc-implied only
+(`aws cloudwatch list-metrics --namespace AWS/Usage --dimensions
+Name=Service,Value=Prometheus` after telemetry flows); (g) the
+missing-telemetry alarm transitions OK → ALARM when the sidecar is stopped
+and back to OK when it resumes.
 
 **Log-retention hardening (2026-07-18, operator decision).** Prompted by the
 test-run observation that some CloudWatch logs outlive teardown while others

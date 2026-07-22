@@ -40,6 +40,9 @@ aws cloudformation deploy \
       "GrafanaDisableLoginForm=${GRAFANA_DISABLE_LOGIN_FORM:-true}" \
       "HttpsProxyUrl=${HTTPS_PROXY_URL:-}" \
       "HttpsProxyPort=$(proxy_port "${HTTPS_PROXY_URL:-}")" \
+      "AlarmSnsTopicArn=${ALARM_SNS_TOPIC_ARN:-}" \
+      "MissingTelemetryAlarmMinutes=${MISSING_TELEMETRY_ALARM_MINUTES:-15}" \
+      "ActivityLogsAlarmMinutes=${ACTIVITY_LOGS_ALARM_MINUTES:-0}" \
       "CreateAmpEndpoint=${CREATE_AMP_ENDPOINT:-false}" \
       "CreateSupportingEndpoints=${CREATE_SUPPORTING_ENDPOINTS:-false}" \
       "EncryptAmpWithCmk=${ENCRYPT_AMP_WITH_CMK:-true}" \
