@@ -35,3 +35,6 @@ docker/tls/
 
 # Generated portal listener TLS cert (built per-run by build-and-push-portal.sh)
 docker/portal/tls/
+
+# Agent worktree isolation checkouts (never commit)
+.claude/worktrees/
