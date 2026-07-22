@@ -44,7 +44,7 @@ class SVG:
     def add(self, s):
         self.body.append(s)
 
-    def text(self, x, y, s, size=11, color=SLATE, weight="normal",
+    def text(self, x, y, s, size: float = 11, color=SLATE, weight="normal",
              anchor="start", style=""):
         self.add(f'<text x="{x}" y="{y}" font-family="{FONT}" font-size="{size}" '
                  f'fill="{color}" font-weight="{weight}" text-anchor="{anchor}" '
@@ -59,7 +59,7 @@ class SVG:
             self.text(x + 16, y + 43, label2, size=10.5, color=color)
 
     def node(self, x, y, w, h, title, lines=(), border=BORDER, fill="#FFFFFF",
-             tsize=13, cyl=False, dashed=False):
+             tsize: float = 13, cyl=False, dashed=False):
         dash = ' stroke-dasharray="5 4"' if dashed else ""
         if cyl:  # simple database cylinder
             ry = 9
@@ -147,11 +147,14 @@ def d1():
     s.node(790, 150, 250, 76, "Grafana  :3000 TLS",
            ["per-task self-signed cert", "Okta SSO only, no local login"],
            border=GREEN)
-    s.node(470, 292, 250, 76, "Gateway — ECS Fargate ×2",
-           ["claude gateway (pinned binary)", "TLS listener :8080, per-task cert"],
-           border=GREEN)
-    s.node(790, 292, 250, 62, "ADOT collector ×2",
-           ["OTLP :4317 / :4318"], border=GREEN)
+    # Gateway task ×2 — the ADOT collector runs co-resident as a loopback sidecar
+    s.node(470, 284, 570, 104, "Gateway task — ECS Fargate ×2", [], border=GREEN)
+    s.node(490, 314, 250, 54, "claude gateway",
+           ["pinned binary · TLS listener :8080"], border=GREEN, tsize=12)
+    s.node(770, 314, 250, 54, "ADOT collector",
+           ["loopback OTLP sidecar"], border=GREEN, dashed=True, tsize=12)
+    s.arrow([(740, 341), (770, 341)])
+    s.chip(755, 380, "loopback :4318", GREEN, size=9.5)
     s.node(470, 434, 250, 84, "RDS PostgreSQL 16",
            ["Multi-AZ · CMK · pgaudit", "app-user login only",
             "stack-policy locked"], border=GREEN, cyl=True)
@@ -202,26 +205,22 @@ def d1():
     s.chip(415, 240, "TLS :443", GREEN, weight="bold")
     s.arrow([(720, 188), (790, 188)])
     s.chip(755, 176, ":3000", GREEN)
-    s.arrow([(595, 226), (595, 292)])
+    s.arrow([(595, 226), (595, 284)])
     s.chip(595, 262, ":8080 re-encrypt", GREEN)
-    s.arrow([(595, 368), (595, 434)])
+    s.arrow([(595, 388), (595, 434)])
     s.chip(595, 404, ":5432 verify-full", GREEN)
-    # gateway -> collector (the one plaintext hop)
-    s.arrow([(720, 330), (790, 330)])
-    s.chip(757, 318, ":4318", RED)
-    s.chip(757, 378, "plaintext · SG-scoped", RED, border=RED)
     # Grafana -> AMP (straight into the top row)
     s.arrow([(1040, 178), (1148, 178)])
     s.chip(1094, 166, "SigV4 query", VIOLET)
-    # gateway -> Bedrock (straight corridor between the box rows)
-    s.arrow([(720, 300), (756, 300), (756, 258), (1148, 258)])
-    s.chip(900, 258, "inference — SigV4", VIOLET)
-    # collector -> AMP
-    s.arrow([(1010, 354), (1010, 378), (1120, 378), (1120, 206), (1148, 206)])
-    s.chip(1058, 378, "SigV4 remote_write", VIOLET)
-    # collector -> CloudWatch (activity stream)
-    s.arrow([(915, 354), (915, 396), (1148, 396)])
-    s.chip(985, 398, "activity stream (opt-in)", VIOLET)
+    # gateway -> Bedrock (inference); leaves the wide task box's right edge
+    s.arrow([(1040, 330), (1112, 330), (1112, 262), (1148, 262)])
+    s.chip(1093, 288, "inference — SigV4", VIOLET)
+    # gateway task (telemetry sidecar) -> AMP (remote_write via the aps endpoint)
+    s.arrow([(1040, 305), (1088, 305), (1088, 200), (1148, 200)])
+    s.chip(1086, 224, "SigV4 remote_write", VIOLET)
+    # gateway task (telemetry sidecar) -> CloudWatch (activity stream)
+    s.arrow([(1040, 360), (1128, 360), (1128, 410), (1148, 410)])
+    s.chip(1088, 388, "activity (opt-in)", VIOLET)
     # db-admin -> RDS and -> Secrets Manager
     s.arrow([(790, 470), (720, 470)])
     s.arrow([(915, 496), (915, 520), (1136, 520), (1136, 338), (1148, 338)])
@@ -275,10 +274,10 @@ def d2():
          "TLS :443 + SigV4 — via bedrock-runtime endpoint, 2 approved models only",
          "Amazon Bedrock", VIOLET, False),
         (6, "Gateway task", GREEN,
-         "PLAINTEXT :4318 OTLP — SG-to-SG scoped · accepted risk, see §10",
-         "ADOT collector", RED, True),
-        (7, "ADOT collector", GREEN,
-         "TLS :443 + SigV4 — Prometheus remote_write",
+         "LOOPBACK 127.0.0.1:4318 OTLP — co-resident sidecar, never on the network",
+         "ADOT collector (same task)", GREEN, False),
+        (7, "Gateway task (sidecar)", GREEN,
+         "TLS :443 + SigV4 — Prometheus remote_write via aps-workspaces endpoint",
          "Managed Prometheus", VIOLET, False),
         (8, "Grafana task", GREEN,
          "TLS :443 + SigV4 — PromQL queries",
@@ -311,8 +310,8 @@ def d2():
     n_before = 10     # rows 1–10 precede the portal group
     s = SVG(1400, top + step * len(hops) + gap + 80,
             "Network flows, ports & TLS state — every hop in the system",
-            "one row per flow; row 6 is the only unencrypted hop · rows 11–15 are "
-            "the download portal (stack 04)")
+            "one row per flow; row 6 is an in-task loopback hop (never on the "
+            "network) · rows 11–15 are the download portal (stack 04)")
     for i, (n, src, sc, proto, dst, dc, red) in enumerate(hops):
         extra = gap if i >= n_before else 0
         y = top + i * step + extra
@@ -478,12 +477,17 @@ def d5():
            ["OTLP enabled centrally by the", "gateway via /managed/settings"],
            border=BLUE)
     s.node(48, 260, 240, 62, "Gateway's own metrics", [], border=GREEN)
-    s.node(380, 180, 260, 96, "Gateway",
-           ["stamps user.id · user.email ·", "user.groups from the Okta JWT",
-            "onto every export"], border=GREEN)
-    s.node(740, 180, 260, 90, "ADOT collector",
-           ["drops session.id (cardinality)", "promotes team / cost_center",
-            "to metric labels"], border=GREEN)
+    # Gateway task — the ADOT collector is a co-resident loopback sidecar
+    s.node(380, 168, 620, 112, "Gateway task — telemetry sidecar co-resident",
+           [], border=GREEN)
+    s.node(396, 200, 272, 64, "Gateway",
+           ["stamps user.id · user.email ·", "user.groups on every export"],
+           border=GREEN, tsize=12)
+    s.node(692, 200, 290, 64, "ADOT collector — sidecar",
+           ["drops session.id · promotes", "team / cost_center to labels"],
+           border=GREEN, dashed=True, tsize=12)
+    s.arrow([(668, 232), (692, 232)])
+    s.chip(680, 274, "loopback", GREEN, size=9.5)
 
     s.zone(1080, 96, 380, 250, "Usage & cost metrics", VIOLET, VIOLET_T,
            "operational sensitivity")
@@ -503,14 +507,14 @@ def d5():
     s.text(764, 560, "Access: IAM only — no dashboard surface. Flag for SIEM subscription "
            "where policy requires.", size=11, color=RED)
 
-    s.arrow([(288, 188), (380, 210)])
-    s.chip(330, 176, "OTLP via gateway FQDN", BLUE)
+    s.arrow([(288, 195), (380, 220)])
+    s.chip(330, 180, "OTLP via gateway FQDN", BLUE)
     s.arrow([(288, 291), (334, 291), (334, 244), (380, 244)])
-    s.arrow([(640, 214), (740, 214)])
-    s.chip(690, 202, "metrics", GREEN)
-    s.arrow([(640, 250), (700, 250), (700, 462), (764, 462)])
-    s.chip(700, 366, "activity records (only when enabled)", RED)
-    s.arrow([(1000, 200), (1104, 185)])
+    # activity stream is emitted by the sidecar's logs exporter
+    s.arrow([(748, 264), (748, 484), (764, 484)])
+    s.chip(760, 352, "activity records (only when enabled)", RED)
+    # remote_write leaves the gateway task (sidecar) to AMP
+    s.arrow([(1000, 210), (1104, 185)])
     s.chip(1052, 172, "SigV4 remote_write", VIOLET)
     s.arrow([(1270, 218), (1270, 244)])
     s.arrow([(964, 484), (1020, 484)])
@@ -542,10 +546,10 @@ def d6():
            ["ALB + TLS · ECS · IAM · secrets", "VPC endpoints + policies",
             "DB bootstrap + rotation", "stack policy: ALB locked"], border=GREEN)
     s.node(980, 130, 230, 130, "03-observability",
-           ["AMP (CMK) · collector ×2", "Grafana + Okta SSO",
+           ["AMP (CMK) + aps endpoint", "Grafana + Okta SSO",
             "activity archive chain"], border=GREEN)
     s.node(1290, 150, 170, 90, "02 re-run",
-           ["picks up", "OBSERVABILITY_OTLP_URL,", "starts forwarding"],
+           ["picks up AMP endpoint;", "sidecar remote-writes", "+ activity stream"],
            border=GREEN)
     s.node(980, 330, 230, 120, "04-download-portal",
            ["Okta OIDC + group authz", "S3 artifacts (CMK) · audit log",
@@ -574,7 +578,9 @@ def d6():
     s.add(f'<path d="M930 272 V 208" stroke="{CHIP_BORDER}" stroke-width="1" '
           f'stroke-dasharray="2 3" fill="none"/>')
     s.arrow([(1210, 195), (1290, 195)])
-    s.text(1250, 284, "OtlpForwardUrl", size=10.5, color=SLATE,
+    s.text(1250, 284, "AMP endpoint + ARN,", size=10.5, color=SLATE,
+           anchor="middle")
+    s.text(1250, 299, "activity log group", size=10.5, color=SLATE,
            anchor="middle")
     s.add(f'<path d="M1250 272 V 208" stroke="{CHIP_BORDER}" stroke-width="1" '
           f'stroke-dasharray="2 3" fill="none"/>')
@@ -688,10 +694,15 @@ def d1b():
 
     s.zone(40, 96, 660, 570, "AWS GovCloud VPC", GREEN, GREEN_T,
            "spoke · private subnets only")
-    s.node(76, 150, 260, 80, "Gateway — ECS Fargate ×2",
-           ["reached via the internal ALB", "(see access view)"], border=GREEN)
-    s.node(400, 150, 260, 70, "ADOT collector ×2",
-           ["OTLP :4317 / :4318"], border=GREEN)
+    # Gateway task ×2 — reached via the internal ALB (access view); the ADOT
+    # collector runs co-resident as a loopback sidecar inside this task.
+    s.node(76, 140, 584, 102, "Gateway task — ECS Fargate ×2", [], border=GREEN)
+    s.node(92, 170, 250, 52, "claude gateway",
+           ["reached via the internal ALB"], border=GREEN, tsize=12)
+    s.node(388, 170, 252, 52, "ADOT collector",
+           ["loopback OTLP sidecar"], border=GREEN, dashed=True, tsize=12)
+    s.arrow([(342, 196), (388, 196)])
+    s.chip(365, 232, "loopback :4318", GREEN, size=9.5)
     s.node(76, 300, 260, 90, "RDS PostgreSQL 16",
            ["Multi-AZ · CMK · pgaudit", "app-user login only"],
            border=GREEN, cyl=True)
@@ -735,25 +746,21 @@ def d1b():
 
     # inference (corridor above both zones, entering Bedrock's top edge
     # to the right of the zone labels)
-    s.arrow([(280, 150), (280, 86), (1040, 86), (1040, 150)])
+    s.arrow([(280, 140), (280, 86), (1040, 86), (1040, 150)])
     s.chip(640, 86, "inference — SigV4 via bedrock-runtime endpoint · 2 approved models", VIOLET)
-    # gateway -> collector (plaintext)
-    s.arrow([(336, 190), (400, 190)])
-    s.chip(368, 166, ":4318", RED)
-    s.chip(368, 246, "plaintext · SG-scoped", RED, border=RED)
-    # collector -> AMP (enter top) and -> CloudWatch
-    s.arrow([(660, 185), (740, 185), (740, 240)])
-    s.chip(700, 185, "SigV4 remote_write", VIOLET)
-    s.arrow([(660, 205), (788, 205), (788, 344), (810, 344)])
-    s.chip(715, 216, "activity stream (opt-in)", VIOLET)
+    # telemetry sidecar -> AMP (remote_write) and -> CloudWatch (activity stream)
+    s.arrow([(660, 188), (772, 188), (772, 255), (810, 255)])
+    s.chip(716, 176, "SigV4 remote_write", VIOLET)
+    s.arrow([(660, 210), (788, 210), (788, 344), (810, 344)])
+    s.chip(715, 226, "activity stream (opt-in)", VIOLET)
     # CloudWatch -> S3 archive
     s.arrow([(960, 372), (960, 400)])
     # Grafana -> AMP
     s.arrow([(660, 470), (770, 470), (770, 292), (810, 292)])
     s.chip(770, 440, "SigV4 query", VIOLET)
     # gateway -> RDS, db-admin -> RDS / Secrets Manager
-    s.arrow([(206, 230), (206, 300)])
-    s.chip(206, 266, ":5432 verify-full", GREEN)
+    s.arrow([(206, 242), (206, 300)])
+    s.chip(206, 271, ":5432 verify-full", GREEN)
     s.arrow([(400, 345), (336, 345)])
     s.arrow([(660, 330), (750, 330), (750, 518), (810, 518)])
     s.chip(750, 540, "manage app secret", VIOLET)
@@ -765,9 +772,11 @@ def d1b():
     s.arrow([(244, 520), (244, 542), (712, 542), (712, 475), (1150, 475)])
     s.chip(945, 475, "download-audit (CMK)", VIOLET)
 
-    s.text(36, 726, "The gateway→collector OTLP hop is the only unencrypted "
-           "flow (SG-to-SG scoped — accepted risk §10). Okta egress and the "
-           "developer path are on the access view.", size=11.5, color=SLATE)
+    s.text(36, 726, "The ADOT collector is a co-resident loopback sidecar in the "
+           "gateway task (OTLP over 127.0.0.1), so telemetry never crosses the "
+           "network in the clear — the former plaintext OTLP hop is gone (C2 "
+           "closed). Okta egress and the developer path are on the access view.",
+           size=11.5, color=SLATE)
     s.text(36, 748, "Secrets are injected into tasks at launch by ECS "
            "(execution roles hold GetSecretValue + kms:Decrypt on exactly "
            "their own secrets — see §6).", size=11.5, color=SLATE_LT)
@@ -795,11 +804,13 @@ def d7():
     s.node(96, 356, 250, 92, "Internal ALB", ["SG: alb", "TLS listener :443"],
            border=GREEN)
     s.node(96, 520, 250, 100, "Gateway tasks",
-           ["SGs: svc + db-client", "listener :8080 (TLS)"], border=GREEN)
+           ["SGs: svc + db-client", "listener :8080 (TLS)",
+            "+ ADOT collector sidecar"], border=GREEN)
     s.node(430, 520, 230, 100, "Grafana task",
            ["SG: grafana", "listener :3000 (TLS)"], border=GREEN)
-    s.node(740, 520, 230, 100, "OTLP collector x2",
-           ["SG: collector", "listeners :4317-4318"], border=GREEN)
+    s.node(740, 520, 230, 100, "ADOT collector - sidecar",
+           ["runs inside the gateway task", "loopback 127.0.0.1 - no SG"],
+           border=SLATE_LT, dashed=True)
     s.node(1050, 520, 250, 100, "Download portal x2",
            ["SG: portal", "listener :8080 (TLS)"], border=GREEN)
     s.node(140, 700, 206, 96, "db-admin Lambdas",
@@ -812,11 +823,11 @@ def d7():
 
     s.node(96, 862, 560, 80, "Interface VPC endpoints (shared SG: endpoint)",
            ["bedrock-runtime | ecr.api | ecr.dkr | logs | secretsmanager | ecs",
-            "IN 443 from: svc, db-admin, grafana, collector, portal, admin host"],
+            "IN 443 from: svc, db-admin, grafana, portal, admin host"],
            border=VIOLET)
     s.node(740, 862, 230, 80, "AMP endpoint",
            ["SG: amp-endpoint",
-            "IN 443: collector + grafana"], border=VIOLET)
+            "IN 443: gateway (svc) + grafana"], border=VIOLET)
 
     s.zone(1426, 96, 332, 400, "External / regional", RED, RED_T)
     s.node(1456, 150, 272, 78, "Okta issuer",
@@ -839,8 +850,9 @@ def d7():
     s.arrow([(346, 372), (1140, 372), (1140, 520)], color=GREEN)
     s.chip(560, 372, "8080  alb->portal (04)", color=GREEN)
 
-    # -- corridors above row B: Okta egress (y470, riser in collector/portal gap)
-    # and OTLP forward (y498)
+    # -- corridors above row B: Okta egress (y470, riser in the gateway/grafana gap).
+    # There is no svc->collector OTLP rule any more - the collector is a loopback
+    # sidecar in the gateway task, so that hop never touches the network.
     s.arrow([(300, 520), (300, 470), (1010, 470), (1010, 200), (1456, 200)],
             color=RED)
     s.arrow([(560, 520), (560, 470)], color=RED, dashed=True)
@@ -848,8 +860,6 @@ def d7():
     # portal -> Okta (its own riser up the right margin into Okta's left edge)
     s.arrow([(1240, 520), (1240, 216), (1456, 216)], color=RED)
     s.chip(1240, 360, "443  portal -> Okta", color=RED)
-    s.arrow([(280, 520), (280, 498), (795, 498), (795, 520)], color=GREEN)
-    s.chip(560, 498, "4317-4318  svc->collector (03)", color=GREEN)
 
     # -- database (5432 rides the attached db-client SG)
     s.arrow([(346, 600), (388, 600), (388, 745), (430, 745)], color=SLATE)
@@ -860,8 +870,6 @@ def d7():
     s.arrow([(118, 620), (118, 862)], color=VIOLET)
     s.arrow([(243, 796), (243, 862)], color=VIOLET)
     s.arrow([(460, 620), (460, 668), (400, 668), (400, 862)], color=VIOLET)
-    s.arrow([(770, 620), (770, 650), (690, 650), (690, 830), (600, 830),
-             (600, 862)], color=VIOLET)
     s.arrow([(1060, 796), (1060, 815), (655, 815), (655, 862)], color=VIOLET,
             dashed=True)
     # portal -> shared endpoints (conditional: only when 02 made shared endpoints)
@@ -869,8 +877,10 @@ def d7():
              (540, 862)], color=VIOLET, dashed=True)
     s.chip(790, 840, "443  portal->endpoints (when shared)", color=VIOLET)
 
-    # -- 443 to the AMP endpoint
-    s.arrow([(855, 620), (855, 862)], color=VIOLET)
+    # -- 443 to the AMP endpoint (remote_write now originates in the gateway task
+    #    on the svc SG; queries still come from grafana)
+    s.arrow([(320, 620), (320, 660), (820, 660), (820, 862)], color=VIOLET)
+    s.chip(545, 648, "443  gateway -> AMP (remote_write)", color=VIOLET)
     s.arrow([(660, 585), (700, 585), (700, 640), (905, 640), (905, 862)],
             color=VIOLET)
 
@@ -910,15 +920,15 @@ def d8():
         "IN   8080       from alb",
         "OUT  443        0.0.0.0/0 (Okta, AWS APIs via endpoints/egress)",
         "OUT  proxy port 0.0.0.0/0 (only when HttpsProxyUrl set)",
-        "OUT  4317-4318  to collector  (rule added by 03)"],
-        note="also carries db-client (below) for 5432")
+        "OUT  443        to amp-endpoint (remote_write; rule added by 03)"],
+        note="also carries db-client (5432) + telemetry sidecar (loopback)")
     card(c1, 458, "db-admin  (bootstrap + rotation Lambdas)", "02", [
         "IN   none",
         "OUT  443  0.0.0.0/0 (Secrets Manager, ECS via endpoints)"],
         note="also carries db-client (below) for 5432")
     card(c1, 606, "endpoint  (shared, all 02 interface endpoints)", "02", [
         "IN   443  from svc, db-admin",
-        "IN   443  from collector, grafana   (rules added by 03)",
+        "IN   443  from grafana              (rule added by 03)",
         "IN   443  from portal               (rule added by 04, when shared)",
         "IN   443  from AdminClientSecurityGroupId (optional param)",
         "OUT  none (endpoint ENIs never initiate)"])
@@ -934,24 +944,22 @@ def d8():
     card(c2, 244, "db  (RDS instance)", "01", [
         "IN   5432  from db-client",
         "OUT  none"])
-    card(c2, 376, "collector  (OTLP collector tasks)", "03", [
-        "IN   4317-4318  from svc (gateway OTLP forward)",
-        "OUT  443        0.0.0.0/0 (AMP remote_write, ECR, logs)"])
-    card(c2, 524, "grafana  (dashboard task)", "03", [
+    # No collector SG: the ADOT collector runs as a loopback sidecar in the
+    # gateway task (svc SG), so its former SG and OTLP ingress no longer exist.
+    card(c2, 376, "grafana  (dashboard task)", "03", [
         "IN   3000  from alb (path rule /grafana)",
         "OUT  443   0.0.0.0/0 (AMP queries, Okta OAuth, ECR)"])
-    card(c2, 672, "amp-endpoint  (aps-workspaces endpoint)", "03", [
-        "IN   443  from collector (remote_write)",
+    card(c2, 524, "amp-endpoint  (aps-workspaces endpoint)", "03", [
+        "IN   443  from svc (gateway task - remote_write)",
         "IN   443  from grafana (queries)",
         "OUT  none"])
 
     s.node(c3, 96, 470, 300, "Cross-stack rule writers", [], border=SLATE)
     for i, ln in enumerate([
             "03 adds rules to SGs it imports from 02:",
-            "  - AlbToGrafanaEgress:       alb  OUT 3000 -> grafana",
-            "  - GatewayToCollectorEgress: svc  OUT 4317-18 -> collector",
-            "  - CollectorToEndpointsIngress: endpoint IN 443",
-            "  - GrafanaToEndpointsIngress:   endpoint IN 443",
+            "  - AlbToGrafanaEgress:         alb OUT 3000 -> grafana",
+            "  - GatewayToAmpEndpointEgress: svc OUT 443 -> amp-endpoint",
+            "  - GrafanaToEndpointsIngress:  endpoint IN 443",
             "04 adds rules to SGs it imports from 02:",
             "  - AlbToPortalEgress:        alb  OUT 8080 -> portal",
             "  - PortalToEndpointsIngress: endpoint IN 443 (when shared)",
@@ -972,10 +980,11 @@ def d8():
             "that suppress the default allow-all egress."]):
         s.text(c3 + 18, 464 + i * 17, ln, size=10.8, color=SLATE)
 
-    s.text(36, 908, "Accepted risk (SSP-scoped): the gateway->collector OTLP "
-           "hop (4317-4318) is plaintext, compensated by SG-to-SG scoping - "
-           "only gateway tasks can reach the collector ports. See "
-           "security-review C2.", size=11, color=SLATE_LT)
+    s.text(36, 908, "Resolved (was accepted risk C2): the gateway->collector OTLP "
+           "hop is no longer on the network - the ADOT collector runs as a "
+           "co-resident sidecar in the gateway task, reached over loopback "
+           "(127.0.0.1:4318). No SG rule exists or is needed for it.",
+           size=11, color=SLATE_LT)
     s.write("08-security-group-rules.svg")
 
 

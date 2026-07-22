@@ -6,13 +6,17 @@
 <rect x="40" y="96" width="660" height="570" rx="12" fill="#ECFDF5" stroke="#047857" stroke-width="1.5"/>
 <text x="56" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#047857" font-weight="bold" text-anchor="start" letter-spacing="0.06em">AWS GOVCLOUD VPC</text>
 <text x="56" y="139" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="start" >spoke · private subnets only</text>
-<rect x="76" y="150" width="260" height="80" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
-<text x="206.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway — ECS Fargate ×2</text>
-<text x="206.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >reached via the internal ALB</text>
-<text x="206.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >(see access view)</text>
-<rect x="400" y="150" width="260" height="70" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
-<text x="530.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >ADOT collector ×2</text>
-<text x="530.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >OTLP :4317 / :4318</text>
+<rect x="76" y="140" width="584" height="102" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="368.0" y="161" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway task — ECS Fargate ×2</text>
+<rect x="92" y="170" width="250" height="52" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="217.0" y="191" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#0F172A" font-weight="bold" text-anchor="middle" >claude gateway</text>
+<text x="217.0" y="207" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >reached via the internal ALB</text>
+<rect x="388" y="170" width="252" height="52" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="514.0" y="191" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#0F172A" font-weight="bold" text-anchor="middle" >ADOT collector</text>
+<text x="514.0" y="207" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >loopback OTLP sidecar</text>
+<path d="M342 196 L388 196" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="317.1" y="222" width="95.8" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="365" y="235.5" font-family="Helvetica, Arial, sans-serif" font-size="9.5" fill="#047857" font-weight="normal" text-anchor="middle" >loopback :4318</text>
 <path d="M76 309 a 130.0 9 0 0 1 260 0 v 72 a 130.0 9 0 0 1 -260 0 Z" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <path d="M76 309 a 130.0 9 0 0 0 260 0" fill="none" stroke="#047857" stroke-width="1.4"/>
 <text x="206.0" y="331" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >RDS PostgreSQL 16</text>
@@ -71,27 +75,22 @@
 <rect x="1150" y="447" width="286" height="56" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
 <text x="1293.0" y="468" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >CloudWatch: portal-audit (04)</text>
 <text x="1293.0" y="484" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >CMK · 365 d · flag for SIEM</text>
-<path d="M280 150 L280 86 L1040 86 L1040 150" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M280 140 L280 86 L1040 86 L1040 150" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="424.1" y="76" width="431.8" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="640" y="89.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >inference — SigV4 via bedrock-runtime endpoint · 2 approved models</text>
-<path d="M336 190 L400 190" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="344.25" y="156" width="47.5" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="368" y="169.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >:4318</text>
-<rect x="293.85" y="236" width="148.29999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#B91C1C"/>
-<text x="368" y="249.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >plaintext · SG-scoped</text>
-<path d="M660 185 L740 185 L740 240" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="635.3" y="175" width="129.39999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="700" y="188.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 remote_write</text>
-<path d="M660 205 L788 205 L788 344 L810 344" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="631.4" y="206" width="167.2" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="715" y="219.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >activity stream (opt-in)</text>
+<path d="M660 188 L772 188 L772 255 L810 255" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="651.3" y="166" width="129.39999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="716" y="179.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 remote_write</text>
+<path d="M660 210 L788 210 L788 344 L810 344" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="631.4" y="216" width="167.2" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="715" y="229.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >activity stream (opt-in)</text>
 <path d="M960 372 L960 400" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M660 470 L770 470 L770 292 L810 292" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="727.35" y="430" width="85.3" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="770" y="443.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 query</text>
-<path d="M206 230 L206 300" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="144.45" y="256" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="206" y="269.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >:5432 verify-full</text>
+<path d="M206 242 L206 300" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="144.45" y="261" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="206" y="274.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >:5432 verify-full</text>
 <path d="M400 345 L336 345" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M660 330 L750 330 L750 518 L810 518" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="688.45" y="530" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
@@ -102,7 +101,7 @@
 <path d="M244 520 L244 542 L712 542 L712 475 L1150 475" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="874.0" y="465" width="142.0" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="945" y="478.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >download-audit (CMK)</text>
-<text x="36" y="726" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#334155" font-weight="normal" text-anchor="start" >The gateway→collector OTLP hop is the only unencrypted flow (SG-to-SG scoped — accepted risk §10). Okta egress and the developer path are on the access view.</text>
+<text x="36" y="726" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#334155" font-weight="normal" text-anchor="start" >The ADOT collector is a co-resident loopback sidecar in the gateway task (OTLP over 127.0.0.1), so telemetry never crosses the network in the clear — the former plaintext OTLP hop is gone (C2 closed). Okta egress and the developer path are on the access view.</text>
 <text x="36" y="748" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748B" font-weight="normal" text-anchor="start" >Secrets are injected into tasks at launch by ECS (execution roles hold GetSecretValue + kms:Decrypt on exactly their own secrets — see §6).</text>
 <text x="36" y="770" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748B" font-weight="normal" text-anchor="start" >Download portal (04): serves the installer ZIP from the CMK-encrypted artifacts bucket via the S3 gateway endpoint and writes a download-audit stream; its Okta OIDC egress is on the access view.</text>
 </svg>

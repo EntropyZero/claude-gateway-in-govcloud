@@ -19,14 +19,15 @@
 <text x="221.0" y="541" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway tasks</text>
 <text x="221.0" y="557" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SGs: svc + db-client</text>
 <text x="221.0" y="571" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >listener :8080 (TLS)</text>
+<text x="221.0" y="585" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >+ ADOT collector sidecar</text>
 <rect x="430" y="520" width="230" height="100" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="545.0" y="541" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Grafana task</text>
 <text x="545.0" y="557" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SG: grafana</text>
 <text x="545.0" y="571" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >listener :3000 (TLS)</text>
-<rect x="740" y="520" width="230" height="100" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
-<text x="855.0" y="541" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >OTLP collector x2</text>
-<text x="855.0" y="557" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SG: collector</text>
-<text x="855.0" y="571" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >listeners :4317-4318</text>
+<rect x="740" y="520" width="230" height="100" rx="8" fill="#FFFFFF" stroke="#64748B" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="855.0" y="541" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >ADOT collector - sidecar</text>
+<text x="855.0" y="557" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >runs inside the gateway task</text>
+<text x="855.0" y="571" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >loopback 127.0.0.1 - no SG</text>
 <rect x="1050" y="520" width="250" height="100" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="1175.0" y="541" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Download portal x2</text>
 <text x="1175.0" y="557" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SG: portal</text>
@@ -47,11 +48,11 @@
 <rect x="96" y="862" width="560" height="80" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
 <text x="376.0" y="883" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Interface VPC endpoints (shared SG: endpoint)</text>
 <text x="376.0" y="899" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bedrock-runtime | ecr.api | ecr.dkr | logs | secretsmanager | ecs</text>
-<text x="376.0" y="913" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >IN 443 from: svc, db-admin, grafana, collector, portal, admin host</text>
+<text x="376.0" y="913" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >IN 443 from: svc, db-admin, grafana, portal, admin host</text>
 <rect x="740" y="862" width="230" height="80" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
 <text x="855.0" y="883" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >AMP endpoint</text>
 <text x="855.0" y="899" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SG: amp-endpoint</text>
-<text x="855.0" y="913" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >IN 443: collector + grafana</text>
+<text x="855.0" y="913" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >IN 443: gateway (svc) + grafana</text>
 <rect x="1426" y="96" width="332" height="400" rx="12" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
 <text x="1442" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#B91C1C" font-weight="bold" text-anchor="start" letter-spacing="0.06em">EXTERNAL / REGIONAL</text>
 <rect x="1456" y="150" width="272" height="78" rx="8" fill="#FFFFFF" stroke="#B91C1C" stroke-width="1.4"/>
@@ -85,9 +86,6 @@
 <path d="M1240 520 L1240 216 L1456 216" fill="none" stroke="#B91C1C" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="1172.15" y="350" width="135.7" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="1240" y="363.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >443  portal -&gt; Okta</text>
-<path d="M280 520 L280 498 L795 498 L795 520" fill="none" stroke="#047857" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="457.5" y="488" width="205.0" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="560" y="501.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >4317-4318  svc-&gt;collector (03)</text>
 <path d="M346 600 L388 600 L388 745 L430 745" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M346 760 L430 760" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="237.15" y="675" width="135.7" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
@@ -95,12 +93,13 @@
 <path d="M118 620 L118 862" fill="none" stroke="#6D28D9" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M243 796 L243 862" fill="none" stroke="#6D28D9" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M460 620 L460 668 L400 668 L400 862" fill="none" stroke="#6D28D9" stroke-width="1.6" marker-end="url(#arr)"/>
-<path d="M770 620 L770 650 L690 650 L690 830 L600 830 L600 862" fill="none" stroke="#6D28D9" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M1060 796 L1060 815 L655 815 L655 862" fill="none" stroke="#6D28D9" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
 <path d="M1075 620 L1075 655 L1010 655 L1010 840 L540 840 L540 862" fill="none" stroke="#6D28D9" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
 <rect x="668.6" y="830" width="242.79999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="790" y="843.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >443  portal-&gt;endpoints (when shared)</text>
-<path d="M855 620 L855 862" fill="none" stroke="#6D28D9" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M320 620 L320 660 L820 660 L820 862" fill="none" stroke="#6D28D9" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="429.9" y="638" width="230.2" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="545" y="651.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >443  gateway -&gt; AMP (remote_write)</text>
 <path d="M660 585 L700 585 L700 640 L905 640 L905 862" fill="none" stroke="#6D28D9" stroke-width="1.6" marker-end="url(#arr)"/>
 <text x="36" y="986" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#64748B" font-weight="normal" text-anchor="start" >Not shown: every SG's default egress is a 127.0.0.1/32 placeholder (deny) unless a rule above exists; endpoint ENIs and RDS initiate nothing. Dashed = optional/conditional (admin-host param, AMP endpoint toggle, portal's shared-endpoint ingress).</text>
 </svg>

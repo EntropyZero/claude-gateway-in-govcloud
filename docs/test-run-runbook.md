@@ -84,7 +84,10 @@ Legend: ☐ = do it · 🔎 = checkpoint, confirm before moving on.
   `PRIVATE_ROUTE_TABLE_IDS="rtb-..."`, keep `CREATE_BEDROCK_ENDPOINT="true"`;
   and set `CREATE_AMP_ENDPOINT="true"` on the obs side. For the first test
   run, a NAT-equipped VPC is the simplest path.
-- ☐ Leave `OBSERVABILITY_OTLP_URL` **empty** for now (filled after stack 03).
+- ☐ Leave the three AMP telemetry vars — `OBSERVABILITY_AMP_ENDPOINT`,
+  `OBSERVABILITY_AMP_WORKSPACE_ARN`, `OBSERVABILITY_ACTIVITY_LOG_GROUP` —
+  **empty** for now; `deploy-observability.sh` fills them from stack 03's
+  outputs, and the 02 re-run attaches the collector sidecar with them.
 
 **GPG decision for the image mirror** (the mirror now fails closed)
 - ☐ Either put Anthropic's release-signing key on the host and
@@ -289,9 +292,14 @@ behind ZPA (synthetic CGNAT answers aren't authoritative — the script says so)
 ```bash
 ./scripts/deploy-observability.sh
 ```
-🔎 Stack `CREATE_COMPLETE`; note the `OtlpForwardUrl` and
-`GrafanaOidcRedirectUri` outputs; deploy.env now has `OBSERVABILITY_OTLP_URL`
-persisted. Confirm the redirect URI matches what you registered in Okta.
+🔎 Stack `CREATE_COMPLETE`; note the `WorkspacePrometheusEndpoint`,
+`WorkspaceArn`, `ActivityLogGroupName`, and `GrafanaOidcRedirectUri` outputs.
+`deploy-observability.sh` persists the first three into deploy.env as
+`OBSERVABILITY_AMP_ENDPOINT`, `OBSERVABILITY_AMP_WORKSPACE_ARN`, and
+`OBSERVABILITY_ACTIVITY_LOG_GROUP` — the params the gateway sidecar consumes.
+There is **no** collector service in 03 and no `OtlpForwardUrl` output; the
+collector runs as a sidecar in the gateway task, attached by the 02 re-run
+below. Confirm the redirect URI matches what you registered in Okta.
 
 ---
 
@@ -299,10 +307,29 @@ persisted. Confirm the redirect URI matches what you registered in Okta.
 
 ```bash
 ./scripts/set-grafana-oidc-secret.sh     # paste the (same or dedicated) client secret; rolls Grafana
-./scripts/deploy-gateway.sh              # re-run: picks up OBSERVABILITY_OTLP_URL, starts forwarding
+./scripts/deploy-gateway.sh              # re-run: picks up the AMP params + COLLECTOR_IMAGE, attaches the sidecar
 ```
-🔎 The gateway task rolls with telemetry forwarding on. (The deploy-gateway
-guard now sees the obs stack exists and keeps the OTLP URL.)
+🔎 The gateway task rolls with a **second container** — the ADOT collector
+sidecar — and telemetry forwarding on (gateway → `http://localhost:4318` →
+sidecar → AMP). Confirm the task now runs two containers
+(`aws ecs describe-tasks ... --query 'tasks[].containers[].name'` shows the
+gateway plus `otel-collector`), and that the collector's log stream appears in
+the gateway log group under the `otel` prefix. (The deploy-gateway guard sees
+the obs stack exists and keeps the AMP params set.)
+
+> **Migrating an already-deployed environment to the sidecar** (the collector
+> moved out of 03 and into the 02 gateway task, 2026-07-22). The order is the
+> reverse of a fresh deploy — **update 03 FIRST, then re-run 02:**
+> 1. `./scripts/deploy-observability.sh` — this update **removes** the dead
+>    standalone collector service, its task/roles, the collector SG + the
+>    gateway↔collector SG-rule pair, and the Cloud Map namespace, and adds the
+>    new AMP outputs. Watch the Cloud Map deletion: the **discovery service must
+>    delete before its namespace** — if the namespace delete stalls, confirm the
+>    collector service (and thus its Cloud Map instance) is fully gone first.
+>    The three `OBSERVABILITY_AMP_*` vars are persisted on success.
+> 2. `./scripts/deploy-gateway.sh` — re-run to attach the sidecar with those
+>    params. Doing 02 first would point it at an endpoint SG rule 03 hasn't
+>    rewired yet; 03-first keeps the AMP path reachable when forwarding starts.
 
 ---
 
@@ -323,7 +350,9 @@ guard now sees the obs stack exists and keeps the OTLP URL.)
   land as Admin (via `grafana-admins`) → the usage dashboard renders. A user
   in no mapped group is denied (strict role mapping).
 - ☐ **Telemetry flowing**: after a few sessions, cost/token panels populate
-  in Grafana (metrics → collector → AMP).
+  in Grafana (metrics → gateway → loopback → collector sidecar → AMP). This is
+  the C2 sidecar's live verification — the item still marked pending in
+  `security-review-2026-07.md`.
 - ☐ **pgaudit**: the `postgresql` log group is receiving DDL/connection
   events.
 

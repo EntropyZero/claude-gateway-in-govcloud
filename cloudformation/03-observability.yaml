@@ -1,12 +1,14 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   Usage/cost observability for the Claude apps gateway: an Amazon Managed
-  Service for Prometheus (AMP) workspace, an ADOT collector that receives
-  the gateway's forwarded OTLP telemetry and remote-writes it to AMP, and a
-  Grafana instance (behind the existing ALB at /grafana) with a provisioned
-  usage-and-cost dashboard. Deploy after 02-gateway.yaml (same NamePrefix),
-  then set ObservabilityOtlpUrl on the gateway stack to this stack's
-  OtlpForwardUrl output.
+  Service for Prometheus (AMP) workspace, the activity-log archive chain, and
+  a Grafana instance (behind the existing ALB at /grafana) with a provisioned
+  usage-and-cost dashboard. The OTLP collector runs as a loopback sidecar in
+  the gateway task (02-gateway.yaml), not here - this stack provides the AMP
+  workspace and activity-log group it writes to. Deploy after 02-gateway.yaml
+  (same NamePrefix), then set the gateway stack's ObservabilityAmpRemoteWrite
+  Endpoint / ObservabilityAmpWorkspaceArn / ObservabilityActivityLogGroup from
+  this stack's outputs and re-run deploy-gateway.sh.
 
 Parameters:
   NamePrefix:
@@ -27,26 +29,10 @@ Parameters:
     Description: The corporate CNAME (Grafana is served at https://<GatewayFqdn>/grafana).
     AllowedPattern: '^[a-z0-9.-]+\.[a-z]{2,}$'
 
-  CollectorImage:
-    Type: String
-    AllowedPattern: '.+'
-    Description: >-
-      ADOT collector image URI - mirror a pinned release into your ECR and
-      pass that URI (pin by digest, not tag, so upstream cannot swap the
-      image). No default on purpose: public.ecr.aws is unreachable from a
-      locked-down spoke, and :latest is a supply-chain risk. Example:
-      docker pull public.ecr.aws/aws-observability/aws-otel-collector:v0.43.0
-      then tag/push to <acct>.dkr.ecr.<region>.amazonaws.com and reference
-      the pushed image @sha256:<digest>.
-
-  CollectorDesiredCount:
-    Type: Number
-    Default: 2
-    MinValue: 1
-    Description: >-
-      Collector task count. With 1, every collector redeploy is a telemetry
-      blackout (Cloud Map health FailureThreshold is 1); 2 keeps the OTLP
-      forward target resolvable through rollouts.
+  # The ADOT collector no longer runs here: it is a co-resident sidecar in the
+  # gateway task (02-gateway.yaml). The gateway stack now carries CollectorImage
+  # (the same COLLECTOR_IMAGE mirror-collector.sh produces). This stack exports
+  # the AMP endpoint / ARN and the activity-log group that the sidecar needs.
 
   GrafanaImage:
     Type: String
@@ -215,82 +201,22 @@ Resources:
         - Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
         - !Ref 'AWS::NoValue'
 
-  # ------------------------------------------------- service discovery
-  # Deterministic private DNS so the gateway's telemetry.forward_to URL is
-  # known before this stack exists: http://otel-collector.<prefix>.internal:4318
-  Namespace:
-    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
-    Properties:
-      Name: !Sub '${NamePrefix}.internal'
-      Vpc: !Ref VpcId
-
-  CollectorDiscovery:
-    Type: AWS::ServiceDiscovery::Service
-    Properties:
-      Name: otel-collector
-      NamespaceId: !Ref Namespace
-      DnsConfig:
-        DnsRecords:
-          - Type: A
-            TTL: 10
-      HealthCheckCustomConfig:
-        FailureThreshold: 1
-
   # ------------------------------------------------------------ collector
-  CollectorSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: !Sub '${NamePrefix} - OTLP collector'
-      VpcId: !Ref VpcId
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 4317
-          ToPort: 4318
-          SourceSecurityGroupId:
-            Fn::ImportValue: !Sub '${NamePrefix}-svc-sg'
-          Description: OTLP (grpc/http) from gateway tasks
-      SecurityGroupEgress:
-        # AMP remote_write + CloudWatch Logs (activity stream) + ECR pull -
-        # all TLS, via the endpoints or the NAT/TGW path.
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
-          Description: HTTPS to AWS services
+  # The OTLP collector is NO LONGER a service here. It runs as a loopback
+  # SIDECAR inside the gateway task (02-gateway.yaml): the former plaintext
+  # gateway->collector network hop is eliminated, closing SC-8 by absence of
+  # transmission (the gateway refuses a non-HTTPS forward_to unless the host
+  # is localhost - live-run lesson; see SECURITY_REVIEW C2). This stack now
+  # only provides the destinations the sidecar writes to: the AMP workspace
+  # (WorkspacePrometheusEndpoint / WorkspaceArn) and the activity-log group.
+  # The sidecar runs under the gateway TaskRole, which 02 scopes to those.
 
-  # The gateway tasks' egress is scoped in 02; this attaches their OTLP
-  # path to the collector once this stack exists (deploys are ordered
-  # 02 -> 03 -> 02-with-OTLP-URL, so the rule lands before forwarding starts).
-  GatewayToCollectorEgress:
-    Type: AWS::EC2::SecurityGroupEgress
-    Properties:
-      GroupId:
-        Fn::ImportValue: !Sub '${NamePrefix}-svc-sg'
-      IpProtocol: tcp
-      FromPort: 4317
-      ToPort: 4318
-      DestinationSecurityGroupId: !Ref CollectorSecurityGroup
-      Description: OTLP forward to the collector
-
-  # Let the observability tasks reach 02's shared interface endpoints
+  # Let the Grafana tasks reach 02's shared interface endpoints
   # (ecr/logs/secretsmanager) for image pull, awslogs, and secret injection.
-  # 02's endpoint SG admits only the gateway + db-admin SGs; these add the
-  # collector/Grafana SGs. Same cross-stack pattern as GatewayToCollectorEgress
-  # (modify an imported 02 SG). Only when 02 actually created those endpoints
-  # (CreateSupportingEndpoints=true) - otherwise the endpoint SG / export does
-  # not exist and these are unnecessary.
-  CollectorToEndpointsIngress:
-    Type: AWS::EC2::SecurityGroupIngress
-    Condition: WantSharedEndpoints
-    Properties:
-      GroupId:
-        Fn::ImportValue: !Sub '${NamePrefix}-endpoint-sg'
-      IpProtocol: tcp
-      FromPort: 443
-      ToPort: 443
-      SourceSecurityGroupId: !Ref CollectorSecurityGroup
-      Description: TLS from the OTLP collector tasks
-
+  # 02's endpoint SG admits only the gateway + db-admin SGs; this adds the
+  # Grafana SG (cross-stack: modify an imported 02 SG). Only when 02 actually
+  # created those endpoints (CreateSupportingEndpoints=true) - otherwise the
+  # endpoint SG / export does not exist and this is unnecessary.
   GrafanaToEndpointsIngress:
     Type: AWS::EC2::SecurityGroupIngress
     Condition: WantSharedEndpoints
@@ -302,178 +228,6 @@ Resources:
       ToPort: 443
       SourceSecurityGroupId: !Ref GrafanaSecurityGroup
       Description: TLS from the Grafana tasks
-
-  CollectorLogGroup:
-    Type: AWS::Logs::LogGroup
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      LogGroupName: !Sub '/ecs/${NamePrefix}-otel'
-      RetentionInDays: 90
-      KmsKeyId:
-        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
-      # Load-bearing on already-deployed stacks (CFN no-op bug #1543) — see
-      # the gateway stack's LogGroup comment. Do not remove.
-      Tags:
-        - Key: retention-policy
-          Value: retain-on-teardown
-
-  CollectorExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${NamePrefix}-otel-execution'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: { Service: ecs-tasks.amazonaws.com }
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
-
-  CollectorTaskRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${NamePrefix}-otel-task'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: { Service: ecs-tasks.amazonaws.com }
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: amp-remote-write
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: aps:RemoteWrite
-                Resource: !GetAtt Workspace.Arn
-        - PolicyName: activity-log-write
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                  - logs:DescribeLogStreams
-                  - logs:PutRetentionPolicy
-                # The log-group Arn attribute already ends in :* (covers streams).
-                Resource: !GetAtt ActivityLogGroup.Arn
-
-  CollectorTaskDefinition:
-    Type: AWS::ECS::TaskDefinition
-    Properties:
-      Family: !Sub '${NamePrefix}-otel'
-      RequiresCompatibilities: [FARGATE]
-      NetworkMode: awsvpc
-      Cpu: '256'
-      Memory: '512'
-      RuntimePlatform:
-        CpuArchitecture: X86_64
-        OperatingSystemFamily: LINUX
-      ExecutionRoleArn: !GetAtt CollectorExecutionRole.Arn
-      TaskRoleArn: !GetAtt CollectorTaskRole.Arn
-      ContainerDefinitions:
-        - Name: otel-collector
-          Image: !Ref CollectorImage
-          Essential: true
-          PortMappings:
-            - ContainerPort: 4317
-              Protocol: tcp
-            - ContainerPort: 4318
-              Protocol: tcp
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref CollectorLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: otel
-          Environment:
-            # ADOT reads its full config from this env var. session.id is
-            # dropped from metrics (unbounded cardinality); resource
-            # attributes (team, cost_center, ...) are converted to metric
-            # labels so Prometheus can group by them. The logs pipeline sits
-            # idle until the gateway stack sets ForwardActivityLogs=true.
-            #
-            # SC-8 note: the gateway->collector OTLP hop is plain HTTP,
-            # scoped SG-to-SG (only gateway tasks can reach 4317/4318). The
-            # gateway's telemetry.forward_to validates TLS against the
-            # SYSTEM trust store only (no custom-CA option), so encrypting
-            # this hop requires: an enterprise-CA-signed cert for
-            # otel-collector.<prefix>.internal served by the receiver
-            # (receivers.otlp.protocols.*.tls: {cert_file, key_file} - a
-            # custom collector image that carries the files), the CA root
-            # baked into the gateway image trust store (see
-            # docker/Dockerfile), and an https OtlpForwardUrl. Scope
-            # against the SSP: in-VPC SG-scoped hops often satisfy SC-8
-            # via the VPC boundary argument.
-            - Name: AOT_CONFIG_CONTENT
-              Value: !Sub |
-                extensions:
-                  sigv4auth:
-                    region: ${AWS::Region}
-                    service: aps
-                receivers:
-                  otlp:
-                    protocols:
-                      grpc:
-                        endpoint: 0.0.0.0:4317
-                      http:
-                        endpoint: 0.0.0.0:4318
-                processors:
-                  attributes/cardinality:
-                    actions:
-                      - key: session.id
-                        action: delete
-                  batch:
-                    timeout: 30s
-                exporters:
-                  prometheusremotewrite:
-                    endpoint: ${Workspace.PrometheusEndpoint}api/v1/remote_write
-                    auth:
-                      authenticator: sigv4auth
-                    # Keep metric names exactly as emitted (claude_code_cost_usage,
-                    # not ..._USD_total) so the provisioned dashboard queries match.
-                    add_metric_suffixes: false
-                    resource_to_telemetry_conversion:
-                      enabled: true
-                  awscloudwatchlogs:
-                    region: ${AWS::Region}
-                    log_group_name: ${ActivityLogGroup}
-                    log_stream_name: activity
-                service:
-                  extensions: [sigv4auth]
-                  pipelines:
-                    metrics:
-                      receivers: [otlp]
-                      processors: [attributes/cardinality, batch]
-                      exporters: [prometheusremotewrite]
-                    logs:
-                      receivers: [otlp]
-                      processors: [batch]
-                      exporters: [awscloudwatchlogs]
-
-  CollectorService:
-    Type: AWS::ECS::Service
-    Properties:
-      ServiceName: !Sub '${NamePrefix}-otel'
-      Cluster:
-        Fn::ImportValue: !Sub '${NamePrefix}-cluster-arn'
-      # Required for the default (rolling) deployment controller; !Ref returns
-      # the task-def ARN incl. revision so updates roll the service.
-      TaskDefinition: !Ref CollectorTaskDefinition
-      LaunchType: FARGATE
-      DesiredCount: !Ref CollectorDesiredCount
-      NetworkConfiguration:
-        AwsvpcConfiguration:
-          AssignPublicIp: DISABLED
-          Subnets: !Ref PrivateSubnetIds
-          SecurityGroups:
-            - !Ref CollectorSecurityGroup
-      ServiceRegistries:
-        - RegistryArn: !GetAtt CollectorDiscovery.Arn
 
   # ------------------------------------------------------- activity logs
   # AI activity audit stream (bash commands, tool inputs, file paths per
@@ -945,11 +699,14 @@ Resources:
       GroupDescription: !Sub '${NamePrefix} - aps-workspaces endpoint'
       VpcId: !Ref VpcId
       SecurityGroupIngress:
+        # remote_write now comes from the telemetry sidecar, which runs in the
+        # gateway task under the gateway task SG (imported from 02).
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          SourceSecurityGroupId: !Ref CollectorSecurityGroup
-          Description: remote_write from the collector
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub '${NamePrefix}-svc-sg'
+          Description: remote_write from the gateway task (telemetry sidecar)
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
@@ -960,6 +717,24 @@ Resources:
         - IpProtocol: '-1'
           CidrIp: 127.0.0.1/32
           Description: no egress
+
+  # The gateway task's egress is scoped in 02; this attaches its path to the
+  # aps-workspaces endpoint once this stack (and the endpoint) exist. Same
+  # cross-stack pattern as the former OTLP egress rule (modify an imported 02
+  # SG), so it lands before the sidecar starts remote-writing. Only when the
+  # endpoint exists - without it, remote_write takes the 0.0.0.0/0 :443 path
+  # the gateway SG already allows.
+  GatewayToAmpEndpointEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Condition: WantAmpEndpoint
+    Properties:
+      GroupId:
+        Fn::ImportValue: !Sub '${NamePrefix}-svc-sg'
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !Ref AmpEndpointSecurityGroup
+      Description: remote_write to the aps-workspaces endpoint (telemetry sidecar)
 
   AmpEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -990,12 +765,17 @@ Outputs:
   WorkspaceId:
     Value: !GetAtt Workspace.WorkspaceId
   WorkspacePrometheusEndpoint:
-    Value: !GetAtt Workspace.PrometheusEndpoint
-  OtlpForwardUrl:
     Description: >-
-      Set the gateway stack's ObservabilityOtlpUrl parameter to this value
-      (then redeploy 02 - ECS rolls the service automatically).
-    Value: !Sub 'http://otel-collector.${NamePrefix}.internal:4318'
+      Set the gateway stack's ObservabilityAmpRemoteWriteEndpoint to this value
+      (deploy-observability.sh persists it as OBSERVABILITY_AMP_ENDPOINT), then
+      re-run deploy-gateway.sh - the telemetry sidecar remote-writes here.
+    Value: !GetAtt Workspace.PrometheusEndpoint
+  WorkspaceArn:
+    Description: >-
+      Set the gateway stack's ObservabilityAmpWorkspaceArn to this value
+      (persisted as OBSERVABILITY_AMP_WORKSPACE_ARN) - scopes the task role's
+      aps:RemoteWrite.
+    Value: !GetAtt Workspace.Arn
   GrafanaUrl:
     Description: Dashboard URL - sign in with Okta (role from Okta group membership).
     Value: !Sub 'https://${GatewayFqdn}/grafana'
@@ -1013,8 +793,10 @@ Outputs:
     Value: !Ref GrafanaAdminSecret
   ActivityLogGroupName:
     Description: >-
-      Short-window CloudWatch group for the activity stream (idle until the
-      gateway stack sets ForwardActivityLogs=true).
+      Short-window CloudWatch group for the activity stream. Set the gateway
+      stack's ObservabilityActivityLogGroup to this NAME (persisted as
+      OBSERVABILITY_ACTIVITY_LOG_GROUP); the telemetry sidecar writes here and
+      the chain stays idle until the gateway sets ForwardActivityLogs=true.
     Value: !Ref ActivityLogGroup
   ActivityArchiveBucketName:
     Description: Durable S3 archive of the activity stream (expires per ActivityArchiveRetentionDays).

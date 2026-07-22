@@ -13,34 +13,19 @@ if [ -z "${IMAGE_URI:-}" ]; then
 fi
 log "Container image: ${IMAGE_URI}"
 
-# Telemetry forwarding needs the observability stack's collector to exist
-# first - otherwise the gateway can't resolve the forward target, crash-loops,
-# and rolls back this whole deploy. Guard against a stale/premature
-# OBSERVABILITY_OTLP_URL in deploy.env (e.g. a fresh account reusing config).
-# Only a definitive "stack missing / never came up" clears the URL; any other
-# describe-stacks failure (permissions, throttling, expired credentials) is
-# fatal, so a transient API error can't silently strip telemetry forwarding
-# from the whole fleet.
-if [ -n "${OBSERVABILITY_OTLP_URL:-}" ]; then
-  OBS_STACK_NAME="${OBS_STACK_NAME:-${NAME_PREFIX}-obs}"
-  OBS_STATUS="$(aws cloudformation describe-stacks --region "$AWS_REGION" \
-    --stack-name "$OBS_STACK_NAME" \
-    --query 'Stacks[0].StackStatus' --output text 2>&1)" || true
-  case "$OBS_STATUS" in
-    CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE|UPDATE_IN_PROGRESS|UPDATE_COMPLETE_CLEANUP_IN_PROGRESS)
-      ;;  # collector stack is (or stays) functional - keep forwarding
-    *"does not exist"*|ROLLBACK_COMPLETE|ROLLBACK_IN_PROGRESS|CREATE_FAILED|DELETE_COMPLETE|DELETE_IN_PROGRESS)
-      log "WARN: OBSERVABILITY_OTLP_URL is set but stack ${OBS_STACK_NAME} is missing or never came up (${OBS_STATUS})."
-      log "      Deploying WITHOUT telemetry forwarding; run deploy-observability.sh, then re-run this script."
-      OBSERVABILITY_OTLP_URL=""
-      ;;
-    *)
-      echo "FATAL: cannot confirm observability stack ${OBS_STACK_NAME} (${OBS_STATUS})." >&2
-      echo "       Fix credentials/permissions, or unset OBSERVABILITY_OTLP_URL in deploy.env" >&2
-      echo "       to deliberately deploy without telemetry forwarding." >&2
-      exit 1
-      ;;
-  esac
+# Telemetry now runs as a loopback ADOT collector SIDECAR inside the gateway
+# task (no separate collector service, no cross-stack forward target to
+# resolve). It turns on when OBSERVABILITY_AMP_ENDPOINT is set - populated by
+# deploy-observability.sh from stack 03's outputs. The sidecar is
+# non-essential and forwards over localhost, so a missing/incomplete
+# observability stack degrades telemetry softly (metrics/logs just don't land)
+# rather than crash-looping the gateway, so no pre-flight stack check is
+# needed. COLLECTOR_IMAGE (from mirror-collector.sh) is the sidecar's image.
+if [ -n "${OBSERVABILITY_AMP_ENDPOINT:-}" ] && [ -z "${COLLECTOR_IMAGE:-}" ]; then
+  echo "FATAL: OBSERVABILITY_AMP_ENDPOINT is set (telemetry on) but COLLECTOR_IMAGE is empty." >&2
+  echo "       Run scripts/mirror-collector.sh first, or unset the OBSERVABILITY_AMP_* vars" >&2
+  echo "       in deploy.env to deploy without the telemetry sidecar." >&2
+  exit 1
 fi
 
 ARTIFACTS_BUCKET="$(ensure_artifacts_bucket)"
@@ -100,7 +85,10 @@ aws cloudformation deploy \
       "CertExpiryAlarmDays=${CERT_EXPIRY_ALARM_DAYS:-30}" \
       "AlarmSnsTopicArn=${ALARM_SNS_TOPIC_ARN:-}" \
       "AlbLogRetentionDays=${ALB_LOG_RETENTION_DAYS:-90}" \
-      "ObservabilityOtlpUrl=${OBSERVABILITY_OTLP_URL:-}" \
+      "ObservabilityAmpRemoteWriteEndpoint=${OBSERVABILITY_AMP_ENDPOINT:-}" \
+      "ObservabilityAmpWorkspaceArn=${OBSERVABILITY_AMP_WORKSPACE_ARN:-}" \
+      "ObservabilityActivityLogGroup=${OBSERVABILITY_ACTIVITY_LOG_GROUP:-}" \
+      "CollectorImage=${COLLECTOR_IMAGE:-}" \
       "ForwardActivityLogs=${FORWARD_ACTIVITY_LOGS:-false}" \
       "OpusModelId=${OPUS_MODEL_ID:-claude-opus-4-8}" \
       "OpusBedrockModelId=${OPUS_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-opus-4-8}" \

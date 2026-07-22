@@ -27,4 +27,4 @@ DIGEST="$(aws ecr describe-images --region "$AWS_REGION" \
   --repository-name "$REPO_NAME" --image-ids imageTag="$ADOT_VERSION" \
   --query 'imageDetails[0].imageDigest' --output text)"
 set_env_var COLLECTOR_IMAGE "${REGISTRY}/${REPO_NAME}@${DIGEST}"
-log "Done. COLLECTOR_IMAGE persisted to deploy.env (deploy-observability.sh uses it)."
+log "Done. COLLECTOR_IMAGE persisted to deploy.env (deploy-gateway.sh uses it - the collector runs as a loopback sidecar in the gateway task)."

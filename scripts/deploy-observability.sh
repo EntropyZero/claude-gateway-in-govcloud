@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Deploy cloudformation/03-observability.yaml (AMP + OTLP collector + Grafana).
-# Prerequisites: gateway stack deployed (same NAME_PREFIX), Grafana image
-# pushed (scripts/build-and-push-grafana.sh), and the ADOT collector image
-# mirrored into your ECR (COLLECTOR_IMAGE - pin by digest; there is no
-# public default on purpose).
-# After deploy: set OBSERVABILITY_OTLP_URL in deploy.env to the
-# OtlpForwardUrl output and re-run deploy-gateway.sh to start forwarding.
+# Deploy cloudformation/03-observability.yaml (AMP + activity archive + Grafana).
+# Prerequisites: gateway stack deployed (same NAME_PREFIX) and the Grafana
+# image pushed (scripts/build-and-push-grafana.sh). The OTLP collector is NO
+# LONGER deployed here - it runs as a loopback sidecar in the gateway task, so
+# the ADOT image (COLLECTOR_IMAGE, from mirror-collector.sh) is consumed by the
+# GATEWAY stack, not this one.
+# After deploy: this script persists the AMP endpoint / workspace ARN /
+# activity-log group into deploy.env; re-run deploy-gateway.sh to attach the
+# telemetry sidecar and start forwarding.
 source "$(dirname "$0")/common.sh"
 
-require_vars VPC_ID PRIVATE_SUBNET_IDS GATEWAY_FQDN GRAFANA_IMAGE COLLECTOR_IMAGE \
+require_vars VPC_ID PRIVATE_SUBNET_IDS GATEWAY_FQDN GRAFANA_IMAGE \
              OKTA_ISSUER GRAFANA_OKTA_CLIENT_ID GRAFANA_ADMIN_GROUP
 
 OBS_STACK_NAME="${OBS_STACK_NAME:-${NAME_PREFIX}-obs}"
@@ -29,8 +31,6 @@ aws cloudformation deploy \
       "PrivateSubnetIds=${PRIVATE_SUBNET_IDS}" \
       "GatewayFqdn=${GATEWAY_FQDN}" \
       "GrafanaImage=${GRAFANA_IMAGE}" \
-      "CollectorImage=${COLLECTOR_IMAGE}" \
-      "CollectorDesiredCount=${COLLECTOR_DESIRED_COUNT:-2}" \
       "OktaIssuer=${OKTA_ISSUER}" \
       "OktaAuthServerType=${OKTA_AUTH_SERVER_TYPE:-org}" \
       "GrafanaOktaClientId=${GRAFANA_OKTA_CLIENT_ID}" \
@@ -51,16 +51,27 @@ aws cloudformation describe-stacks --region "$AWS_REGION" \
   --stack-name "$OBS_STACK_NAME" \
   --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
 
-OTLP_URL="$(stack_output "$OBS_STACK_NAME" OtlpForwardUrl)"
-[ -n "$OTLP_URL" ] && [ "$OTLP_URL" != "None" ] && set_env_var OBSERVABILITY_OTLP_URL "$OTLP_URL"
+# Persist the sidecar's destinations back into deploy.env so deploy-gateway.sh
+# picks them up with no copy-paste. The gateway stack's telemetry sidecar
+# remote-writes to the AMP workspace and writes the activity stream to the log
+# group; its task role is scoped to the workspace ARN and log group.
+AMP_ENDPOINT="$(stack_output "$OBS_STACK_NAME" WorkspacePrometheusEndpoint)"
+AMP_ARN="$(stack_output "$OBS_STACK_NAME" WorkspaceArn)"
+ACTIVITY_LOG_GROUP="$(stack_output "$OBS_STACK_NAME" ActivityLogGroupName)"
+[ -n "$AMP_ENDPOINT" ] && [ "$AMP_ENDPOINT" != "None" ] && set_env_var OBSERVABILITY_AMP_ENDPOINT "$AMP_ENDPOINT"
+[ -n "$AMP_ARN" ] && [ "$AMP_ARN" != "None" ] && set_env_var OBSERVABILITY_AMP_WORKSPACE_ARN "$AMP_ARN"
+[ -n "$ACTIVITY_LOG_GROUP" ] && [ "$ACTIVITY_LOG_GROUP" != "None" ] && set_env_var OBSERVABILITY_ACTIVITY_LOG_GROUP "$ACTIVITY_LOG_GROUP"
 
 cat <<EOF
 
 Next steps:
-  1. OBSERVABILITY_OTLP_URL is now set in deploy.env. Re-run
-     scripts/deploy-gateway.sh so the gateway starts forwarding telemetry
-     (ECS rolls the service; the gateway then pushes the OTLP env vars to
-     every connected client).
+  1. The telemetry sidecar's destinations (OBSERVABILITY_AMP_ENDPOINT,
+     OBSERVABILITY_AMP_WORKSPACE_ARN, OBSERVABILITY_ACTIVITY_LOG_GROUP) are now
+     set in deploy.env. Re-run scripts/deploy-gateway.sh so the gateway task
+     picks up the co-resident ADOT collector sidecar and starts forwarding
+     telemetry (ECS rolls the service; the gateway then pushes the OTLP enable
+     env vars to every connected client). COLLECTOR_IMAGE must be set
+     (scripts/mirror-collector.sh) - the sidecar runs that image.
   2. Okta app: register the redirect URI from the GrafanaOidcRedirectUri
      output, then set the client secret: scripts/set-grafana-oidc-secret.sh
   3. Grafana: https://${GATEWAY_FQDN}/grafana - sign in with Okta; the role

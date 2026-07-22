@@ -27,7 +27,7 @@ sections). Repo: `github.com/EntropyZero/claude-gateway-in-govcloud`, branch
 - `client/` — offline release mirror + non-admin Windows installer
   (`-CostCenter`/`-Team` OTEL attributes, full update lockdown).
 - `scripts/` — deploy.env-driven automation; **outputs auto-persist back into
-  `deploy.env`** (cert ARN, image URIs, OTLP URL) via `set_env_var` in
+  `deploy.env`** (cert ARN, image URIs, the AMP telemetry params) via `set_env_var` in
   `common.sh`, so there are no manual copy-paste steps between runs.
 
 **Status as of 2026-07-15: batches A and D are APPLIED, batch B is
@@ -114,6 +114,58 @@ least-privilege application user whose secret is rotated by the stack's
 own Lambda, with the service roll built into the rotation itself; the
 master secret became break-glass and its rotation affects no running
 task. See the C-batch header below for the item-by-item mapping.
+
+**OTLP collector → localhost sidecar (2026-07-22, closes C2 by hop
+elimination).** The first live telemetry attempt disproved the documented C2
+posture: the Claude apps gateway **refuses** a non-HTTPS `telemetry.forward_to`
+URL unless the host is localhost, so the "plaintext-but-SG-scoped"
+gateway→collector OTLP hop the review had accepted could never boot. Decision
+(user-approved 2026-07-22): run the ADOT collector as a **localhost sidecar**
+inside the gateway task instead of a standalone service in 03. The network hop
+is eliminated (loopback within one Fargate task network namespace), which
+resolves SC-8 by **absence of transmission** — a stronger posture than TLS,
+with no new PKI, cert, or CA (SC-17/SC-12 surface: none). Alternatives
+considered and rejected: an enterprise-CA-signed collector leaf (org didn't
+want the CA dependency); an ACM public cert + internal LB (ACM has "no
+differences" in GovCloud, but it adds an LB + public-domain dependency); a
+self-managed application CA (technically sound — OpenSSL/BoringSSL enforce name
+constraints and the collector takes inline `cert_pem`/`key_pem` — but rejected
+on ATO grounds: SC-17 shadow-PKI finding risk + SC-12 key-custody burden).
+Mechanics:
+- **02** gains a conditional `otel-collector` container (`Essential: false`
+  plus a container `RestartPolicy` so a crash-looping collector self-heals
+  without ever taking the gateway down; receivers bound to `127.0.0.1:4317` /
+  `127.0.0.1:4318`; **no** port mappings; forward URL is the literal
+  `http://localhost:4318`, which is exempt from the gateway's HTTPS
+  requirement). The gateway **task role** becomes the telemetry writer —
+  `aps:RemoteWrite` on the workspace + the activity log-group `logs:` actions
+  (least privilege; no KMS statements, log-group encryption is service-side).
+  No new SG ingress for 4317/4318 anywhere (loopback only).
+- **03** deletes its Cloud Map `Namespace` + discovery service, the collector
+  SG and the gateway↔collector SG-rule pair, and the collector
+  execution/task roles, task definition, and service. It now **outputs** the
+  AMP remote-write endpoint, the workspace ARN, and the activity-log-group
+  name, and rewires the `aps-workspaces` endpoint SG to admit the **imported
+  gateway task SG** (plus a matching egress rule on that SG). Grafana's own
+  rules to that endpoint are unchanged. 03 still never exports into 02 — the
+  AMP params flow via `deploy.env`, so the two-pass `02 → 03 → re-run 02`
+  order is unchanged.
+- **Env/scripts:** `OBSERVABILITY_OTLP_URL` and the `OtlpForwardUrl` output
+  are gone, replaced by `OBSERVABILITY_AMP_ENDPOINT`,
+  `OBSERVABILITY_AMP_WORKSPACE_ARN`, and `OBSERVABILITY_ACTIVITY_LOG_GROUP`
+  (auto-persisted by `deploy-observability.sh`; passed to 02 alongside the
+  existing `COLLECTOR_IMAGE`).
+
+This **supersedes** findings D6 (collector single-task telemetry blackout — the
+sidecar shares the gateway's lifecycle and `RestartPolicy` self-heals, so
+`CollectorDesiredCount` is gone) and D8 (fresh-deploy circular order — there is
+no forward URL to pre-set), and moots the collector-specific parts of A2/A5.
+**Needs live verification:** (a) sidecar end-to-end — metrics landing in AMP
+through the loopback receiver; (b) container `RestartPolicy`
+(`ContainerRestartPolicy`) support in GovCloud `us-gov-west-1` + CloudFormation
+(fallback: `Essential: true` with documented coupled availability); (c) the
+pinned ADOT image still honors `AOT_CONFIG_CONTENT` and accepts the
+`127.0.0.1` receiver bind.
 
 **Log-retention hardening (2026-07-18, operator decision).** Prompted by the
 test-run observation that some CloudWatch logs outlive teardown while others
@@ -268,7 +320,10 @@ each is fixed and committed:
   --service-names com.amazonaws.us-gov-west-1.logs
   --query 'ServiceDetails[].VpcEndpointPolicySupported'` — if false, drop
   that endpoint's PolicyDocument (IAM-side scoping remains).
-- C2 OTLP-hop TLS if the SSP requires it; C9 Object Lock stays deferred.
+- **C2 is now closed by the localhost-sidecar change** (2026-07-22 fix-log
+  entry above); only its end-to-end verification remains — confirm metrics
+  reach AMP through the sidecar's loopback receiver, and that the container
+  `RestartPolicy` deploys in `us-gov-west-1`. C9 Object Lock stays deferred.
 
 **Also-durable context** lives in project memory
 (`claude-gateway-project-context.md`): client template (never hardcode
@@ -448,7 +503,11 @@ the gateway segment.
 > - C2 → ALB→gateway (`listen.tls`, per-task self-signed cert from the
 >   entrypoint) and ALB→Grafana (TLS entrypoint in the image) encrypted;
 >   both target groups HTTPS (Name dropped - protocol changes replace TGs).
->   Gateway→collector OTLP hop documented (system-trust-store constraint).
+>   Gateway→collector OTLP hop **eliminated 2026-07-22**: the collector is now
+>   a **localhost sidecar** in the gateway task (loopback, no network hop)
+>   after the live run showed the gateway rejects a non-HTTPS forward URL off
+>   localhost — SC-8 by absence of transmission. See the finding below and the
+>   fix-log entry at the top.
 > - C3 → `sslmode=verify-full` + GovCloud RDS trust bundle fetched by the
 >   build script and baked into the image.
 > - C4 → pgaudit (`ddl,role,write` default, parameterized) + log_statement
@@ -494,12 +553,34 @@ generally require CMKs so key policies, rotation, and CloudTrail key-usage
 events are customer-controlled. The README already flags this for the activity
 archive but the code implements it nowhere.
 
-**C2. Plaintext in transit on internal hops (SC-8).** ALB→task `:8080`,
-gateway→collector OTLP `:4318`, and Grafana `:3000` are unencrypted HTTP.
-Telemetry carries `user.id`/`user.email`/`user.groups` and, when the activity
-stream is enabled, full command/tool-input content. Recommend TLS to the target
-groups (internal-CA cert on the container, ALB re-encrypt) and TLS/mTLS on the
-OTLP receiver.
+**C2. Plaintext in transit on internal hops (SC-8).** *As raised:* ALB→task
+`:8080`, gateway→collector OTLP `:4318`, and Grafana `:3000` are unencrypted
+HTTP. Telemetry carries `user.id`/`user.email`/`user.groups` and, when the
+activity stream is enabled, full command/tool-input content. Recommend TLS to
+the target groups (internal-CA cert on the container, ALB re-encrypt) and
+TLS/mTLS on the OTLP receiver.
+
+**Resolution.**
+- **ALB→task and ALB→Grafana:** encrypted end-to-end — a per-task ephemeral
+  cert generated in the entrypoint, HTTPS target groups with
+  `HealthCheckProtocol: HTTPS`, ALB re-encrypt. Implemented 2026-07-15.
+- **Gateway→collector OTLP: the accepted "plaintext-but-SG-scoped" risk is
+  WITHDRAWN as unimplementable, and the hop is eliminated (2026-07-22).** The
+  live run showed the gateway **refuses** any non-HTTPS `telemetry.forward_to`
+  URL unless the host is localhost, so the SG-scoped plaintext hop could not
+  have booted — the compensating-control argument the review accepted was
+  moot. Rather than stand up a collector TLS listener (which would need a cert
+  and a CA the gateway trusts — an SC-17/SC-12 burden the org declined; see the
+  fix-log entry for the alternatives weighed), the ADOT collector was moved
+  **into the gateway task as a localhost sidecar**. The gateway forwards to
+  `http://localhost:4318` over the loopback interface inside a single Fargate
+  network namespace; there is no on-the-wire telemetry leg to encrypt, so SC-8
+  is satisfied by **absence of network transmission** — a stronger posture than
+  TLS would have been, with no new key material. As a side effect the gateway
+  **task role** is now the telemetry writer to AMP and the activity log group
+  (still least-privilege: scoped to this workspace and this log group only).
+  **Needs live verification:** metrics landing in AMP through the sidecar's
+  loopback receiver.
 
 **C3. RDS `sslmode=require`, not `verify-full`.** `docker/entrypoint.sh`
 encrypts but does not validate the server certificate — no protection against

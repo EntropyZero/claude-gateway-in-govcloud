@@ -40,13 +40,17 @@
 <text x="915.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Grafana  :3000 TLS</text>
 <text x="915.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >per-task self-signed cert</text>
 <text x="915.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Okta SSO only, no local login</text>
-<rect x="470" y="292" width="250" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
-<text x="595.0" y="313" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway — ECS Fargate ×2</text>
-<text x="595.0" y="329" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >claude gateway (pinned binary)</text>
-<text x="595.0" y="343" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >TLS listener :8080, per-task cert</text>
-<rect x="790" y="292" width="250" height="62" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
-<text x="915.0" y="313" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >ADOT collector ×2</text>
-<text x="915.0" y="329" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >OTLP :4317 / :4318</text>
+<rect x="470" y="284" width="570" height="104" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="755.0" y="305" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway task — ECS Fargate ×2</text>
+<rect x="490" y="314" width="250" height="54" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="615.0" y="335" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#0F172A" font-weight="bold" text-anchor="middle" >claude gateway</text>
+<text x="615.0" y="351" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >pinned binary · TLS listener :8080</text>
+<rect x="770" y="314" width="250" height="54" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="895.0" y="335" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#0F172A" font-weight="bold" text-anchor="middle" >ADOT collector</text>
+<text x="895.0" y="351" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >loopback OTLP sidecar</text>
+<path d="M740 341 L770 341" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="707.1" y="370" width="95.8" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="755" y="383.5" font-family="Helvetica, Arial, sans-serif" font-size="9.5" fill="#047857" font-weight="normal" text-anchor="middle" >loopback :4318</text>
 <path d="M470 443 a 125.0 9 0 0 1 250 0 v 66 a 125.0 9 0 0 1 -250 0 Z" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <path d="M470 443 a 125.0 9 0 0 0 250 0" fill="none" stroke="#047857" stroke-width="1.4"/>
 <text x="595.0" y="465" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >RDS PostgreSQL 16</text>
@@ -115,29 +119,24 @@
 <path d="M720 188 L790 188" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="731.25" y="166" width="47.5" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="755" y="179.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >:3000</text>
-<path d="M595 226 L595 292" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M595 226 L595 284" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="536.6" y="252" width="116.8" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="595" y="265.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >:8080 re-encrypt</text>
-<path d="M595 368 L595 434" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M595 388 L595 434" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="533.45" y="394" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="595" y="407.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >:5432 verify-full</text>
-<path d="M720 330 L790 330" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="733.25" y="308" width="47.5" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="757" y="321.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >:4318</text>
-<rect x="682.85" y="368" width="148.29999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#B91C1C"/>
-<text x="757" y="381.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >plaintext · SG-scoped</text>
 <path d="M1040 178 L1148 178" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="1051.35" y="156" width="85.3" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="1094" y="169.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 query</text>
-<path d="M720 300 L756 300 L756 258 L1148 258" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="838.45" y="248" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="900" y="261.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >inference — SigV4</text>
-<path d="M1010 354 L1010 378 L1120 378 L1120 206 L1148 206" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="993.3" y="368" width="129.39999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="1058" y="381.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 remote_write</text>
-<path d="M915 354 L915 396 L1148 396" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="901.4" y="388" width="167.2" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="985" y="401.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >activity stream (opt-in)</text>
+<path d="M1040 330 L1112 330 L1112 262 L1148 262" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="1031.45" y="278" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1093" y="291.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >inference — SigV4</text>
+<path d="M1040 305 L1088 305 L1088 200 L1148 200" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="1021.3" y="214" width="129.39999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1086" y="227.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 remote_write</text>
+<path d="M1040 360 L1128 360 L1128 410 L1148 410" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="1026.45" y="378" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1088" y="391.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >activity (opt-in)</text>
 <path d="M790 470 L720 470" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <path d="M915 496 L915 520 L1136 520 L1136 338 L1148 338" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="962.45" y="510" width="123.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>

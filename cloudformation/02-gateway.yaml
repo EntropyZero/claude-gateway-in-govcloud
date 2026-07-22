@@ -8,6 +8,17 @@ Description: >-
   the ALB's default DNS name. Deploy 01-database.yaml first with the same
   NamePrefix.
 
+# W1030 false positive: the telemetry task-role policy is gated on
+# HaveTelemetry, but cfn-lint evaluates the true branch with
+# ObservabilityAmpWorkspaceArn's empty default resolved into an IAM Resource
+# ARN field - it can't know the operator always sets the ARN when telemetry is
+# on. Every real ARN in this template is !Sub-constructed (always well-formed),
+# so scoping the ignore here masks only that one false positive.
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks: [W1030]
+
 Parameters:
   NamePrefix:
     Type: String
@@ -71,6 +82,11 @@ Parameters:
     Type: String
     Default: '1024'
     AllowedValues: ['512', '1024', '2048', '4096']
+    Description: >-
+      Task-level CPU units. When telemetry is enabled this value covers BOTH
+      the gateway and the co-resident ADOT collector sidecar - the collector
+      needs roughly 128-256 CPU / 512MB of headroom, which the default
+      1024/2048 pairing comfortably absorbs.
 
   TaskMemory:
     Type: String
@@ -271,16 +287,41 @@ Parameters:
       derives it from HTTPS_PROXY_URL automatically). Leave empty when no
       proxy, or when the proxy listens on 443.
 
-  ObservabilityOtlpUrl:
+  # Telemetry runs as a co-resident ADOT collector SIDECAR in the gateway
+  # task (loopback 127.0.0.1:4318, never on the network - closes SC-8 by
+  # eliminating the hop; see the otel-collector container below). These four
+  # come from 03-observability.yaml's outputs via deploy.env; empty
+  # ObservabilityAmpRemoteWriteEndpoint disables telemetry entirely.
+  ObservabilityAmpRemoteWriteEndpoint:
     Type: String
     Default: ''
     Description: >-
-      Optional OTLP endpoint the gateway forwards telemetry to (metrics from
-      the gateway plus relayed client metrics, stamped with user.id /
-      user.email / user.groups from the Okta JWT). Deploy
-      03-observability.yaml first, then set this to its OtlpForwardUrl
-      output (e.g. http://otel-collector.claude-gw.internal:4318). Empty
-      disables telemetry forwarding.
+      The AMP workspace Prometheus endpoint URL (03's WorkspacePrometheusEndpoint
+      output; ends with a trailing '/'). The sidecar's exporter appends
+      'api/v1/remote_write'. Empty disables the telemetry sidecar entirely.
+
+  ObservabilityAmpWorkspaceArn:
+    Type: String
+    Default: ''
+    Description: >-
+      The AMP workspace ARN (03's WorkspaceArn output) - scopes the task
+      role's aps:RemoteWrite. Required when the sidecar is enabled.
+
+  ObservabilityActivityLogGroup:
+    Type: String
+    Default: ''
+    Description: >-
+      NAME of 03's activity-log CloudWatch group (ActivityLogGroupName output).
+      The sidecar's logs exporter writes the activity stream here, and the
+      task role is scoped to it. Required when the sidecar is enabled.
+
+  CollectorImage:
+    Type: String
+    Default: ''
+    Description: >-
+      Mirrored ADOT collector image URI (the SAME image mirror-collector.sh
+      produces and persists as COLLECTOR_IMAGE) - runs as the telemetry
+      sidecar. Pin by digest. Required when the sidecar is enabled.
 
   ForwardActivityLogs:
     Type: String
@@ -291,7 +332,8 @@ Parameters:
       file paths per user - prompt content stays redacted). Highly
       sensitive; enable only where an AI-activity audit trail is required.
       Lands in a short CloudWatch window + S3 archive via the
-      observability stack. No effect unless ObservabilityOtlpUrl is set.
+      observability stack. No effect unless the telemetry sidecar is enabled
+      (ObservabilityAmpRemoteWriteEndpoint set).
 
   DbAdminLambdaImage:
     Type: String
@@ -386,7 +428,7 @@ Conditions:
   HaveAlarmTopic: !Not [!Equals [!Ref AlarmSnsTopicArn, '']]
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
   HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
-  HaveTelemetry: !Not [!Equals [!Ref ObservabilityOtlpUrl, '']]
+  HaveTelemetry: !Not [!Equals [!Ref ObservabilityAmpRemoteWriteEndpoint, '']]
 
 # Regional accounts the LEGACY ELB access-log writer authenticates as
 # (regions launched before Aug 2022, incl. GovCloud). See AlbLogsBucketPolicy.
@@ -443,8 +485,8 @@ Resources:
   # allow-all; 127.0.0.1/32 is the CFN idiom for "nothing beyond the
   # explicit standalone rules". The ALB->tasks rule is standalone to break
   # the reference cycle with ServiceSecurityGroup's ingress; the tasks'
-  # 5432 comes from the attached db-client SG (01-database.yaml), and
-  # OTLP 4317-4318 to the collector is attached by 03-observability.yaml.
+  # 5432 comes from the attached db-client SG (01-database.yaml). Telemetry
+  # to the collector needs no SG rule - it is a loopback sidecar in the task.
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -737,6 +779,30 @@ Resources:
                   - !Sub
                     - 'arn:${AWS::Partition}:bedrock:*::foundation-model/${Model}'
                     - Model: !Join ['', !Split ['us-gov.', !Ref SonnetBedrockModelId]]
+        # Telemetry sidecar credentials (only when enabled): the co-resident
+        # collector runs under THIS task role and writes to AMP + the activity
+        # log group. Ported from 03's former CollectorTaskRole. No KMS
+        # statement needed - the log group's CMK encryption is service-side.
+        - !If
+          - HaveTelemetry
+          - PolicyName: telemetry-sidecar
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Sid: AmpRemoteWrite
+                  Effect: Allow
+                  Action: aps:RemoteWrite
+                  Resource: !Ref ObservabilityAmpWorkspaceArn
+                - Sid: ActivityLogWrite
+                  Effect: Allow
+                  Action:
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                    - logs:DescribeLogStreams
+                  Resource:
+                    - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${ObservabilityActivityLogGroup}'
+                    - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${ObservabilityActivityLogGroup}:*'
+          - !Ref 'AWS::NoValue'
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -773,10 +839,9 @@ Resources:
               Value: info
             # Egress proxy for public endpoints (Okta). NO_PROXY keeps AWS
             # API calls on the VPC endpoints (Bedrock private DNS resolves
-            # under .amazonaws.com), the database direct, and the OTLP
-            # forward to the Cloud Map name (otel-collector.<prefix>.internal)
-            # off the proxy - the corporate proxy cannot resolve a private
-            # namespace, so without .internal all telemetry silently dies.
+            # under .amazonaws.com) and the database direct off the proxy.
+            # Telemetry no longer traverses the proxy either way - the
+            # collector is a loopback sidecar (localhost, already in NO_PROXY).
             - !If
               - HaveProxy
               - Name: HTTP_PROXY
@@ -790,10 +855,10 @@ Resources:
             - !If
               - HaveProxy
               - Name: NO_PROXY
-                # Scoped to this stack's Cloud Map namespace, not bare
-                # .internal - corporate *.internal zones may legitimately
-                # need the proxy.
-                Value: !Sub 'localhost,127.0.0.1,169.254.169.254,169.254.170.2,.amazonaws.com,.${NamePrefix}.internal'
+                # Loopback + link-local + AWS APIs. The former
+                # .${NamePrefix}.internal Cloud Map entry is gone with the
+                # collector service (03 no longer creates the namespace).
+                Value: 'localhost,127.0.0.1,169.254.169.254,169.254.170.2,.amazonaws.com'
               - !Ref 'AWS::NoValue'
             - Name: PGHOST
               Value:
@@ -874,6 +939,11 @@ Resources:
             # Telemetry forwarding, appended to gateway.yaml by the
             # entrypoint when set. The gateway also auto-pushes the OTLP
             # enable env vars to every connected client via /managed/settings.
+            # forward_to is the co-resident collector sidecar over loopback -
+            # the gateway REFUSES a non-HTTPS forward_to URL unless the host is
+            # localhost, so localhost:4318 is both the point of the sidecar and
+            # the only plaintext target it will accept (live-run lesson; see the
+            # otel-collector container below and SECURITY_REVIEW C2).
             - !If
               - HaveTelemetry
               - Name: GATEWAY_TELEMETRY_B64
@@ -882,7 +952,7 @@ Resources:
                     - |
                       telemetry:
                         forward_to:
-                          - url: ${ObservabilityOtlpUrl}
+                          - url: http://localhost:4318
                             metrics: true
                             logs: ${LogsFlag}
                     - LogsFlag: !Ref ForwardActivityLogs
@@ -897,6 +967,100 @@ Resources:
               ValueFrom: !Sub '${DbAppUserSecret}:username::'
             - Name: PGPASSWORD
               ValueFrom: !Sub '${DbAppUserSecret}:password::'
+        # Telemetry sidecar (only when enabled): the ADOT collector, co-resident
+        # in the gateway task. It listens on LOOPBACK ONLY (127.0.0.1:4317/4318)
+        # so nothing off-task can reach it; the gateway forwards to it over the
+        # shared task network namespace. This ELIMINATES the former plaintext
+        # gateway->collector network hop - SC-8 is satisfied by absence of
+        # transmission (see SECURITY_REVIEW C2). Ported from 03's former
+        # collector service; it runs under this task's TaskRole.
+        - !If
+          - HaveTelemetry
+          - Name: otel-collector
+            Image: !Ref CollectorImage
+            # RUNTIME crashes must not take the gateway down: Essential: false +
+            # RestartPolicy let a collector that started and then exited self-heal
+            # (restart in place, no task kill). NOTE the scope limit: this covers
+            # only post-start crashes. It does NOT cover a LAUNCH-time image-pull
+            # failure - ECS pulls every container image before starting any
+            # container in the task, so an un-mirrored/typo'd/unreachable
+            # CollectorImage digest fails the WHOLE task (CannotPullContainerError
+            # -> STOPPED) regardless of Essential:false, taking the gateway
+            # offline. Enabling telemetry therefore couples gateway availability
+            # to CollectorImage being pullable: verify the collector image is
+            # present in this account's ECR (mirror-collector.sh) BEFORE the
+            # telemetry-enabled 02 re-run. See SECURITY_REVIEW C2 / the O&M runbook.
+            Essential: false
+            RestartPolicy:
+              Enabled: true
+              RestartAttemptPeriod: 60
+            # NO PortMappings: same-task containers share the network namespace,
+            # and nothing should be reachable from off-task.
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref LogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: otel
+            Environment:
+              # ADOT reads its full config from this env var. session.id is
+              # dropped from metrics (unbounded cardinality); resource
+              # attributes (team, cost_center, ...) are converted to metric
+              # labels so Prometheus can group by them. The logs pipeline sits
+              # idle until the gateway stack sets ForwardActivityLogs=true.
+              #
+              # SC-8 note: the receivers bind 127.0.0.1 ONLY - telemetry never
+              # leaves the task network namespace on its way to the collector,
+              # so there is no inter-host hop to encrypt (this replaced the old
+              # SG-scoped plaintext hop, which the gateway refused to boot on).
+              # remote_write to AMP and the activity-log write are ordinary TLS
+              # AWS API calls made with the task role's credentials.
+              - Name: AOT_CONFIG_CONTENT
+                Value: !Sub |
+                  extensions:
+                    sigv4auth:
+                      region: ${AWS::Region}
+                      service: aps
+                  receivers:
+                    otlp:
+                      protocols:
+                        grpc:
+                          endpoint: 127.0.0.1:4317
+                        http:
+                          endpoint: 127.0.0.1:4318
+                  processors:
+                    attributes/cardinality:
+                      actions:
+                        - key: session.id
+                          action: delete
+                    batch:
+                      timeout: 30s
+                  exporters:
+                    prometheusremotewrite:
+                      endpoint: ${ObservabilityAmpRemoteWriteEndpoint}api/v1/remote_write
+                      auth:
+                        authenticator: sigv4auth
+                      # Keep metric names exactly as emitted (claude_code_cost_usage,
+                      # not ..._USD_total) so the provisioned dashboard queries match.
+                      add_metric_suffixes: false
+                      resource_to_telemetry_conversion:
+                        enabled: true
+                    awscloudwatchlogs:
+                      region: ${AWS::Region}
+                      log_group_name: ${ObservabilityActivityLogGroup}
+                      log_stream_name: activity
+                  service:
+                    extensions: [sigv4auth]
+                    pipelines:
+                      metrics:
+                        receivers: [otlp]
+                        processors: [attributes/cardinality, batch]
+                        exporters: [prometheusremotewrite]
+                      logs:
+                        receivers: [otlp]
+                        processors: [batch]
+                        exporters: [awscloudwatchlogs]
+          - !Ref 'AWS::NoValue'
 
   Service:
     Type: AWS::ECS::Service
@@ -1459,7 +1623,7 @@ Outputs:
     Value: !Ref AlbLogsBucket
   # Cross-stack exports for 03-observability.yaml
   ServiceSecurityGroupId:
-    Description: Gateway task SG - the collector allows OTLP ingress from it.
+    Description: Gateway task SG - 03 adds its egress to the aps-workspaces endpoint (remote_write from the telemetry sidecar).
     Value: !Ref ServiceSecurityGroup
     Export:
       Name: !Sub '${NamePrefix}-svc-sg'
@@ -1479,13 +1643,13 @@ Outputs:
     Export:
       Name: !Sub '${NamePrefix}-cluster-arn'
   # Only when the shared Fargate interface endpoints exist (their private DNS
-  # forces VPC-wide traffic onto them). 03 imports this to add collector /
-  # Grafana ingress so those tasks can reach ecr/logs/secretsmanager; without
-  # it their 443 is dropped and 03 never reaches steady state. The SG itself
-  # exists under WantAnyInterfaceEndpoint, a superset of WantSupportingEndpoints.
+  # forces VPC-wide traffic onto them). 03 imports this to add Grafana-task
+  # ingress so it can reach ecr/logs/secretsmanager; without it its 443 is
+  # dropped and 03 never reaches steady state. The SG itself exists under
+  # WantAnyInterfaceEndpoint, a superset of WantSupportingEndpoints.
   EndpointSecurityGroupId:
     Condition: WantSupportingEndpoints
-    Description: Shared interface-endpoint SG; 03 adds observability-task ingress to it.
+    Description: Shared interface-endpoint SG; 03 adds Grafana-task ingress to it.
     Value: !Ref EndpointSecurityGroup
     Export:
       Name: !Sub '${NamePrefix}-endpoint-sg'

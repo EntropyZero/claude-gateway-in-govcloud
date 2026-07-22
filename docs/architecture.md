@@ -76,8 +76,8 @@ Every hop, its port, protocol, and where the TLS session terminates.
 | 3 | ALB → Grafana | 3000 | TLS | Per-task ephemeral cert (same model) |
 | 4 | Gateway/Lambda → RDS | 5432 | TLS `verify-full` | RDS regional CA bundle baked into images; `rds.force_ssl=1` server-side |
 | 5 | Gateway → Bedrock | 443 | TLS + SigV4 | AWS cert; endpoint policy = 2 approved models only |
-| 6 | Gateway → collector | 4317–4318 | **Plaintext** | n/a — SG-to-SG scoped; see §10 |
-| 7–8 | Collector/Grafana → AMP | 443 | TLS + SigV4 | AWS cert; endpoint policy = this workspace only |
+| 6 | Gateway → collector (sidecar) | 4317–4318 | Loopback — no network hop | Same Fargate task; the collector is a localhost sidecar with its receiver bound to `127.0.0.1`, so nothing off-task can reach it (see §10) |
+| 7–8 | Gateway sidecar / Grafana → AMP | 443 | TLS + SigV4 | AWS cert; endpoint policy = this workspace only |
 | 9–10 | Gateway/Grafana → Okta | 443 | TLS | Public CA; only internet-bound flow |
 
 ---
@@ -172,14 +172,13 @@ allow-all); the table is the complete connectivity graph.
 | SG | Ingress | Egress |
 |---|---|---|
 | `alb` | 443 from `CLIENT_INGRESS_CIDR` (ZPA connector subnets) | 8080 → `svc`; 3000 → `grafana` (added by 03); 8080 → `portal` (added by 04); otherwise none |
-| `svc` (gateway tasks) | 8080 from `alb` | 443 → 0.0.0.0/0 (Okta + AWS via endpoints/TGW); proxy port when configured; 4317–4318 → `collector` (added by 03); 5432 via attached `db-client` |
+| `svc` (gateway tasks, incl. the ADOT collector sidecar) | 8080 from `alb` | 443 → 0.0.0.0/0 (Okta + AWS via endpoints/TGW; the sidecar's AMP/CloudWatch traffic rides this SG); proxy port when configured; 443 → `amp-endpoint` (added by 03, for the sidecar's AMP remote-write); 5432 via attached `db-client` |
 | `db-client` (attached to tasks + db-admin Lambdas) | — | 5432 → `db` only |
 | `db` | 5432 from `db-client` | none |
 | `db-admin` (Lambdas) | — | 443 → 0.0.0.0/0 (Secrets Manager, ECS APIs) |
-| `collector` | 4317–4318 from `svc` | 443 → 0.0.0.0/0 (AMP, CloudWatch) |
 | `grafana` | 3000 from `alb` | 443 → 0.0.0.0/0 (AMP, Okta); proxy port when configured |
 | `portal` (download portal, 04) | 8080 from `alb` | 443 → 0.0.0.0/0 (Okta, S3, CloudWatch); proxy port when configured |
-| `endpoints` / `amp-endpoint` | 443 from `svc` / `db-admin` (resp. `collector`+`grafana`+`portal`) | none |
+| `endpoints` / `amp-endpoint` | 443 from `svc` / `db-admin` (resp. `svc` (gateway sidecar) + `grafana` + `portal`) | none |
 
 DNS to the VPC resolver is exempt from SG evaluation (AWS platform
 behavior) and is why no port-53 rules appear.
@@ -207,7 +206,7 @@ empty database) fails fast.
 |---|---|---|
 | RDS storage + snapshots | SSE | CMK |
 | RDS master secret / all Secrets Manager secrets | SSE | CMK |
-| CloudWatch log groups (ECS gateway/collector/grafana/portal, activity, portal-audit, RDS postgresql/pgaudit, db-admin Lambdas) | SSE | CMK — every group is template-declared (never service-auto-created) precisely so the CMK and retention apply; all carry `DeletionPolicy: Retain` (operator decision 2026-07-18: no log group is destroyed by a teardown) |
+| CloudWatch log groups (ECS gateway [+ its collector sidecar, stream prefix `otel`], grafana/portal, activity, portal-audit, RDS postgresql/pgaudit, db-admin Lambdas) | SSE | CMK — every group is template-declared (never service-auto-created) precisely so the CMK and retention apply; all carry `DeletionPolicy: Retain` (operator decision 2026-07-18: no log group is destroyed by a teardown) |
 | Activity archive bucket | SSE-KMS + bucket key | CMK |
 | Portal artifacts bucket (04) | SSE-KMS + bucket key | CMK |
 | AMP workspace | SSE | CMK (`ENCRYPT_AMP_WITH_CMK`, creation-time) |
@@ -221,13 +220,18 @@ empty database) fails fast.
 Items a reviewer should see up front, with rationale (full history in
 `security-review-2026-07.md`):
 
-1. **Gateway→collector OTLP hop is plaintext** (§2 hop 6). SG-to-SG scoped
-   (only gateway tasks can connect); VPC traffic is not sniffable by other
-   tenants. Encrypting it requires an enterprise-CA-signed collector cert
-   in a custom collector image + the CA root in the gateway trust store
-   (the gateway validates telemetry TLS against the system store only).
-   Documented recipe on the collector task definition; implement if the
-   SSP rejects the VPC-boundary argument for SC-8.
+1. **Gateway→collector OTLP hop — formerly plaintext-but-SG-scoped, now
+   eliminated** (§2 hop 6). This was an accepted partial risk; the live run
+   withdrew it. The gateway refuses a non-HTTPS telemetry forward URL unless
+   the host is localhost, so the plaintext network hop could never boot, and
+   an internal-CA TLS listener would add a cert + CA the gateway must trust
+   (an SC-17/SC-12 burden the org declined). The collector was therefore moved
+   into the gateway task as a **localhost sidecar** (2026-07-22): the gateway
+   forwards over loopback (`http://localhost:4318`), so there is no network
+   telemetry leg and SC-8 is met by absence of transmission. The gateway task
+   role is now the telemetry writer to AMP + the activity log group (scoped to
+   this workspace and this log group). Pending live verification that metrics
+   reach AMP through the sidecar (`security-review-2026-07.md` C2 + fix log).
 2. **ALB access logs cannot use the CMK** — AWS platform limitation;
    SSE-S3 with public access blocked and lifecycle expiry.
 3. **S3 Object Lock deferred** by decision (2026-07-15); revisit if AU-9

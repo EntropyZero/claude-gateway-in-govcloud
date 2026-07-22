@@ -9,16 +9,19 @@
 <text x="168.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >gateway via /managed/settings</text>
 <rect x="48" y="260" width="240" height="62" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="168.0" y="281" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway's own metrics</text>
-<rect x="380" y="180" width="260" height="96" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
-<text x="510.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway</text>
-<text x="510.0" y="217" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >stamps user.id · user.email ·</text>
-<text x="510.0" y="231" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >user.groups from the Okta JWT</text>
-<text x="510.0" y="245" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >onto every export</text>
-<rect x="740" y="180" width="260" height="90" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
-<text x="870.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >ADOT collector</text>
-<text x="870.0" y="217" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >drops session.id (cardinality)</text>
-<text x="870.0" y="231" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >promotes team / cost_center</text>
-<text x="870.0" y="245" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >to metric labels</text>
+<rect x="380" y="168" width="620" height="112" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="690.0" y="189" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway task — telemetry sidecar co-resident</text>
+<rect x="396" y="200" width="272" height="64" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
+<text x="532.0" y="221" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway</text>
+<text x="532.0" y="237" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >stamps user.id · user.email ·</text>
+<text x="532.0" y="251" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >user.groups on every export</text>
+<rect x="692" y="200" width="290" height="64" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="837.0" y="221" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#0F172A" font-weight="bold" text-anchor="middle" >ADOT collector — sidecar</text>
+<text x="837.0" y="237" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >drops session.id · promotes</text>
+<text x="837.0" y="251" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >team / cost_center to labels</text>
+<path d="M668 232 L692 232" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="649.2" y="264" width="61.6" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="680" y="277.5" font-family="Helvetica, Arial, sans-serif" font-size="9.5" fill="#047857" font-weight="normal" text-anchor="middle" >loopback</text>
 <rect x="1080" y="96" width="380" height="250" rx="12" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.5"/>
 <text x="1096" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#6D28D9" font-weight="bold" text-anchor="start" letter-spacing="0.06em">USAGE &amp; COST METRICS</text>
 <text x="1096" y="139" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="start" >operational sensitivity</text>
@@ -45,17 +48,14 @@
 <text x="1341.0" y="493" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >SSE-KMS · 731 days</text>
 <text x="1341.0" y="507" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bucket retained</text>
 <text x="764" y="560" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#B91C1C" font-weight="normal" text-anchor="start" >Access: IAM only — no dashboard surface. Flag for SIEM subscription where policy requires.</text>
-<path d="M288 188 L380 210" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="255.85000000000002" y="166" width="148.29999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="330" y="179.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#2563EB" font-weight="normal" text-anchor="middle" >OTLP via gateway FQDN</text>
+<path d="M288 195 L380 220" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="255.85000000000002" y="170" width="148.29999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="330" y="183.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#2563EB" font-weight="normal" text-anchor="middle" >OTLP via gateway FQDN</text>
 <path d="M288 291 L334 291 L334 244 L380 244" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<path d="M640 214 L740 214" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="659.95" y="192" width="60.1" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="690" y="205.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#047857" font-weight="normal" text-anchor="middle" >metrics</text>
-<path d="M640 250 L700 250 L700 462 L764 462" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
-<rect x="578.6" y="356" width="242.79999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="700" y="369.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >activity records (only when enabled)</text>
-<path d="M1000 200 L1104 185" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M748 264 L748 484 L764 484" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="638.6" y="342" width="242.79999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="760" y="355.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="middle" >activity records (only when enabled)</text>
+<path d="M1000 210 L1104 185" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="987.3" y="162" width="129.39999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="1052" y="175.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 remote_write</text>
 <path d="M1270 218 L1270 244" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>

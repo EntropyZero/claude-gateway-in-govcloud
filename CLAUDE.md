@@ -43,16 +43,23 @@ The full security review (`docs/security-review-2026-07.md`) is implemented:
 batches A (deploy-breakers), B (ZPA/landing-zone prerequisites), C (FedRAMP
 hardening C1–C11), D (correctness), and C12 (least-privilege app DB user +
 self-rolling rotation). **Deferred by decision:** C9 (S3 Object Lock).
-**Partial by design:** C2 (the gateway→collector OTLP hop stays
-plaintext-but-SG-scoped; the TLS recipe is documented on the collector task).
+**Resolved by hop elimination — pending live verification (2026-07-22):** C2.
+The live run disproved the documented "plaintext-but-SG-scoped" gateway→collector
+posture — the gateway **refuses** a non-HTTPS `telemetry.forward_to` unless the
+host is localhost, so that network hop could never boot — so the accepted risk
+is **withdrawn as unimplementable**. The ADOT collector now runs as a
+**localhost sidecar** inside the gateway task (loopback within one Fargate
+network namespace), which satisfies SC-8 by absence of network transmission — a
+stronger posture than TLS, with no new PKI. Sidecar end-to-end (metrics landing
+in AMP through the sidecar) NEEDS LIVE VERIFICATION.
 
 ## Repo map
 
 | Path | What |
 |---|---|
 | `cloudformation/01-database.yaml` | RDS PG16, the **KMS CMK** (created here, exported), db SGs, pgaudit |
-| `cloudformation/02-gateway.yaml` | ALB+TLS, ECS gateway, IAM, secrets, VPC endpoints, **db bootstrap + rotation Lambdas** |
-| `cloudformation/03-observability.yaml` | AMP, ADOT collector, Grafana (Okta SSO), activity-archive chain |
+| `cloudformation/02-gateway.yaml` | ALB+TLS, ECS gateway (+ optional co-resident ADOT collector **sidecar** when telemetry is on), IAM, secrets, VPC endpoints, **db bootstrap + rotation Lambdas** |
+| `cloudformation/03-observability.yaml` | AMP, Grafana (Okta SSO), activity-archive chain; **outputs the AMP params the gateway sidecar consumes** (no standalone collector service — that moved into 02's task) |
 | `cloudformation/04-download-portal.yaml` | **optional** Okta-secured installer download portal (ECS Fargate at `/portal`, in-app OIDC + group auth, CMK S3 artifacts + audit log) |
 | `docker/` | gateway image + entrypoint; `db-admin/` (bootstrap+rotation Lambda); `grafana/`; `portal/` (download-portal app) |
 | `client/` | offline release mirror + `Install-ClaudeCode.ps1` (non-admin Windows) |
@@ -73,7 +80,12 @@ Order is load-bearing: **cert → 01 database → build all four images → 02
 gateway → DNS/Zscaler → verify → 03 observability → Grafana secret → 02
 re-run**. 01 is first because it creates and persists the CMK so the ECR
 repos are born encrypted. Scripts persist their outputs back into
-`deploy.env` (`set_env_var`) so there are no copy-paste steps. The **optional
+`deploy.env` (`set_env_var`) so there are no copy-paste steps. **03 now emits
+the AMP remote-write endpoint, workspace ARN, and activity-log-group name**
+(auto-persisted to `deploy.env`); the **02 re-run** picks them up and attaches
+the ADOT collector as a **localhost sidecar** in the gateway task — there is no
+separate collector service. 02 never imports from 03; the params flow via
+`deploy.env`, so the two-pass order is unchanged. The **optional
 download portal (04)** is a fifth image + stack that slots in any time after
 02 (independent of 03): `build-and-push-portal.sh → deploy-download-portal.sh
 → publish-portal-release.sh → set-portal-oidc-secret.sh`; it reuses the ALB /

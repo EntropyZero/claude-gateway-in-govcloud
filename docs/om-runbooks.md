@@ -41,12 +41,19 @@ more specific.
 
 ## Accepted risks (surfaced up front)
 
-Two deliberate, SSP-scoped decisions affect operations and are stated here so
-they are not discovered mid-incident:
+One deliberate, SSP-scoped decision affects operations and is stated here so it
+is not discovered mid-incident. A second, formerly-accepted risk (C2) was
+**withdrawn** by the live run and is noted so operators do not act on the old
+posture:
 
-- **C2 — plaintext OTLP hop.** The gateway→collector telemetry hop is plaintext
-  but SG-scoped (the TLS recipe is documented on the collector task). Restarts
-  and image rolls of the collector do not change this.
+- **C2 — plaintext OTLP hop: WITHDRAWN, now a localhost sidecar.** The earlier
+  posture (a plaintext-but-SG-scoped gateway→collector hop) was disproved live —
+  the gateway rejects a non-HTTPS telemetry forward URL off localhost — so the
+  collector was moved **into the gateway task as a sidecar** (2026-07-22). There
+  is no network telemetry hop to secure; the collector shares the gateway's
+  lifecycle. Operationally this means the collector is **not** a separate service
+  to restart or roll on its own — see runbook 6 (`security-review-2026-07.md`
+  C2 + fix log).
 - **C9 — S3 Object Lock deferred.** The activity archive and ALB-log buckets
   rely on `DeletionPolicy: Retain` + bucket lifecycle, not Object Lock. A
   privileged operator can still delete archived objects; there is no WORM
@@ -531,7 +538,11 @@ release is confirmed across the fleet.
 *Trigger / Frequency:* Any container change (Dockerfile fix, Grafana
 provisioning, a new ADOT collector release, task CPU/memory tuning, or a
 parameter change). Status: **[NEEDS TEST-RUN CONFIRMATION]** for steady-state
-rolls of Grafana/collector; gateway image builds + deploys are **[VERIFIED-LIVE]**.
+rolls of Grafana and the collector sidecar; gateway image builds + deploys are
+**[VERIFIED-LIVE]**. Note the collector is a **sidecar in the gateway task**
+(not a standalone service since 2026-07-22): rolling it is a new **gateway
+task-definition revision**, done by re-running `deploy-gateway.sh`, not
+`deploy-observability.sh`.
 
 *Preconditions:* Build host with Docker; `KMS_KEY_ARN` set; the relevant stack
 already deployed. **Rebuild and push the image BEFORE the stack update that
@@ -543,8 +554,10 @@ expects it** (`.claude/rules/scripts.md`).
   `./scripts/deploy-gateway.sh`.
 - **Grafana:** `GRAFANA_IMAGE_TAG=<new> ./scripts/build-and-push-grafana.sh` →
   `./scripts/deploy-observability.sh`.
-- **ADOT collector:** `ADOT_VERSION=<vX.Y.Z> ./scripts/mirror-collector.sh`
-  (mirrors + pins `COLLECTOR_IMAGE` by digest) → `./scripts/deploy-observability.sh`.
+- **ADOT collector (sidecar):** `ADOT_VERSION=<vX.Y.Z> ./scripts/mirror-collector.sh`
+  (mirrors + pins `COLLECTOR_IMAGE` by digest) → `./scripts/deploy-gateway.sh`
+  (the sidecar lives in the gateway task, so the collector rolls with a new
+  gateway task-def revision — **not** an observability-stack update).
 - **db-admin Lambda:** `DBADMIN_VERSION=<new> ./scripts/build-and-push-dbadmin.sh`
   → `./scripts/deploy-gateway.sh`.
 - **Download portal:** `PORTAL_VERSION=<new> ./scripts/build-and-push-portal.sh`
@@ -578,11 +591,13 @@ Each build script persists its new URI/tag into `deploy.env`, so the matching
   error. Change them via `TASK_CPU`/`TASK_MEMORY` in `deploy.env`.
 
 *Verification:* `aws ecs wait services-stable` for the affected service
-(`$NAME_PREFIX-gateway`, `$NAME_PREFIX-grafana`, `$NAME_PREFIX-otel`, or
-`$NAME_PREFIX-portal`);
+(`$NAME_PREFIX-gateway`, `$NAME_PREFIX-grafana`, or `$NAME_PREFIX-portal` —
+there is no separate collector service; a collector roll is a `-gateway` roll);
 `scripts/verify-gateway.sh` for the gateway; Grafana login + dashboards for
-Grafana. Confirm the CloudFormation events show `UPDATE_COMPLETE` with **no**
-replacement of `LoadBalancer` or `Database`.
+Grafana. For a collector-sidecar change, confirm the gateway task runs both
+containers (`gateway` + `otel-collector`) and metrics still reach AMP. Confirm
+the CloudFormation events show `UPDATE_COMPLETE` with **no** replacement of
+`LoadBalancer` or `Database`.
 
 *Rollback / recovery:* Redeploy the prior image URI/tag from `deploy.env` (old
 immutable tags persist in ECR). For a parameter regression, re-run the deploy
@@ -773,8 +788,8 @@ test run.
 *No other CloudWatch alarms are defined in the templates* (03-observability has
 Cloud Map health checks and target-group health thresholds, but no
 `AWS::CloudWatch::Alarm` resources). Operational surfaces to watch manually:
-ECS service events / `services-stable`, and the gateway/Grafana/collector log
-groups.
+ECS service events / `services-stable`, and the gateway (which now also carries
+the collector sidecar's `otel`-prefixed streams) and Grafana log groups.
 
 *General verification after responding:* confirm the alarm returns to `OK`
 (`aws cloudwatch describe-alarms --alarm-names <name> --query
@@ -802,9 +817,12 @@ end of life). Rare and deliberate. Status:
 *Order is the reverse of deploy: `04 and 03 → 02 → 01`.* The portal (`04`) and
 observability (`03`) stacks both import from `02` and are independent of each
 other — delete them (in either order, or in parallel) before the gateway.
-There is intentionally **no teardown script**; delete stacks explicitly so each
-destructive step is a conscious act. Downstream stacks import upstream exports,
-so an out-of-order delete fails on the export lock.
+Since 2026-07-22 **03 no longer owns an ECS service or Cloud Map namespace**
+(the collector became a sidecar in the 02 gateway task), so its delete is
+simpler — no lingering collector ENIs, no discovery-service-before-namespace
+ordering to wait on. There is intentionally **no teardown script**; delete
+stacks explicitly so each destructive step is a conscious act. Downstream stacks
+import upstream exports, so an out-of-order delete fails on the export lock.
 
 *Preconditions & the protection layers you must clear first:*
 
@@ -851,7 +869,8 @@ aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-nam
 - **Every CloudWatch log group, in every stack** — `Retain` (operator
   decision 2026-07-18: logs outlive stacks; a cfn-guard gate
   `log_groups_survive_teardown` enforces it). This covers the ECS task
-  groups (gateway/collector/grafana/portal), the activity window, the
+  groups (gateway — which now also holds the collector sidecar's `otel`
+  streams — grafana, portal), the activity window, the
   portal download-audit group, the RDS `postgresql`/pgaudit export group
   (`/aws/rds/instance/${NAME_PREFIX}-store/postgresql`, pre-created by 01
   with the CMK), and the db-admin Lambda groups (pre-created by 02 with the

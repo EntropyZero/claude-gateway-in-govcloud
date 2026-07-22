@@ -47,8 +47,10 @@ laptops without a public internet dependency on the AI provider.
   `claude` binary and a non-admin installer that writes managed settings
   (`client/mirror-claude-release.sh`, `client/Install-ClaudeCode.ps1`).
 - An **optional usage/cost observability stack**: Amazon Managed Prometheus
-  (AMP), an ADOT collector, and a self-hosted Grafana behind the same ALB and
-  IdP (`cloudformation/03-observability.yaml`).
+  (AMP) and a self-hosted Grafana behind the same ALB and IdP
+  (`cloudformation/03-observability.yaml`). Usage metrics reach AMP through an
+  **ADOT collector that runs as a co-resident sidecar inside the gateway task**
+  (`cloudformation/02-gateway.yaml`), not as a standalone service.
 
 ### 1.3 Scope — what the system is not
 
@@ -91,8 +93,9 @@ At a glance (full detail in `architecture.md` §1–§2):
 - **Session and spend state** lives in **RDS PostgreSQL 16**; the gateway
   connects as a least-privilege application role, never the RDS master user.
 - **Usage telemetry** (tokens, cost, model, and stamped user identity) flows
-  from the gateway to an **ADOT collector**, into **AMP**, and is visualized in
-  a self-hosted **Grafana** that also authenticates through Okta.
+  from the gateway to a **co-resident ADOT collector sidecar** (localhost,
+  inside the gateway task), which remote-writes into **AMP**; it is visualized
+  in a self-hosted **Grafana** that also authenticates through Okta.
 - An optional **installer download portal** — a small ECS Fargate service on
   the same ALB (path `/portal`) — lets developers self-serve a pre-configured
   installer ZIP after Okta login and group check, with every download and
@@ -303,11 +306,24 @@ Each developer's managed settings can stamp **OTEL resource attributes** —
 `-CostCenter` / `-Team` parameters (`client/Install-ClaudeCode.ps1`). The
 gateway additionally stamps **identity** (`user.id` / `user.email` /
 `user.groups` from the Okta session) onto every telemetry export
-(`architecture.md` §3, §5). Metrics flow gateway → **ADOT collector** →
-**AMP** (SigV4 remote-write) → **Grafana**, where operators authenticate through
-Okta SSO and read the provisioned usage/cost dashboard
-(`cloudformation/03-observability.yaml`; `architecture.md` §5). Metrics carry
-150-day AMP retention.
+(`architecture.md` §3, §5). Metrics flow gateway → **co-resident ADOT collector
+sidecar** → **AMP** (SigV4 remote-write) → **Grafana**, where operators
+authenticate through Okta SSO and read the provisioned usage/cost dashboard
+(`cloudformation/02-gateway.yaml`, `cloudformation/03-observability.yaml`;
+`architecture.md` §5). Metrics carry 150-day AMP retention.
+
+The collector is not a network service: it runs as a **sidecar container in the
+gateway task**, sharing that task's boundary and network namespace, and the
+gateway forwards to it over **loopback** (`http://localhost:4318`) — there is no
+over-the-wire telemetry hop. The sidecar remote-writes to AMP and to the
+activity log group under the **gateway task role** (scoped to this workspace and
+this log group only), and its OTLP listener binds `127.0.0.1` so nothing off the
+task can reach it. This is the resolution of finding C2: SC-8 is met by absence
+of network transmission (a stronger posture than an internal-CA TLS listener,
+and with no new PKI to custody — SC-17/SC-12), after the live run showed the
+gateway rejects a non-HTTPS telemetry forward URL off localhost
+(`security-review-2026-07.md` C2 + fix log). **Pending live verification:**
+metrics landing in AMP through the sidecar.
 
 ### 5.4 Audit
 
@@ -393,9 +409,12 @@ from Bedrock, telemetry flows to Grafana, and audit surfaces are recording.
   (`SESSION_TTL_HOURS`; `cloudformation/02-gateway.yaml` `session:` block). This
   is the failure the current org prerequisite would otherwise cause at boot
   (CLAUDE.md Status).
-- **Collector redeploy → brief telemetry gap.** The collector runs ≥1 task
-  (default 2, `CollectorDesiredCount`) specifically to avoid a telemetry
-  blackout on redeploy (`security-review-2026-07.md` D6).
+- **Collector shares the gateway task lifecycle.** The ADOT collector is a
+  sidecar in the gateway task, not a separate service, so there is no
+  independent collector redeploy: a gateway roll cycles the collector with it,
+  and a crash-looping collector self-heals via its container restart policy
+  (`Essential: false`) **without taking the gateway down** — telemetry may lapse
+  briefly while inference keeps serving (`security-review-2026-07.md` C2).
 - **Download portal down → no self-service installs, gateway unaffected.** The
   portal is an optional, separate stack behind its own `/portal` listener rule;
   its failure (or absence) does not touch the inference path. Installers remain
@@ -431,7 +450,9 @@ register is `architecture.md` §10.
 
 The implemented posture: a single customer-managed KMS key encrypts everything
 at rest (bar the ALB-logs bucket, an ELB platform limitation); TLS in transit on
-every hop except one internal telemetry leg (below); RDS `verify-full`; pgaudit;
+every network hop (the one former exception — the gateway→collector telemetry
+leg — is now a loopback sidecar with no network transmission, below); RDS
+`verify-full`; pgaudit;
 VPC-endpoint and IAM policies scoped to the two approved models and this
 account's exact ARNs; explicit (no default-allow) security-group egress; and a
 least-privilege application DB user with self-rolling rotation. Full batch status
@@ -440,14 +461,16 @@ D correctness, C12 least-privilege DB user) is in `security-review-2026-07.md`.
 
 **Accepted / deferred risks a reviewer should see immediately:**
 
-- **C2 — gateway → collector OTLP hop is plaintext (SC-8), by design, partial.**
-  The single telemetry leg from the gateway to the ADOT collector (ports
-  4317–4318) is unencrypted, compensated by **SG-to-SG scoping** — only gateway
-  tasks can reach the collector ports. Encrypting it requires an
-  enterprise-CA-signed collector cert plus the CA root in the gateway trust
-  store; the recipe is documented on the collector task definition. Implement if
-  the SSP rejects the VPC-boundary argument for SC-8
-  (`security-review-2026-07.md` C2; `architecture.md` §10 note 1).
+- **C2 (formerly an accepted partial risk) — WITHDRAWN, not carried.** The
+  review had accepted the gateway→collector OTLP hop as plaintext-but-SG-scoped.
+  The live test run **disproved** that posture — the gateway refuses a non-HTTPS
+  telemetry forward URL unless the host is localhost, so the hop could never run
+  — so the accepted risk was withdrawn (2026-07-22) and the collector moved to a
+  **co-resident localhost sidecar** in the gateway task (§5.3). There is now no
+  plaintext telemetry leg to accept: SC-8 is met by absence of network
+  transmission, with no new PKI to manage (`security-review-2026-07.md` C2 + fix
+  log; `architecture.md` §10 note 1). This is surfaced here rather than silently
+  dropped because it reverses a decision recorded in earlier review packages.
 - **C9 — S3 Object Lock / WORM on audit buckets is deferred**, by decision
   (2026-07-15). Revisit if AU-9 WORM retention is mandated
   (`security-review-2026-07.md` C9; `architecture.md` §10 note 3).
