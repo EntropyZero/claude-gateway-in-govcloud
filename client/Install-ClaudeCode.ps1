@@ -15,7 +15,7 @@
 
   Works with or without elevation. Everything installs to user scope
   (%USERPROFILE%\.local\bin + user PATH); managed settings are written to
-  %ProgramData%\ClaudeCode\managed-settings.json when elevated
+  %ProgramFiles%\ClaudeCode\managed-settings.json when elevated
   (tamper-resistant, recommended for MDM), or to the per-user managed
   policy source HKCU\SOFTWARE\Policies\ClaudeCode when not. Both are
   honored by Claude Code as managed settings; the HKCU source is
@@ -32,7 +32,7 @@
 .PARAMETER GatewayUrl
   Your gateway URL (e.g. https://claude-gateway.example.com). When set, writes
   forceLoginMethod/forceLoginGatewayUrl into managed settings — the
-  %ProgramData% managed-settings.json when elevated, the HKCU policy
+  %ProgramFiles% managed-settings.json when elevated, the HKCU policy
   registry key otherwise. These keys are managed-only and are NOT honored
   from a user settings.json, which is why the registry source is used.
 
@@ -78,7 +78,7 @@
   context): a SYSTEM run would otherwise install claude.exe into SYSTEM's
   own %USERPROFILE% and PATH, where developers never see it. Two-phase
   rollout: push settings as SYSTEM with -SettingsOnly (lands in
-  %ProgramData%, tamper-resistant), and deploy the binary in USER context
+  %ProgramFiles%, tamper-resistant), and deploy the binary in USER context
   (Intune "user" install behavior, or manual).
 
 .EXAMPLE
@@ -150,6 +150,64 @@ function Build-ManagedSettings {
   }
   if ($envBlock.Count -gt 0) { $settings['env'] = $envBlock }
   return $settings
+}
+
+# Write the managed-settings object to the right source and REPORT the outcome
+# instead of throwing. Elevated -> the machine-wide, tamper-resistant
+# %ProgramFiles%\ClaudeCode\managed-settings.json; otherwise the per-user
+# HKCU\SOFTWARE\Policies\ClaudeCode policy key. On hardened / GPO-managed
+# machines the HKCU\SOFTWARE\Policies subtree is locked to standard users, so
+# that write can fail with "Access is denied" - which must NOT abort an
+# otherwise-successful binary install (the settings step runs last). Returns a
+# result object { Applied; Scope; Location; Error }. Kept as a function so it is
+# unit-testable (see tests/powershell/).
+function Write-ManagedSettings {
+  param(
+    [Parameter(Mandatory)] $Settings,
+    [switch]$Elevated
+  )
+  if ($Elevated) {
+    $path = Join-Path 'ProgramFiles-ClaudeCode' 'managed-settings.json'  # placeholder; real path resolved in try
+    try {
+      # Claude Code reads the machine managed-settings file from %ProgramFiles%
+      # \ClaudeCode (admin-write-only, so tamper-resistant). It moved here from
+      # %ProgramData% at v2.1.75; this deployment ships >= 2.1.195, so the old
+      # %ProgramData% path is NOT read - verified against the mirrored binary.
+      $dir  = Join-Path $env:ProgramFiles 'ClaudeCode'
+      $path = Join-Path $dir 'managed-settings.json'
+      New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
+      $Settings | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $path -Encoding UTF8 -ErrorAction Stop
+      return [pscustomobject]@{ Applied = $true; Scope = 'machine'; Location = $path; Error = $null }
+    } catch {
+      $emsg = if ($_.Exception.Message) { $_.Exception.Message } else { "$_" }
+      return [pscustomobject]@{ Applied = $false; Scope = 'machine'; Location = $path; Error = $emsg }
+    }
+  }
+
+  $policyKey = 'HKCU:\SOFTWARE\Policies\ClaudeCode'
+  try {
+    New-Item -Path $policyKey -Force -ErrorAction Stop | Out-Null
+    # Merge with any existing policy JSON so repeated runs / other tooling
+    # don't lose keys we didn't set this time.
+    $merged = [ordered]@{}
+    $prop = Get-ItemProperty -Path $policyKey -Name 'Settings' -ErrorAction SilentlyContinue
+    $existing = if ($prop) { $prop.Settings } else { $null }
+    if ($existing) {
+      try {
+        ($existing | ConvertFrom-Json).PSObject.Properties |
+          ForEach-Object { $merged[$_.Name] = $_.Value }
+      } catch {
+        Write-Warning '    existing Settings value is not valid JSON - replacing it.'
+      }
+    }
+    foreach ($k in $Settings.Keys) { $merged[$k] = $Settings[$k] }
+    Set-ItemProperty -Path $policyKey -Name 'Settings' -Type String `
+      -Value ($merged | ConvertTo-Json -Depth 4 -Compress) -ErrorAction Stop
+    return [pscustomobject]@{ Applied = $true; Scope = 'user'; Location = $policyKey; Error = $null }
+  } catch {
+    $emsg = if ($_.Exception.Message) { $_.Exception.Message } else { "$_" }
+    return [pscustomobject]@{ Applied = $false; Scope = 'user'; Location = $policyKey; Error = $emsg }
+  }
 }
 
 # Tests dot-source this file for the functions above without running the
@@ -269,7 +327,7 @@ if (($env:Path -split ';') -notcontains $installDir) { $env:Path += ";$installDi
 }  # end -not $SettingsOnly
 
 # --- 4. Managed settings (gateway login + update lockdown) ------------------
-# Elevated:     %ProgramData%\ClaudeCode\managed-settings.json (tamper-resistant)
+# Elevated:     %ProgramFiles%\ClaudeCode\managed-settings.json (tamper-resistant)
 # Non-elevated: HKCU\SOFTWARE\Policies\ClaudeCode, REG_SZ value 'Settings'
 #               holding single-line JSON — a per-user managed-settings source
 #               Claude Code honors without elevation. forceLoginMethod /
@@ -278,44 +336,43 @@ if (($env:Path -split ';') -notcontains $installDir) { $env:Path += ";$installDi
 $settings = Build-ManagedSettings -GatewayUrl $GatewayUrl -DisableUpdates:$DisableUpdates `
   -CostCenter $CostCenter -Team $Team -ExtraCaCertPath $ExtraCaCertPath `
   -RequiredMinimumVersion $RequiredMinimumVersion
+$script:SettingsResult = $null
 if ($settings) {
   $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
              ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  if ($isAdmin) { Write-Step 'Writing machine-wide managed settings (%ProgramFiles%\ClaudeCode)' }
+  else          { Write-Step 'Writing per-user managed policy (HKCU\SOFTWARE\Policies\ClaudeCode)' }
 
-  if ($isAdmin) {
-    $settingsDir  = Join-Path $env:ProgramData 'ClaudeCode'
-    $settingsPath = Join-Path $settingsDir 'managed-settings.json'
-    Write-Step "Writing $settingsPath"
-    New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null
-    $settings | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
-  } else {
-    $policyKey = 'HKCU:\SOFTWARE\Policies\ClaudeCode'
-    Write-Step "Not elevated - writing per-user managed policy to $policyKey"
-    New-Item -Path $policyKey -Force | Out-Null
+  $script:SettingsResult = Write-ManagedSettings -Settings $settings -Elevated:$isAdmin
 
-    # Merge with any existing policy JSON so repeated runs / other tooling
-    # don't lose keys we didn't set this time.
-    $merged = [ordered]@{}
-    $existing = (Get-ItemProperty -Path $policyKey -Name 'Settings' -ErrorAction SilentlyContinue).Settings
-    if ($existing) {
-      try {
-        ($existing | ConvertFrom-Json).PSObject.Properties |
-          ForEach-Object { $merged[$_.Name] = $_.Value }
-      } catch {
-        Write-Warning "    existing Settings value is not valid JSON - replacing it."
-      }
+  if ($script:SettingsResult.Applied) {
+    Write-Host "    managed settings applied ($($script:SettingsResult.Scope)): $($script:SettingsResult.Location)"
+    if ($script:SettingsResult.Scope -eq 'user') {
+      Write-Host '    (per-user policy source; for tamper-resistant machine-wide settings deploy via MDM/Intune elevated.)'
     }
-    foreach ($k in $settings.Keys) { $merged[$k] = $settings[$k] }
-
-    Set-ItemProperty -Path $policyKey -Name 'Settings' -Type String `
-      -Value ($merged | ConvertTo-Json -Depth 4 -Compress)
-    Write-Host '    note: the HKCU policy source is user-writable (convenience, not enforcement).'
-    Write-Host '    For tamper-resistant settings, deploy via MDM/Intune elevated instead.'
+  } else {
+    # Non-fatal: the binary is already installed. On hardened / GPO-managed
+    # machines the HKCU\SOFTWARE\Policies subtree is locked to standard users,
+    # so a user-run install cannot write the forced-login policy - it must come
+    # from an administrative channel.
+    Write-Warning "Managed settings were NOT applied ($($script:SettingsResult.Location))."
+    Write-Warning "  Reason: $($script:SettingsResult.Error)"
+    Write-Warning '  On hardened / GPO-managed machines the HKCU\SOFTWARE\Policies subtree is'
+    Write-Warning '  locked to standard users. Deliver the managed settings via MDM/Intune/GPO:'
+    Write-Warning '  push %ProgramFiles%\ClaudeCode\managed-settings.json as SYSTEM, or run this'
+    Write-Warning '  installer elevated / with -SettingsOnly in device context.'
   }
 }
 
 # --- 5. Smoke test -----------------------------------------------------------
+$settingsFailed = ($settings -and -not $script:SettingsResult.Applied)
 if ($SettingsOnly) {
+  # For a settings-only push the settings ARE the deliverable, so a failed
+  # write is a real failure (exit non-zero for the MDM/automation caller).
+  if ($settingsFailed) {
+    Write-Warning 'Settings-only run: managed settings were NOT applied (see above) - nothing durable changed.'
+    exit 1
+  }
   Write-Host 'Done (settings only). Deploy the binary in user context separately.' -ForegroundColor Green
 } elseif ($WhatIfPreference) {
   Write-Host 'Done (WhatIf) - no files or settings were changed.' -ForegroundColor Green
@@ -324,5 +381,10 @@ if ($SettingsOnly) {
   $version = & $target --version
   Write-Host "    claude --version -> $version"
   Write-Host ''
-  Write-Host 'Done. Developer next step: open a NEW terminal and run: claude  (then /login -> Cloud gateway)' -ForegroundColor Green
+  if ($settingsFailed) {
+    Write-Host 'Binary installed, but managed settings were NOT applied (see warning above).' -ForegroundColor Yellow
+    Write-Host 'Have IT deliver the gateway settings via MDM/GPO, then open a NEW terminal and run: claude' -ForegroundColor Yellow
+  } else {
+    Write-Host 'Done. Developer next step: open a NEW terminal and run: claude  (then /login -> Cloud gateway)' -ForegroundColor Green
+  }
 }

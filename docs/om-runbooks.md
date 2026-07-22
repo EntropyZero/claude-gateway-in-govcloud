@@ -510,6 +510,17 @@ release is confirmed across the fleet.
   not drop it, or clients will self-update off the pinned build.
 - SYSTEM-context (Intune/SCCM device) pushes must use `-SettingsOnly`; the
   binary install must run in **user** context (the installer throws otherwise).
+- **Managed settings on hardened / GPO-managed fleets — deliver them by
+  admin channel, not a user-run install.** A standard user cannot write
+  `HKCU\SOFTWARE\Policies\ClaudeCode` (the `Policies` subtree is ACL-locked on
+  STIG/CIS baselines), so a user-run install (incl. the portal ZIP) installs
+  the binary but **cannot apply the forced-login policy** — it now warns and
+  continues rather than aborting. Push the managed settings machine-wide
+  instead: run the installer elevated / `-SettingsOnly` in SYSTEM context, or
+  have MDM/GPO write the managed-settings file. **Machine path:**
+  `%ProgramFiles%\ClaudeCode\managed-settings.json` (Claude Code moved it here
+  from `%ProgramData%` at v2.1.75, admin-write-only = tamper-resistant; verified
+  against the mirrored binary). The binary stays user-installable either way.
 - Never bypass GPG verification as a matter of routine; `ALLOW_UNVERIFIED_MANIFEST=1`
   is for a deliberately air-gapped one-off only.
 

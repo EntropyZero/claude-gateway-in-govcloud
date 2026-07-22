@@ -404,7 +404,7 @@ routing via ZIA-with-inspection (which would print the Zscaler intermediate's
 fingerprint as the "published pinning fingerprint").
 
 **B4. Intune/SCCM (SYSTEM context) install is self-contradictory.** A SYSTEM
-push writes `%ProgramData%` managed settings (good) but installs the binary to
+push writes `%ProgramFiles%` managed settings (good) but installs the binary to
 SYSTEM's `%USERPROFILE%\.local\bin` and SYSTEM's PATH — the developer never gets
 `claude.exe`. And SYSTEM traffic isn't carried by the ZPA *user* tunnel, so the
 UNC pull needs a Zscaler **Machine Tunnel**. The per-user install location and

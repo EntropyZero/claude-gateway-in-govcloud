@@ -62,6 +62,38 @@ Describe 'Build-ManagedSettings' {
   }
 }
 
+Describe 'Write-ManagedSettings' {
+  # The user (HKCU\SOFTWARE\Policies) branch is Windows-only - there is no
+  # registry provider on Linux CI to write or mock reliably. Its try/catch
+  # shape is identical to the machine branch tested here, which uses the
+  # filesystem and IS exercisable cross-platform, so these cover the behavior
+  # change: a successful write reports Applied, and a DENIED write degrades to
+  # Applied=$false WITHOUT throwing (the hardened-fleet fix).
+
+  It 'writes machine-wide settings to %ProgramFiles% and reports Applied on success' {
+    $env:ProgramFiles = Join-Path $TestDrive 'pf-ok'
+    $r = Write-ManagedSettings -Settings ([ordered]@{ forceLoginMethod = 'gateway' }) -Elevated
+    $r.Applied | Should -BeTrue
+    $r.Scope   | Should -Be 'machine'
+    $r.Location | Should -Match 'ClaudeCode'   # under %ProgramFiles%\ClaudeCode
+    Test-Path $r.Location | Should -BeTrue
+    (Get-Content -Raw $r.Location | ConvertFrom-Json).forceLoginMethod | Should -Be 'gateway'
+  }
+
+  It 'does NOT throw and reports Applied=$false when the store write is denied' {
+    # Put a DIRECTORY where the settings file must go, so the write cannot
+    # create the file - the deterministic stand-in for the hardened-machine
+    # "Access is denied". The install must survive this, not abort.
+    $env:ProgramFiles = Join-Path $TestDrive 'pf-blocked'
+    $blockPath = Join-Path (Join-Path $env:ProgramFiles 'ClaudeCode') 'managed-settings.json'
+    New-Item -ItemType Directory -Force -Path $blockPath | Out-Null
+    # Capture directly: if it threw (the bug this fixes), the test fails here.
+    $r = Write-ManagedSettings -Settings ([ordered]@{ forceLoginMethod = 'gateway' }) -Elevated
+    $r.Applied | Should -BeFalse
+    $r.Error   | Should -Not -BeNullOrEmpty
+  }
+}
+
 Describe 'Installer parameter validation' {
 
   It 'rejects a CostCenter containing a comma' {
