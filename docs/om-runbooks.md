@@ -53,7 +53,13 @@ posture:
   is no network telemetry hop to secure; the collector shares the gateway's
   lifecycle. Operationally this means the collector is **not** a separate service
   to restart or roll on its own — see runbook 6 (`security-review-2026-07.md`
-  C2 + fix log).
+  C2 + fix log). Two operational consequences of the default
+  `TELEMETRY_FAIL_CLOSED=true` (AU-5): **a persistently failed or unhealthy
+  collector stops the gateway task** (ECS replaces it; check the `otel/`
+  log streams and the collector health check before suspecting the gateway
+  itself), and every task stop drains gateway-first / collector-last with up
+  to a 120 s flush window — expect task stops during rotations and deploys
+  to take up to ~2 minutes longer than the pre-sidecar timings.
 - **C9 — S3 Object Lock deferred.** The activity archive and ALB-log buckets
   rely on `DeletionPolicy: Retain` + bucket lifecycle, not Object Lock. A
   privileged operator can still delete archived objects; there is no WORM

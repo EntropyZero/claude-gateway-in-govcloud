@@ -323,6 +323,21 @@ Parameters:
       produces and persists as COLLECTOR_IMAGE) - runs as the telemetry
       sidecar. Pin by digest. Required when the sidecar is enabled.
 
+  TelemetryFailClosed:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      'true' (default) marks the telemetry sidecar Essential and gates the
+      gateway container on its health: a collector that fails its health
+      check or crash-loops takes the task down (ECS replaces it) instead of
+      letting the gateway serve traffic unmonitored - the AU-5 fail-closed
+      posture (do not operate while audit/telemetry processing is down).
+      'false' prefers gateway availability: the sidecar still self-heals via
+      its restart policy, but its failure never stops traffic - telemetry
+      can silently gap. Policy decision; record it in the SSP either way.
+      No effect unless the sidecar is enabled.
+
   ForwardActivityLogs:
     Type: String
     Default: 'false'
@@ -429,6 +444,10 @@ Conditions:
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
   HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
   HaveTelemetry: !Not [!Equals [!Ref ObservabilityAmpRemoteWriteEndpoint, '']]
+  # Fail-closed telemetry (AU-5): only meaningful when the sidecar exists.
+  WantTelemetryFailClosed: !And
+    - !Condition HaveTelemetry
+    - !Equals [!Ref TelemetryFailClosed, 'true']
 
 # Regional accounts the LEGACY ELB access-log writer authenticates as
 # (regions launched before Aug 2022, incl. GovCloud). See AlbLogsBucketPolicy.
@@ -821,6 +840,22 @@ Resources:
         - Name: gateway
           Image: !Ref ContainerImage
           Essential: true
+          # The dependency does double duty. START-UP: the collector must be
+          # up (HEALTHY when fail-closed, started otherwise) before the
+          # gateway accepts traffic, so the first requests are never
+          # unmonitored. SHUT-DOWN: ECS stops dependent containers in REVERSE
+          # dependency order, so on every task stop - including the service
+          # roll that EVERY secret rotation forces - the gateway is SIGTERMed
+          # and exits FIRST (emitting its final OTLP exports), and only then
+          # is the collector stopped, flushing its buffered batch (batch
+          # processor holds up to 30s) to AMP/CloudWatch within its
+          # StopTimeout. Without this ordering both containers are SIGTERMed
+          # together and the final telemetry window is silently dropped.
+          DependsOn: !If
+            - HaveTelemetry
+            - - ContainerName: otel-collector
+                Condition: !If [WantTelemetryFailClosed, HEALTHY, START]
+            - !Ref 'AWS::NoValue'
           PortMappings:
             - ContainerPort: 8080
               Protocol: tcp
@@ -978,22 +1013,54 @@ Resources:
           - HaveTelemetry
           - Name: otel-collector
             Image: !Ref CollectorImage
-            # RUNTIME crashes must not take the gateway down: Essential: false +
-            # RestartPolicy let a collector that started and then exited self-heal
-            # (restart in place, no task kill). NOTE the scope limit: this covers
-            # only post-start crashes. It does NOT cover a LAUNCH-time image-pull
-            # failure - ECS pulls every container image before starting any
-            # container in the task, so an un-mirrored/typo'd/unreachable
-            # CollectorImage digest fails the WHOLE task (CannotPullContainerError
-            # -> STOPPED) regardless of Essential:false, taking the gateway
-            # offline. Enabling telemetry therefore couples gateway availability
-            # to CollectorImage being pullable: verify the collector image is
-            # present in this account's ECR (mirror-collector.sh) BEFORE the
-            # telemetry-enabled 02 re-run. See SECURITY_REVIEW C2 / the O&M runbook.
-            Essential: false
+            # Failure posture is the TelemetryFailClosed parameter (default
+            # true = AU-5 fail-closed): Essential + the gateway's HEALTHY
+            # dependency mean a collector that exits or fails its health
+            # check stops the task - the gateway never serves unmonitored
+            # traffic; ECS replaces the task while the ALB routes to the
+            # peer task. RestartPolicy still absorbs TRANSIENT crashes first
+            # (in-place restart, no task kill); only a collector that exits
+            # again within RestartAttemptPeriod escalates to a task stop.
+            # With TelemetryFailClosed=false the trade flips: the sidecar
+            # self-heals but its failure never stops traffic (telemetry can
+            # silently gap). Either way, a LAUNCH-time image-pull failure
+            # fails the WHOLE task (ECS pulls all images before starting any
+            # container), so enabling telemetry couples gateway availability
+            # to CollectorImage being pullable: verify the image is present
+            # in this account's ECR (mirror-collector.sh) BEFORE the
+            # telemetry-enabled 02 re-run. See SECURITY_REVIEW C2 / the O&M
+            # runbook. NOTE: even fail-closed only proves the collector is
+            # healthy, not that AMP is ingesting - pair with the missing-
+            # telemetry alarm (AlarmSnsTopicArn) for end-to-end assurance.
+            Essential: !If [WantTelemetryFailClosed, true, false]
             RestartPolicy:
               Enabled: true
               RestartAttemptPeriod: 60
+            # The ADOT image ships a /healthcheck binary (no shell in the
+            # image - plain CMD, never CMD-SHELL) that probes the
+            # health_check extension (loopback :13133, see AOT_CONFIG_CONTENT).
+            # It catches the hung-but-running collector that Essential alone
+            # (which only sees exits) would miss. Defined in BOTH postures:
+            # ECS task health considers only ESSENTIAL containers with health
+            # checks, so the Essential flag above is what decides whether
+            # UNHEALTHY escalates - fail-closed: task replaced; fail-open:
+            # status is surfaced (container shows UNHEALTHY) but traffic
+            # keeps flowing.
+            HealthCheck:
+              Command: ['CMD', '/healthcheck']
+              Interval: 30
+              Timeout: 5
+              Retries: 3
+              StartPeriod: 30
+            # Flush window for shutdown: the gateway (which DependsOn this
+            # container) is stopped first; the collector then gets up to 120s
+            # (Fargate max) after SIGTERM to drain its batch processor
+            # (buffers up to 30s) and finish AMP/CloudWatch writes before
+            # SIGKILL. The collector flushes pending exports on SIGTERM as
+            # part of its graceful shutdown - best-effort, not guaranteed
+            # delivery (a dead AMP endpoint at shutdown can still lose the
+            # final batch; the missing-telemetry alarm is the backstop).
+            StopTimeout: 120
             # NO PortMappings: same-task containers share the network namespace,
             # and nothing should be reachable from off-task.
             LogConfiguration:
@@ -1021,6 +1088,11 @@ Resources:
                     sigv4auth:
                       region: ${AWS::Region}
                       service: aps
+                    # Serves the endpoint the container HealthCheck's
+                    # /healthcheck binary probes. Loopback only, like the
+                    # receivers - nothing off-task can reach it.
+                    health_check:
+                      endpoint: 127.0.0.1:13133
                   receivers:
                     otlp:
                       protocols:
@@ -1050,7 +1122,11 @@ Resources:
                       log_group_name: ${ObservabilityActivityLogGroup}
                       log_stream_name: activity
                   service:
-                    extensions: [sigv4auth]
+                    # health_check here is LOAD-BEARING: the container
+                    # HealthCheck's /healthcheck probe hits it, so removing
+                    # it from this list makes a fail-closed task permanently
+                    # unhealthy (gateway never starts - it waits on HEALTHY).
+                    extensions: [sigv4auth, health_check]
                     pipelines:
                       metrics:
                         receivers: [otlp]

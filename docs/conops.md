@@ -409,12 +409,22 @@ from Bedrock, telemetry flows to Grafana, and audit surfaces are recording.
   (`SESSION_TTL_HOURS`; `cloudformation/02-gateway.yaml` `session:` block). This
   is the failure the current org prerequisite would otherwise cause at boot
   (CLAUDE.md Status).
-- **Collector shares the gateway task lifecycle.** The ADOT collector is a
-  sidecar in the gateway task, not a separate service, so there is no
-  independent collector redeploy: a gateway roll cycles the collector with it,
-  and a crash-looping collector self-heals via its container restart policy
-  (`Essential: false`) **without taking the gateway down** — telemetry may lapse
-  briefly while inference keeps serving (`security-review-2026-07.md` C2).
+- **Collector shares the gateway task lifecycle — and fails CLOSED by
+  default (AU-5).** The ADOT collector is a sidecar in the gateway task, not
+  a separate service, so there is no independent collector redeploy: a
+  gateway roll cycles the collector with it. With the default
+  `TelemetryFailClosed=true`, the sidecar is Essential and health-checked
+  and the gateway container waits on it: a transient collector crash
+  restarts in place (container restart policy), but a collector that stays
+  failed or hangs unhealthy **stops the task** — the gateway does not serve
+  traffic while telemetry/audit processing is down; ECS replaces the task
+  and the ALB routes to the peer task meanwhile. Orgs that prefer
+  availability over auditability set `TELEMETRY_FAIL_CLOSED=false`
+  (telemetry may then gap silently while inference keeps serving) and record
+  that deviation in the SSP. On every task stop — including secret-rotation
+  service rolls — stop ordering is gateway-first, collector-last with a
+  120 s drain, so the final telemetry buffer is flushed to AMP/CloudWatch,
+  not dropped (`security-review-2026-07.md` C2).
 - **Download portal down → no self-service installs, gateway unaffected.** The
   portal is an optional, separate stack behind its own `/portal` listener rule;
   its failure (or absence) does not touch the inference path. Installers remain

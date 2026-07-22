@@ -89,6 +89,7 @@ aws cloudformation deploy \
       "ObservabilityAmpWorkspaceArn=${OBSERVABILITY_AMP_WORKSPACE_ARN:-}" \
       "ObservabilityActivityLogGroup=${OBSERVABILITY_ACTIVITY_LOG_GROUP:-}" \
       "CollectorImage=${COLLECTOR_IMAGE:-}" \
+      "TelemetryFailClosed=${TELEMETRY_FAIL_CLOSED:-true}" \
       "ForwardActivityLogs=${FORWARD_ACTIVITY_LOGS:-false}" \
       "OpusModelId=${OPUS_MODEL_ID:-claude-opus-4-8}" \
       "OpusBedrockModelId=${OPUS_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-opus-4-8}" \

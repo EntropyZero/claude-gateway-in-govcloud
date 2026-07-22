@@ -132,15 +132,35 @@ self-managed application CA (technically sound — OpenSSL/BoringSSL enforce nam
 constraints and the collector takes inline `cert_pem`/`key_pem` — but rejected
 on ATO grounds: SC-17 shadow-PKI finding risk + SC-12 key-custody burden).
 Mechanics:
-- **02** gains a conditional `otel-collector` container (`Essential: false`
-  plus a container `RestartPolicy` so a crash-looping collector self-heals
-  without ever taking the gateway down; receivers bound to `127.0.0.1:4317` /
-  `127.0.0.1:4318`; **no** port mappings; forward URL is the literal
-  `http://localhost:4318`, which is exempt from the gateway's HTTPS
-  requirement). The gateway **task role** becomes the telemetry writer —
+- **02** gains a conditional `otel-collector` container (receivers bound to
+  `127.0.0.1:4317` / `127.0.0.1:4318`; **no** port mappings; forward URL is
+  the literal `http://localhost:4318`, which is exempt from the gateway's
+  HTTPS requirement). The gateway **task role** becomes the telemetry writer —
   `aps:RemoteWrite` on the workspace + the activity log-group `logs:` actions
   (least privilege; no KMS statements, log-group encryption is service-side).
   No new SG ingress for 4317/4318 anywhere (loopback only).
+- **Failure posture (added 2026-07-22, user decision): fail-closed by
+  default — AU-5.** `TelemetryFailClosed=true` (default) marks the sidecar
+  `Essential` and health-checks it (the ADOT `/healthcheck` binary probing
+  the `health_check` extension on loopback `:13133`), and the gateway
+  container carries a `DependsOn: [otel-collector, HEALTHY]`: a collector
+  that exits persistently **or hangs unhealthy** stops the task rather than
+  letting the gateway serve unmonitored traffic (ECS replaces the task; the
+  ALB routes to the peer task meanwhile). The container `RestartPolicy`
+  still absorbs *transient* crashes in place first — only re-failure within
+  `RestartAttemptPeriod` escalates. `TelemetryFailClosed=false` flips the
+  trade (availability over auditability; telemetry can silently gap) and
+  must be recorded in the SSP if chosen. Fail-closed proves the collector is
+  healthy, **not** that AMP is ingesting — the missing-telemetry alarm is
+  the end-to-end control.
+- **Shutdown flush (added 2026-07-22).** The gateway→collector `DependsOn`
+  also reverses ECS's stop order: on every task stop — including the service
+  roll that **every secret rotation forces** — the gateway is SIGTERMed and
+  exits first (emitting its final OTLP exports), then the collector drains
+  its batch processor (buffers up to 30 s) to AMP/CloudWatch within its
+  `StopTimeout: 120` (Fargate max) before SIGKILL. Without the ordering,
+  ECS SIGTERMs all containers at once and the final telemetry window of
+  every roll is silently dropped.
 - **03** deletes its Cloud Map `Namespace` + discovery service, the collector
   SG and the gateway↔collector SG-rule pair, and the collector
   execution/task roles, task definition, and service. It now **outputs** the
@@ -163,9 +183,13 @@ no forward URL to pre-set), and moots the collector-specific parts of A2/A5.
 **Needs live verification:** (a) sidecar end-to-end — metrics landing in AMP
 through the loopback receiver; (b) container `RestartPolicy`
 (`ContainerRestartPolicy`) support in GovCloud `us-gov-west-1` + CloudFormation
-(fallback: `Essential: true` with documented coupled availability); (c) the
-pinned ADOT image still honors `AOT_CONFIG_CONTENT` and accepts the
-`127.0.0.1` receiver bind.
+(fallback: `Essential: true` is now the default anyway via
+`TelemetryFailClosed`); (c) the pinned ADOT image still honors
+`AOT_CONFIG_CONTENT` and accepts the `127.0.0.1` receiver bind; (d) the
+fail-closed chain — collector health check goes green at start
+(`/healthcheck` against loopback `:13133`), gateway waits on HEALTHY, and a
+deliberately-broken collector config stops the task; (e) shutdown flush — a
+forced service roll loses no tail-of-window metrics in AMP.
 
 **Log-retention hardening (2026-07-18, operator decision).** Prompted by the
 test-run observation that some CloudWatch logs outlive teardown while others
