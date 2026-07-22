@@ -67,6 +67,7 @@ aws cloudformation deploy \
       "OktaIssuer=${OKTA_ISSUER}" \
       "OktaClientId=${OKTA_CLIENT_ID}" \
       "AllowedEmailDomains=${ALLOWED_EMAIL_DOMAINS}" \
+      "ManagedCliGroups=${MANAGED_CLI_GROUPS:-}" \
       "SessionTtlHours=${SESSION_TTL_HOURS:-1}" \
       "AlbIdleTimeoutSeconds=${ALB_IDLE_TIMEOUT_SECONDS:-900}" \
       "DeregistrationDelaySeconds=${DEREGISTRATION_DELAY_SECONDS:-300}" \

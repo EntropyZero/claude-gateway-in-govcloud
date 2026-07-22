@@ -493,18 +493,22 @@ def build_readme(gateway_url, version, sha256, team, cost_center, bundle_extra_c
         "Cost center:  %s\r\n"
         "claude.exe SHA-256:\r\n  %s\r\n\r\n"
         "To install: double-click install.cmd and follow the prompts.\r\n"
-        "It installs claude.exe to %%USERPROFILE%%\\.local\\bin, verifies the\r\n"
-        "SHA-256 and Anthropic's Authenticode signature, and configures Claude\r\n"
-        "Code to sign in through the gateway with updates disabled.\r\n\r\n"
+        "No administrator rights are needed: it installs claude.exe to\r\n"
+        "%%USERPROFILE%%\\.local\\bin, verifies the SHA-256 and Anthropic's\r\n"
+        "Authenticode signature, and writes your telemetry tags and update\r\n"
+        "lockdown into your user Claude settings.\r\n\r\n"
         "Package contents:\r\n"
         "  - claude.exe            : the Claude Code binary (win32-x64).\r\n"
         "  - Install-ClaudeCode.ps1: the installer (unmodified).\r\n"
         "  - install.cmd           : runs the installer with your options.\r\n"
         "%s"
-        "\r\nAfter installing, open a NEW terminal and run:  claude\r\n"
-        "Verify the gateway certificate fingerprint with your IT team before\r\n"
-        "first login.\r\n"
-        % (version, gateway_url, team, cost_center, sha256, ca_note)
+        "\r\nSign in (one time) after installing:\r\n"
+        "  1. Open a NEW terminal and run:  claude\r\n"
+        "  2. Run /login and choose:  Cloud gateway\r\n"
+        "  3. Paste the gateway URL:  %s\r\n"
+        "Verify the gateway certificate fingerprint with your IT team at the\r\n"
+        "first-connect prompt.\r\n"
+        % (version, gateway_url, team, cost_center, sha256, ca_note, gateway_url)
     )
 
 

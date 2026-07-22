@@ -1,26 +1,33 @@
 <#
 .SYNOPSIS
   Offline installer for Claude Code on Windows - no calls to claude.ai or
-  downloads.claude.ai. Takes an already-downloaded claude.exe (mirrored from
+  downloads.claude.ai, and NO administrator rights required. Takes an
+  already-downloaded claude.exe (mirrored from
   downloads.claude.ai/claude-code-releases/<version>/ and verified against the
   GPG-signed manifest), places it in %USERPROFILE%\.local\bin, and adds that
   directory to the user PATH.
 
 .DESCRIPTION
-  Designed for MDM/SCCM/Intune push or manual use in networks where the
-  public installer's version lookup is blocked. Optionally verifies the
-  binary (SHA-256 from manifest.json and/or the Anthropic Authenticode
-  signature) and writes managed settings so the CLI logs in to your
-  Claude apps gateway and never attempts self-update.
+  Everything this installer does is user-scope by design:
 
-  Works with or without elevation. Everything installs to user scope
-  (%USERPROFILE%\.local\bin + user PATH); managed settings are written to
-  %ProgramFiles%\ClaudeCode\managed-settings.json when elevated
-  (tamper-resistant, recommended for MDM), or to the per-user managed
-  policy source HKCU\SOFTWARE\Policies\ClaudeCode when not. Both are
-  honored by Claude Code as managed settings; the HKCU source is
-  user-writable, so treat it as a convenience default rather than an
-  enforcement channel.
+  - the binary installs to %USERPROFILE%\.local\bin (+ user PATH),
+  - workstation configuration (telemetry attributes, update lockdown,
+    enterprise CA trust) is written as an 'env' block in the USER settings
+    file %USERPROFILE%\.claude\settings.json,
+  - gateway sign-in is interactive: run 'claude', then /login, choose
+    "Cloud gateway", and paste the gateway URL (printed at the end of the
+    install). Central policy is applied by the GATEWAY after login via its
+    /managed/settings endpoint.
+
+  This script deliberately writes NO machine-wide or policy-source settings
+  (no %ProgramFiles%\ClaudeCode\managed-settings.json, no
+  HKx\SOFTWARE\Policies\ClaudeCode): on hardened fleets those locations
+  require administrator rights, and enforcement belongs to an admin channel.
+  If/when the organization wants FORCED gateway login
+  (forceLoginMethod/forceLoginGatewayUrl/requiredMinimumVersion - keys Claude
+  Code honors only from managed sources), push them via GPO/MDM as documented
+  in docs/client-config.md. The two channels compose: this installer for the
+  binary + user config, GPO for enforcement.
 
 .PARAMETER BinaryPath
   Path to the downloaded claude.exe (win32-x64 build from the release bucket).
@@ -30,18 +37,20 @@
   manifest.json). Install aborts on mismatch.
 
 .PARAMETER GatewayUrl
-  Your gateway URL (e.g. https://claude-gateway.example.com). When set, writes
-  forceLoginMethod/forceLoginGatewayUrl into managed settings — the
-  %ProgramFiles% managed-settings.json when elevated, the HKCU policy
-  registry key otherwise. These keys are managed-only and are NOT honored
-  from a user settings.json, which is why the registry source is used.
+  Your gateway URL (e.g. https://claude-gateway.example.com). Printed in the
+  sign-in instructions at the end of the install ('claude' -> /login ->
+  Cloud gateway -> paste this URL). Not written anywhere: the pre-fill/lock
+  keys are managed-only and belong to the GPO/MDM channel
+  (docs/client-config.md).
 
 .PARAMETER DisableUpdates
-  Adds DISABLE_UPDATES=1 and DISABLE_AUTOUPDATER=1 to the managed settings
-  env block. DISABLE_UPDATES blocks every update path - background checks
-  AND manual 'claude update' / 'claude install' - which is what keeps
-  users on the version you distribute. DISABLE_AUTOUPDATER (background
-  check only) is set alongside as defense in depth.
+  Adds DISABLE_UPDATES=1 and DISABLE_AUTOUPDATER=1 to the user settings env
+  block. DISABLE_UPDATES blocks every update path - background checks AND
+  manual 'claude update' / 'claude install' - which is what keeps users on
+  the version you distribute. User-scope is a convenience, not enforcement:
+  the mirror-only network path (downloads.claude.ai unreachable) is the real
+  control, and the gateway can push the same lockdown centrally
+  (MANAGED_CLI_GROUPS in deploy.env).
 
 .PARAMETER CostCenter
   Optional cost-center tag stamped onto all telemetry this workstation
@@ -54,10 +63,6 @@
   pushes the OTLP env vars to every connected client) - these parameters
   only add the grouping attributes.
 
-.PARAMETER RequiredMinimumVersion
-  Managed-settings floor; the CLI refuses to start below it. The Claude apps
-  gateway requires 2.1.195+.
-
 .PARAMETER SignerThumbprint
   Optional SHA-1 thumbprint of Anthropic's Authenticode signing certificate.
   When set, the signer must match it exactly (stronger than the default
@@ -66,20 +71,11 @@
 
 .PARAMETER ExtraCaCertPath
   Optional path to a PEM bundle of your enterprise root/intermediate CAs.
-  Written into the managed env block as NODE_EXTRA_CA_CERTS - the
+  Written into the user settings env block as NODE_EXTRA_CA_CERTS - the
   precompiled claude.exe honors it, covering environments where the binary
   does not consult the Windows certificate store for the gateway's
   enterprise-CA TLS chain. Use a local path that exists on every laptop
   (deploy the PEM alongside the binary), not a UNC path.
-
-.PARAMETER SettingsOnly
-  Write managed settings only - skip binary install, PATH, and smoke test.
-  This is the supported mode for SYSTEM-context pushes (Intune/SCCM device
-  context): a SYSTEM run would otherwise install claude.exe into SYSTEM's
-  own %USERPROFILE% and PATH, where developers never see it. Two-phase
-  rollout: push settings as SYSTEM with -SettingsOnly (lands in
-  %ProgramFiles%, tamper-resistant), and deploy the binary in USER context
-  (Intune "user" install behavior, or manual).
 
 .EXAMPLE
   .\Install-ClaudeCode.ps1 -BinaryPath \\fileserver\software\claude\2.1.207\claude.exe `
@@ -93,10 +89,8 @@ param(
   [switch]$DisableUpdates,
   [ValidatePattern('^[^,\s]*$')][string]$CostCenter,
   [ValidatePattern('^[^,\s]*$')][string]$Team,
-  [string]$RequiredMinimumVersion = '2.1.195',
   [string]$SignerThumbprint,
   [string]$ExtraCaCertPath,
-  [switch]$SettingsOnly,
   [switch]$SkipSignatureCheck
 )
 
@@ -104,28 +98,21 @@ $ErrorActionPreference = 'Stop'
 
 function Write-Step([string]$m) { Write-Host "==> $m" -ForegroundColor Cyan }
 
-# Assemble the managed-settings object (gateway login + update lockdown +
-# telemetry attributes + enterprise CA trust). Pure: returns an ordered
-# hashtable, or $null when there is nothing to write. Kept as a function so
-# it can be unit-tested (see tests/powershell/).
-function Build-ManagedSettings {
+# Assemble the user-scope env configuration (update lockdown + telemetry
+# attributes + enterprise CA trust). Pure: returns an ordered hashtable, or
+# $null when there is nothing to write. These are ordinary env vars, honored
+# from the USER settings file - unlike forceLoginMethod /
+# forceLoginGatewayUrl / requiredMinimumVersion, which Claude Code accepts
+# only from managed sources (GPO/MDM - see docs/client-config.md) and which
+# this installer therefore does not attempt. Kept as a function so it can be
+# unit-tested (see tests/powershell/).
+function Build-UserEnv {
   param(
-    [string]$GatewayUrl,
     [switch]$DisableUpdates,
     [string]$CostCenter,
     [string]$Team,
-    [string]$ExtraCaCertPath,
-    [string]$RequiredMinimumVersion
+    [string]$ExtraCaCertPath
   )
-  if (-not ($GatewayUrl -or $DisableUpdates -or $CostCenter -or $Team -or $ExtraCaCertPath)) {
-    return $null
-  }
-  $settings = [ordered]@{}
-  if ($GatewayUrl) {
-    $settings['forceLoginMethod']     = 'gateway'
-    $settings['forceLoginGatewayUrl'] = $GatewayUrl
-  }
-  if ($RequiredMinimumVersion) { $settings['requiredMinimumVersion'] = $RequiredMinimumVersion }
   $envBlock = [ordered]@{}
   if ($DisableUpdates) {
     # DISABLE_UPDATES blocks ALL update paths (background + manual
@@ -148,65 +135,74 @@ function Build-ManagedSettings {
     # claude.exe honors NODE_EXTRA_CA_CERTS.
     $envBlock['NODE_EXTRA_CA_CERTS'] = $ExtraCaCertPath
   }
-  if ($envBlock.Count -gt 0) { $settings['env'] = $envBlock }
-  return $settings
+  if ($envBlock.Count -eq 0) { return $null }
+  return $envBlock
 }
 
-# Write the managed-settings object to the right source and REPORT the outcome
-# instead of throwing. Elevated -> the machine-wide, tamper-resistant
-# %ProgramFiles%\ClaudeCode\managed-settings.json; otherwise the per-user
-# HKCU\SOFTWARE\Policies\ClaudeCode policy key. On hardened / GPO-managed
-# machines the HKCU\SOFTWARE\Policies subtree is locked to standard users, so
-# that write can fail with "Access is denied" - which must NOT abort an
-# otherwise-successful binary install (the settings step runs last). Returns a
-# result object { Applied; Scope; Location; Error }. Kept as a function so it is
-# unit-testable (see tests/powershell/).
-function Write-ManagedSettings {
+# Merge an env map into %USERPROFILE%\.claude\settings.json (the user's own
+# file - no elevation involved) and REPORT the outcome instead of throwing.
+# Preserves every existing top-level key and every existing env key we are
+# not setting; refuses to overwrite a settings.json it cannot parse (the
+# user's file, possibly hand-edited - never clobber it). Returns a result
+# object { Applied; Location; Error }.
+function Write-UserSettings {
   param(
-    [Parameter(Mandatory)] $Settings,
-    [switch]$Elevated
+    [Parameter(Mandatory)] $EnvMap,
+    [string]$SettingsPath
   )
-  if ($Elevated) {
-    $path = Join-Path 'ProgramFiles-ClaudeCode' 'managed-settings.json'  # placeholder; real path resolved in try
-    try {
-      # Claude Code reads the machine managed-settings file from %ProgramFiles%
-      # \ClaudeCode (admin-write-only, so tamper-resistant). It moved here from
-      # %ProgramData% at v2.1.75; this deployment ships >= 2.1.195, so the old
-      # %ProgramData% path is NOT read - verified against the mirrored binary.
-      $dir  = Join-Path $env:ProgramFiles 'ClaudeCode'
-      $path = Join-Path $dir 'managed-settings.json'
-      New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
-      $Settings | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $path -Encoding UTF8 -ErrorAction Stop
-      return [pscustomobject]@{ Applied = $true; Scope = 'machine'; Location = $path; Error = $null }
-    } catch {
-      $emsg = if ($_.Exception.Message) { $_.Exception.Message } else { "$_" }
-      return [pscustomobject]@{ Applied = $false; Scope = 'machine'; Location = $path; Error = $emsg }
-    }
+  if (-not $SettingsPath) {
+    $SettingsPath = Join-Path (Join-Path $env:USERPROFILE '.claude') 'settings.json'
   }
-
-  $policyKey = 'HKCU:\SOFTWARE\Policies\ClaudeCode'
+  # The .NET write below resolves relative paths against the PROCESS cwd,
+  # not PowerShell's $PWD - anchor explicitly so they can't diverge.
+  if (-not [System.IO.Path]::IsPathRooted($SettingsPath)) {
+    $SettingsPath = Join-Path (Get-Location).Path $SettingsPath
+  }
   try {
-    New-Item -Path $policyKey -Force -ErrorAction Stop | Out-Null
-    # Merge with any existing policy JSON so repeated runs / other tooling
-    # don't lose keys we didn't set this time.
     $merged = [ordered]@{}
-    $prop = Get-ItemProperty -Path $policyKey -Name 'Settings' -ErrorAction SilentlyContinue
-    $existing = if ($prop) { $prop.Settings } else { $null }
-    if ($existing) {
-      try {
-        ($existing | ConvertFrom-Json).PSObject.Properties |
-          ForEach-Object { $merged[$_.Name] = $_.Value }
-      } catch {
-        Write-Warning '    existing Settings value is not valid JSON - replacing it.'
+    if (Test-Path -LiteralPath $SettingsPath -PathType Leaf) {
+      $raw = Get-Content -LiteralPath $SettingsPath -Raw -ErrorAction Stop
+      if ($raw -and $raw.Trim()) {
+        try {
+          ($raw | ConvertFrom-Json -ErrorAction Stop).PSObject.Properties |
+            ForEach-Object { $merged[$_.Name] = $_.Value }
+        } catch {
+          # Never destroy a file we cannot parse - report and let the user fix it.
+          return [pscustomobject]@{ Applied = $false; Location = $SettingsPath;
+            Error = "existing settings.json is not valid JSON - fix or remove it, then re-run ($($_.Exception.Message))" }
+        }
       }
     }
-    foreach ($k in $Settings.Keys) { $merged[$k] = $Settings[$k] }
-    Set-ItemProperty -Path $policyKey -Name 'Settings' -Type String `
-      -Value ($merged | ConvertTo-Json -Depth 4 -Compress) -ErrorAction Stop
-    return [pscustomobject]@{ Applied = $true; Scope = 'user'; Location = $policyKey; Error = $null }
+    # Merge our env keys over the existing env object (if any), preserving
+    # unrelated env vars the user or other tooling set.
+    $envMerged = [ordered]@{}
+    if ($merged.Contains('env') -and $merged['env']) {
+      $merged['env'].PSObject.Properties | ForEach-Object { $envMerged[$_.Name] = $_.Value }
+    }
+    foreach ($k in $EnvMap.Keys) { $envMerged[$k] = $EnvMap[$k] }
+    $merged['env'] = $envMerged
+
+    if ($WhatIfPreference) {
+      # The BOM-less .NET write below does not honor -WhatIf, so skip it
+      # explicitly (mirrors what the file cmdlets would have done).
+      return [pscustomobject]@{ Applied = $true; Location = $SettingsPath; Error = $null }
+    }
+    $dir = Split-Path -Parent $SettingsPath
+    New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
+    # UTF-8 WITHOUT a BOM: on Windows PowerShell 5.1 'Set-Content -Encoding
+    # UTF8' writes a BOM, and Claude Code's JSON reader REJECTS a BOM'd
+    # settings.json (upstream: claude-code#9906, closed not-planned). The
+    # portal's install.cmd runs this script under 5.1, so a BOM here would
+    # silently break every install - and corrupt a previously-working file
+    # claude itself wrote BOM-less.
+    [System.IO.File]::WriteAllText(
+      $SettingsPath,
+      (($merged | ConvertTo-Json -Depth 8) + [Environment]::NewLine),
+      (New-Object System.Text.UTF8Encoding($false)))
+    return [pscustomobject]@{ Applied = $true; Location = $SettingsPath; Error = $null }
   } catch {
     $emsg = if ($_.Exception.Message) { $_.Exception.Message } else { "$_" }
-    return [pscustomobject]@{ Applied = $false; Scope = 'user'; Location = $policyKey; Error = $emsg }
+    return [pscustomobject]@{ Applied = $false; Location = $SettingsPath; Error = $emsg }
   }
 }
 
@@ -217,40 +213,40 @@ if ($env:CLAUDE_INSTALLER_DOTSOURCE) { return }
 # --- 0. Preconditions -------------------------------------------------------
 # A SYSTEM-context run (Intune/SCCM device push) would install the binary
 # into SYSTEM's own profile and PATH - developers would never get claude.exe.
-# SYSTEM is only supported for the settings phase (-SettingsOnly).
+# There is no settings mode to run as SYSTEM either: machine-wide policy is
+# GPO/MDM's job (docs/client-config.md), not this installer's.
 $isSystem = [Security.Principal.WindowsIdentity]::GetCurrent().IsSystem
-if ($isSystem -and -not $SettingsOnly) {
-  throw ('Running as SYSTEM without -SettingsOnly. Push managed settings as SYSTEM with ' +
-         '-SettingsOnly, and deploy the binary in USER context (Intune "user" install ' +
-         'behavior) - a SYSTEM install lands in SYSTEM''s %USERPROFILE%, not the developer''s.')
+if ($isSystem) {
+  throw ('Running as SYSTEM. Deploy the binary in USER context (Intune "user" install ' +
+         'behavior, or the download portal); push forced-login/managed policy via GPO/MDM ' +
+         'instead - see docs/client-config.md.')
 }
 
-if (-not $SettingsOnly) {
-  if (-not $BinaryPath) { throw 'BinaryPath is required (omit it only with -SettingsOnly).' }
-  if (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) {
-    throw "Binary not found: $BinaryPath"
-  }
+if (-not $BinaryPath) { throw 'BinaryPath is required.' }
+if (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) {
+  throw "Binary not found: $BinaryPath"
 }
 if ($ExtraCaCertPath -and -not (Test-Path -LiteralPath $ExtraCaCertPath -PathType Leaf)) {
   throw "ExtraCaCertPath not found: $ExtraCaCertPath"
 }
 
-if (-not $SettingsOnly -and $WhatIfPreference) {
+if ($WhatIfPreference) {
   # Under -WhatIf the file cmdlets below are suppressed, so the staged copy
   # would never exist and verification would die on a missing file. Describe
   # the would-be actions instead and fall through to the settings phase
-  # (whose registry/file cmdlets honor -WhatIf natively).
+  # (whose file cmdlets honor -WhatIf natively).
   Write-Step ("WhatIf: would stage {0} to TEMP, verify SHA-256/Authenticode, install to {1}, and add that directory to the user PATH" -f `
     $BinaryPath, (Join-Path $env:USERPROFILE '.local\bin\claude.exe'))
-} elseif (-not $SettingsOnly) {
+} else {
 
 # Elevated interactive runs (UAC with helpdesk/admin credentials) install
 # into the ELEVATED account's profile - the developer never sees claude.exe.
+# Elevation buys nothing here: everything is user-scope by design.
 $elevatedNow = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
                ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if ($elevatedNow) {
   Write-Warning ("Running elevated: the binary installs into THIS account's profile ({0}) and user PATH. " -f $env:USERPROFILE)
-  Write-Warning 'If these are not the developer''s credentials, run non-elevated as the developer (or use -SettingsOnly for the managed-settings push).'
+  Write-Warning 'If these are not the developer''s credentials, run non-elevated as the developer.'
 }
 
 # --- 1. Stage locally, then verify the LOCAL copy ---------------------------
@@ -324,57 +320,32 @@ if (-not $onPath) {
 # Make it usable in THIS session too:
 if (($env:Path -split ';') -notcontains $installDir) { $env:Path += ";$installDir" }
 
-}  # end -not $SettingsOnly
+}  # end not-WhatIf
 
-# --- 4. Managed settings (gateway login + update lockdown) ------------------
-# Elevated:     %ProgramFiles%\ClaudeCode\managed-settings.json (tamper-resistant)
-# Non-elevated: HKCU\SOFTWARE\Policies\ClaudeCode, REG_SZ value 'Settings'
-#               holding single-line JSON — a per-user managed-settings source
-#               Claude Code honors without elevation. forceLoginMethod /
-#               forceLoginGatewayUrl / requiredMinimumVersion are managed-only
-#               keys, so a plain user settings.json would NOT work here.
-$settings = Build-ManagedSettings -GatewayUrl $GatewayUrl -DisableUpdates:$DisableUpdates `
-  -CostCenter $CostCenter -Team $Team -ExtraCaCertPath $ExtraCaCertPath `
-  -RequiredMinimumVersion $RequiredMinimumVersion
+# --- 4. User-scope configuration (env block in settings.json) ---------------
+# Ordinary env vars only - honored from the user's own settings file, no
+# elevation, no policy keys. Enforcement (forced gateway login, version
+# floor) is deliberately NOT attempted here; it belongs to GPO/MDM
+# (docs/client-config.md) and to the gateway's own /managed/settings push.
+$userEnv = Build-UserEnv -DisableUpdates:$DisableUpdates `
+  -CostCenter $CostCenter -Team $Team -ExtraCaCertPath $ExtraCaCertPath
 $script:SettingsResult = $null
-if ($settings) {
-  $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-             ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-  if ($isAdmin) { Write-Step 'Writing machine-wide managed settings (%ProgramFiles%\ClaudeCode)' }
-  else          { Write-Step 'Writing per-user managed policy (HKCU\SOFTWARE\Policies\ClaudeCode)' }
-
-  $script:SettingsResult = Write-ManagedSettings -Settings $settings -Elevated:$isAdmin
-
+if ($userEnv) {
+  Write-Step 'Writing user configuration (%USERPROFILE%\.claude\settings.json env block)'
+  $script:SettingsResult = Write-UserSettings -EnvMap $userEnv
   if ($script:SettingsResult.Applied) {
-    Write-Host "    managed settings applied ($($script:SettingsResult.Scope)): $($script:SettingsResult.Location)"
-    if ($script:SettingsResult.Scope -eq 'user') {
-      Write-Host '    (per-user policy source; for tamper-resistant machine-wide settings deploy via MDM/Intune elevated.)'
-    }
+    Write-Host "    user settings updated: $($script:SettingsResult.Location)"
   } else {
-    # Non-fatal: the binary is already installed. On hardened / GPO-managed
-    # machines the HKCU\SOFTWARE\Policies subtree is locked to standard users,
-    # so a user-run install cannot write the forced-login policy - it must come
-    # from an administrative channel.
-    Write-Warning "Managed settings were NOT applied ($($script:SettingsResult.Location))."
+    # Non-fatal: the binary is already installed and the gateway pushes
+    # central config after login anyway.
+    Write-Warning "User settings were NOT updated ($($script:SettingsResult.Location))."
     Write-Warning "  Reason: $($script:SettingsResult.Error)"
-    Write-Warning '  On hardened / GPO-managed machines the HKCU\SOFTWARE\Policies subtree is'
-    Write-Warning '  locked to standard users. Deliver the managed settings via MDM/Intune/GPO:'
-    Write-Warning '  push %ProgramFiles%\ClaudeCode\managed-settings.json as SYSTEM, or run this'
-    Write-Warning '  installer elevated / with -SettingsOnly in device context.'
   }
 }
 
-# --- 5. Smoke test -----------------------------------------------------------
-$settingsFailed = ($settings -and -not $script:SettingsResult.Applied)
-if ($SettingsOnly) {
-  # For a settings-only push the settings ARE the deliverable, so a failed
-  # write is a real failure (exit non-zero for the MDM/automation caller).
-  if ($settingsFailed) {
-    Write-Warning 'Settings-only run: managed settings were NOT applied (see above) - nothing durable changed.'
-    exit 1
-  }
-  Write-Host 'Done (settings only). Deploy the binary in user context separately.' -ForegroundColor Green
-} elseif ($WhatIfPreference) {
+# --- 5. Smoke test + sign-in instructions -----------------------------------
+$settingsFailed = ($userEnv -and -not $script:SettingsResult.Applied)
+if ($WhatIfPreference) {
   Write-Host 'Done (WhatIf) - no files or settings were changed.' -ForegroundColor Green
 } else {
   Write-Step 'Verifying installation'
@@ -382,9 +353,15 @@ if ($SettingsOnly) {
   Write-Host "    claude --version -> $version"
   Write-Host ''
   if ($settingsFailed) {
-    Write-Host 'Binary installed, but managed settings were NOT applied (see warning above).' -ForegroundColor Yellow
-    Write-Host 'Have IT deliver the gateway settings via MDM/GPO, then open a NEW terminal and run: claude' -ForegroundColor Yellow
-  } else {
-    Write-Host 'Done. Developer next step: open a NEW terminal and run: claude  (then /login -> Cloud gateway)' -ForegroundColor Green
+    Write-Host 'Binary installed; the user settings update failed (see warning above).' -ForegroundColor Yellow
   }
+  Write-Host 'Done. Sign in to the gateway (one time):' -ForegroundColor Green
+  Write-Host '  1. Open a NEW terminal and run:  claude'
+  Write-Host '  2. Run /login and choose:  Cloud gateway'
+  if ($GatewayUrl) {
+    Write-Host "  3. Paste the gateway URL:  $GatewayUrl"
+  } else {
+    Write-Host '  3. Paste your gateway URL (ask your platform team).'
+  }
+  Write-Host '  Confirm the TLS fingerprint your IT team published when prompted.'
 }

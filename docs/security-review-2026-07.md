@@ -191,6 +191,46 @@ fail-closed chain — collector health check goes green at start
 deliberately-broken collector config stops the task; (e) shutdown flush — a
 forced service roll loses no tail-of-window metrics in AMP.
 
+**No-admin client redesign (2026-07-22, resolves the B4 SYSTEM-context
+contradiction).** The Windows rollout was reworked to a **no-admin default**,
+which retires B4's self-contradiction rather than merely documenting around it.
+`client/Install-ClaudeCode.ps1` is now **entirely user-scope**: it writes the
+binary to `%USERPROFILE%\.local\bin`, adds the user PATH, and writes only an
+`env` block into the **user** settings file `%USERPROFILE%\.claude\settings.json`
+(`DISABLE_UPDATES`/`DISABLE_AUTOUPDATER`, `OTEL_RESOURCE_ATTRIBUTES`,
+`NODE_EXTRA_CA_CERTS`). It has **no settings-push mode at all** — the
+`-SettingsOnly` / `-RequiredMinimumVersion` parameters and every machine/policy
+write (`%ProgramFiles%\ClaudeCode\managed-settings.json`,
+`HKx\SOFTWARE\Policies\ClaudeCode`) are gone, and a SYSTEM-context run is
+refused outright. B4's contradiction (a SYSTEM push installs the binary into
+SYSTEM's own profile while writing machine settings) therefore **cannot arise**:
+there is no push mode, and the only install path is user context. Config now
+arrives on three composable channels:
+
+- **Workstation config** — the user-settings `env` block above (no elevation).
+- **Central config** — the gateway pushes settings to every connected client
+  via `/managed/settings` (as it already does for telemetry); a new
+  `MANAGED_CLI_GROUPS` (`ManagedCliGroups`) knob pushes
+  `DISABLE_UPDATES`/`DISABLE_AUTOUPDATER` to members of the listed Okta groups
+  (requires the groups claim).
+- **Forced login** — `forceLoginMethod` / `forceLoginGatewayUrl` /
+  `requiredMinimumVersion` are managed-only keys, deliberately moved to the
+  **GPO/MDM admin channel** (GPP Registry `REG_SZ` at
+  `HKLM\SOFTWARE\Policies\ClaudeCode` value `Settings`, or a GPP Files copy of
+  `managed-settings.json` to `%ProgramFiles%\ClaudeCode\`). Full AD-admin steps
+  in the new `docs/client-config.md`.
+
+Sign-in is interactive (`claude` → `/login` → "Cloud gateway" → paste URL);
+without forced login the compensations are the network (gateway FQDN only,
+consumer Anthropic endpoints blocked) and the gateway's server-side Okta +
+allowed-email-domain + minimum-client-version (2.1.195+) checks. **Needs
+test-run confirmation:** (a) the interactive Cloud-gateway login flow end to
+end; (b) the gateway `/managed/settings` push, including `MANAGED_CLI_GROUPS`;
+(c) a GPO-delivered `HKLM\SOFTWARE\Policies\ClaudeCode` managed source being
+honored by the CLI (visible via `/status`). Login-picker option, "Gateway URL"
+prompt, and the `%ProgramFiles%` managed path are binary-verified against the
+mirrored 2.1.211 build.
+
 **Log-retention hardening (2026-07-18, operator decision).** Prompted by the
 test-run observation that some CloudWatch logs outlive teardown while others
 do not: (1) **every** `AWS::Logs::LogGroup` in all four templates now carries
@@ -488,6 +528,10 @@ SYSTEM's `%USERPROFILE%\.local\bin` and SYSTEM's PATH — the developer never ge
 `claude.exe`. And SYSTEM traffic isn't carried by the ZPA *user* tunnel, so the
 UNC pull needs a Zscaler **Machine Tunnel**. The per-user install location and
 MDM push need reconciling (user-context deployment, or a two-phase install).
+**Resolved by the 2026-07-22 no-admin redesign** (fix-log entry above): the
+installer is user-scope only with no settings-push mode, so there is no
+SYSTEM-context settings push to contradict; forced login moved to the GPO/MDM
+admin channel (`docs/client-config.md`).
 
 **B5. CLI TLS trust may need `NODE_EXTRA_CA_CERTS`.** The README's prerequisite
 is the enterprise root CA in the Windows cert store, but a Node-based

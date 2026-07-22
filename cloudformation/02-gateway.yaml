@@ -121,6 +121,17 @@ Parameters:
     Type: String
     Description: 'Comma-separated email domains accepted at sign-in (e.g.: example.com, example.gov).'
 
+  ManagedCliGroups:
+    Type: String
+    Default: ''
+    Description: >-
+      Comma-separated Okta group names whose members get update-lockdown pushed
+      to their client via the gateway's /managed/settings (DISABLE_UPDATES=1 +
+      DISABLE_AUTOUPDATER=1 as cli.env). A member of ANY listed group matches.
+      Leave empty to push nothing. Requires the Okta groups claim (same
+      prerequisite as the download portal); group claims require the `groups`
+      scope, which this template enables on the OIDC block only when this is set.
+
   SessionTtlHours:
     Type: Number
     Default: 1
@@ -444,6 +455,7 @@ Conditions:
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
   HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
   HaveTelemetry: !Not [!Equals [!Ref ObservabilityAmpRemoteWriteEndpoint, '']]
+  HaveManagedCli: !Not [!Equals [!Ref ManagedCliGroups, '']]
   # Fail-closed telemetry (AU-5): only meaningful when the sidecar exists.
   WantTelemetryFailClosed: !And
     - !Condition HaveTelemetry
@@ -909,68 +921,82 @@ Resources:
             # the gateway's own ${ENV} expansion sees the literal placeholder.
             - Name: GATEWAY_CONFIG_B64
               Value:
-                Fn::Base64: !Sub |
-                  listen:
-                    host: 0.0.0.0
-                    port: 8080
-                    public_url: https://${GatewayFqdn}
-                    # Serve TLS on the task itself (SC-8) - the ALB
-                    # re-encrypts to the target. Cert/key are generated
-                    # per-task by the entrypoint at these paths.
-                    tls:
-                      cert: /etc/claude/tls/server.crt
-                      key: /etc/claude/tls/server.key
-                    trusted_proxies: ["${VpcCidr}"]
+                # Two-arg !Sub: the config body is the first element; the second
+                # supplies OidcScopesLine, which is the full `scopes:` line ONLY
+                # when ManagedCliGroups is set (HaveManagedCli) and empty
+                # otherwise. Group-keyed managed policies need the `groups` scope,
+                # so the scope is requested precisely when a managed policy will
+                # be pushed - default behavior (no scopes line) is unchanged.
+                Fn::Base64: !Sub
+                  - |
+                    listen:
+                      host: 0.0.0.0
+                      port: 8080
+                      public_url: https://${GatewayFqdn}
+                      # Serve TLS on the task itself (SC-8) - the ALB
+                      # re-encrypts to the target. Cert/key are generated
+                      # per-task by the entrypoint at these paths.
+                      tls:
+                        cert: /etc/claude/tls/server.crt
+                        key: /etc/claude/tls/server.key
+                      trusted_proxies: ["${VpcCidr}"]
 
-                  oidc:
-                    issuer: ${OktaIssuer}
-                    client_id: ${OktaClientId}
-                    client_secret: ${!OIDC_CLIENT_SECRET}
-                    allowed_email_domains: [${AllowedEmailDomains}]
-                    # Okta org authorization server omits email/groups from the
-                    # id_token; harmless when using a custom auth server.
-                    userinfo_fallback: true
-                    # Uncomment to receive Okta group claims for managed.policies:
-                    # scopes: [openid, profile, email, offline_access, groups]
+                    oidc:
+                      issuer: ${OktaIssuer}
+                      client_id: ${OktaClientId}
+                      client_secret: ${!OIDC_CLIENT_SECRET}
+                      allowed_email_domains: [${AllowedEmailDomains}]
+                      # Okta org authorization server omits email/groups from the
+                      # id_token; harmless when using a custom auth server.
+                      userinfo_fallback: true
+                      # Okta group claims for managed.policies require the `groups`
+                      # scope; the OidcScopesLine Sub var renders the full scopes
+                      # line here when HaveManagedCli, and nothing when not.
+                      ${OidcScopesLine}
 
-                  session:
-                    jwt_secret: ${!GATEWAY_JWT_SECRET}
-                    ttl_hours: ${SessionTtlHours}
+                    session:
+                      jwt_secret: ${!GATEWAY_JWT_SECRET}
+                      ttl_hours: ${SessionTtlHours}
 
-                  store:
-                    postgres_url: ${!GATEWAY_POSTGRES_URL}
+                    store:
+                      postgres_url: ${!GATEWAY_POSTGRES_URL}
 
-                  upstreams:
-                    - provider: bedrock
-                      region: ${AWS::Region}
-                      auth: {}   # ECS task role via the default credential chain
+                    upstreams:
+                      - provider: bedrock
+                        region: ${AWS::Region}
+                        auth: {}   # ECS task role via the default credential chain
 
-                  # GovCloud serves Claude through us-gov.* inference profiles.
-                  # If the built-in catalog does not resolve them on your gateway
-                  # version, disable it and map models explicitly. Developers see
-                  # both entries in the Claude Code model picker; the mapping is
-                  # parameterized (OpusModelId/SonnetModelId + Bedrock IDs).
-                  # upstream_model is an OBJECT keyed by the upstream's name -
-                  # the single bedrock upstream above has no `name:`, so it keys
-                  # on its provider string, `bedrock`. A bare string fails schema
-                  # validation ("Expected object, received string").
-                  auto_include_builtin_models: false
-                  models:
-                    - id: ${OpusModelId}
-                      upstream_model:
-                        bedrock: ${OpusBedrockModelId}
-                    - id: ${SonnetModelId}
-                      upstream_model:
-                        bedrock: ${SonnetBedrockModelId}
+                    # GovCloud serves Claude through us-gov.* inference profiles.
+                    # If the built-in catalog does not resolve them on your gateway
+                    # version, disable it and map models explicitly. Developers see
+                    # both entries in the Claude Code model picker; the mapping is
+                    # parameterized (OpusModelId/SonnetModelId + Bedrock IDs).
+                    # upstream_model is an OBJECT keyed by the upstream's name -
+                    # the single bedrock upstream above has no `name:`, so it keys
+                    # on its provider string, `bedrock`. A bare string fails schema
+                    # validation ("Expected object, received string").
+                    auto_include_builtin_models: false
+                    models:
+                      - id: ${OpusModelId}
+                        upstream_model:
+                          bedrock: ${OpusBedrockModelId}
+                      - id: ${SonnetModelId}
+                        upstream_model:
+                          bedrock: ${SonnetBedrockModelId}
 
-                  # Per-IdP-group guardrails and managed settings:
-                  # managed:
-                  #   policies:
-                  #     - match: { groups: [claude-developers] }
-                  #       availableModels: [claude-opus-4-8, claude-sonnet-4-5]
-                  #       cli:
-                  #         env: { DISABLE_UPDATES: "1" }
-                  #         skipWebFetchPreflight: true
+                    # Per-IdP-group guardrails and managed settings - this is the
+                    # documented shape that GATEWAY_MANAGED_B64 renders below:
+                    # managed:
+                    #   policies:
+                    #     - match: { groups: [claude-developers] }
+                    #       availableModels: [claude-opus-4-8, claude-sonnet-4-5]
+                    #       cli:
+                    #         env: { DISABLE_UPDATES: "1" }
+                    #         skipWebFetchPreflight: true
+                  - OidcScopesLine: !If
+                      - HaveManagedCli
+                      - 'scopes: [openid, profile, email, offline_access, groups]'
+                      - ''
             # Telemetry forwarding, appended to gateway.yaml by the
             # entrypoint when set. The gateway also auto-pushes the OTLP
             # enable env vars to every connected client via /managed/settings.
@@ -991,6 +1017,26 @@ Resources:
                             metrics: true
                             logs: ${LogsFlag}
                     - LogsFlag: !Ref ForwardActivityLogs
+              - !Ref 'AWS::NoValue'
+            # Managed CLI lockdown, appended to gateway.yaml by the entrypoint
+            # when set. The gateway pushes this to every connected client via
+            # /managed/settings (the same mechanism the telemetry block relies
+            # on): members of ANY listed Okta group get update auto-updates
+            # disabled centrally - the server-side twin of the installer's
+            # -DisableUpdates. `[${ManagedCliGroups}]` expands the comma-list
+            # into a YAML flow sequence, the same trick allowed_email_domains
+            # uses above. Schema is the documented example above; doc-verified,
+            # pending test-run confirmation.
+            - !If
+              - HaveManagedCli
+              - Name: GATEWAY_MANAGED_B64
+                Value:
+                  Fn::Base64: !Sub |
+                    managed:
+                      policies:
+                        - match: { groups: [${ManagedCliGroups}] }
+                          cli:
+                            env: { DISABLE_UPDATES: "1", DISABLE_AUTOUPDATER: "1" }
               - !Ref 'AWS::NoValue'
           Secrets:
             - Name: OIDC_CLIENT_SECRET
@@ -1683,7 +1729,11 @@ Outputs:
       (ZIA SSL-inspection exemption, or ZPA app segment for the FQDN).
     Value: !GetAtt LoadBalancer.DNSName
   GatewayUrl:
-    Description: Value for forceLoginGatewayUrl in managed-settings.json and the Okta redirect host.
+    Description: >-
+      The gateway's public FQDN - the Okta redirect host, and the URL developers
+      paste at interactive /login. When an org enforces forced login via GPO/MDM
+      it is the forceLoginGatewayUrl value (see docs/client-config.md); the
+      installer itself does not write it.
     Value: !Sub 'https://${GatewayFqdn}'
   OktaRedirectUri:
     Value: !Sub 'https://${GatewayFqdn}/oauth/callback'

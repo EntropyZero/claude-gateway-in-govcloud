@@ -64,7 +64,7 @@ secrets, security-group, and encryption inventories — see
 | `tests/lambda` | pytest + moto | The db-admin rotation/bootstrap Lambda: alternating-user secret flip, rotation idempotency, error propagation, CFN-response handling |
 | `tests/bash` | bats | `scripts/common.sh` helpers — `proxy_port` (incl. credentialed URLs), `set_env_var`, `require_vars` |
 | `tests/cfn` | cfn-lint + cfn-guard | Template validity, and **policy gates** encoding the security rules — CMK on log groups & secrets, explicit SG egress, HTTPS target-group health-check protocol, RDS/S3/ALB posture |
-| `tests/powershell` | Pester | `Install-ClaudeCode.ps1` managed-settings assembly (gateway login, update lockdown, telemetry attrs, `NODE_EXTRA_CA_CERTS`) |
+| `tests/powershell` | Pester | `Install-ClaudeCode.ps1` user-config assembly + merge into `%USERPROFILE%\.claude\settings.json` (update lockdown, telemetry attrs, `NODE_EXTRA_CA_CERTS`; BOM-less write; never emits managed-only keys) |
 
 Install the toolchain (all standard): `pip install -r tests/requirements-test.txt`,
 `npm i -g bats`, cfn-guard via its
@@ -161,19 +161,28 @@ powershell -ExecutionPolicy Bypass -File .\client\Install-ClaudeCode.ps1 `
 The script installs to `%USERPROFILE%\.local\bin\claude.exe` (the same path
 the native installer manages), adds that directory to the user PATH, and
 verifies the Anthropic Authenticode signature and your supplied SHA-256 — all
-at user scope. Managed settings (`forceLoginMethod`, `forceLoginGatewayUrl`,
-`requiredMinimumVersion` — 2.1.195 floor, the gateway minimum — and the update
-lockdown: `DISABLE_UPDATES=1`, which blocks all update paths including manual
+at **user scope, no admin rights**. Workstation configuration — the update
+lockdown (`DISABLE_UPDATES=1`, which blocks all update paths including manual
 `claude update`/`claude install`, plus `DISABLE_AUTOUPDATER=1` as defense in
-depth) are written to whichever managed-settings source the run can reach:
+depth), the `team`/`cost_center` telemetry attributes, and any
+`NODE_EXTRA_CA_CERTS` — is merged as an `env` block into the developer's own
+`%USERPROFILE%\.claude\settings.json` (preserving existing keys, refusing to
+clobber an unparseable file). The installer writes **no** machine-wide or
+policy-source settings.
 
-- **Elevated / MDM push** → `%ProgramData%\ClaudeCode\managed-settings.json` —
-  tamper-resistant; use this for fleet enforcement.
-- **Non-admin run** → `HKCU\SOFTWARE\Policies\ClaudeCode` (`Settings` REG_SZ,
-  single-line JSON) — a per-user managed-settings source Claude Code honors
-  without elevation. It's user-writable, so it configures rather than
-  enforces; these keys are managed-only and would **not** work from a plain
-  user `settings.json`.
+Gateway sign-in is interactive and needs no settings: after install, open a
+new terminal → `claude` → `/login` → **Cloud gateway** → paste the gateway
+URL (the installer prints it) → Okta SSO → confirm the published TLS
+fingerprint. If the organization wants **forced** gateway login or a version
+floor (`forceLoginMethod`, `forceLoginGatewayUrl`, `requiredMinimumVersion` —
+keys Claude Code honors only from a managed source), deliver them by GPO/MDM;
+`docs/client-config.md` documents both mechanisms (GPP Registry to
+`HKLM\SOFTWARE\Policies\ClaudeCode`, or `managed-settings.json` to
+`%ProgramFiles%\ClaudeCode\`). The user-scope lockdown here is a convenience,
+not enforcement — the mirror-only network path (no reachable
+`downloads.claude.ai`) and the gateway's server-side controls are the real
+guardrails, and the gateway can additionally push the lockdown centrally
+(`MANAGED_CLI_GROUPS`).
 
 Ensure your enterprise root CA is in the Windows certificate store (on
 domain-joined machines it normally already is, via GPO — no admin needed at
@@ -185,7 +194,7 @@ CA trust. The distributed `claude.exe` is the **precompiled native build**
 (no Node/npm distribution), and it **consults the OS certificate store
 automatically** (Node ≥ 22.15, which the pinned version bundles) — so the
 Windows-store CA is trusted with no extra config. The `-ExtraCaCertPath`
-fallback (which sets `NODE_EXTRA_CA_CERTS` in managed settings to a PEM you
+fallback (which sets `NODE_EXTRA_CA_CERTS` in the user settings to a PEM you
 deploy alongside the binary) is for cases where the store isn't consulted —
 e.g. an older pinned CLI, or when you'd rather ship the trust anchor with
 the installer than rely on the store. `CLAUDE_CODE_CERT_STORE`
@@ -194,19 +203,23 @@ need to narrow it. Verify once against the pinned version on a test laptop.
 (Do **not** use `NODE_TLS_REJECT_UNAUTHORIZED=0` — it disables validation
 entirely and defeats the point.)
 
-**Intune/SCCM device-context (SYSTEM) pushes need two phases.** A SYSTEM run
-would install `claude.exe` into SYSTEM's own `%USERPROFILE%` and PATH — the
-developer never gets it — so the installer refuses a SYSTEM binary install.
-Push managed settings as SYSTEM with `-SettingsOnly` (they land in
-`%ProgramData%`, tamper-resistant), and deploy the binary in **user**
-context (Intune "user" install behavior, or the manual command above). Note
-SYSTEM traffic is not carried by the ZPA user tunnel: if the SYSTEM phase
-pulls from the UNC share, that host needs a Zscaler **Machine Tunnel** or a
-non-ZPA path to the file server.
+**The installer is user-scope only — SYSTEM/device-context runs are
+refused.** A SYSTEM run would install `claude.exe` into SYSTEM's own
+`%USERPROFILE%` and PATH — the developer never gets it. Deploy the binary in
+**user** context (Intune "user" install behavior, the download portal ZIP, or
+the manual command above). The installer writes workstation config (update
+lockdown, telemetry tags, CA trust) into the user's own
+`%USERPROFILE%\.claude\settings.json`; it has no settings-push mode. If the
+organization wants **forced** gateway login or a version floor
+(managed-only keys), deliver them by GPO/MDM — see
+`docs/client-config.md` for both mechanisms (GPP Registry to
+`HKLM\SOFTWARE\Policies\ClaudeCode`, or `managed-settings.json` to
+`%ProgramFiles%\ClaudeCode\`).
 
 Developer experience after install: new terminal → `claude` → `/login` →
-**Cloud gateway** (URL pre-filled) → Okta SSO → compare the fingerprint
-prompt against the published value.
+**Cloud gateway** → paste the gateway URL (printed by the installer; a GPO
+`forceLoginGatewayUrl` pre-fills it instead) → Okta SSO → compare the
+fingerprint prompt against the published value.
 
 ## Model configuration
 
@@ -360,11 +373,14 @@ attribution comes from Okta (JWT `user.id`/`user.email` on every request
 and telemetry export) — treat that as the audit key, not IPs.
 
 **7. UNC file share needs its own app segment.** The offline installer
-pulls `claude.exe` from a file share; over ZPA that's a separate app
-segment (fileserver FQDN, TCP 445) — address it by FQDN (synthetic-IP +
-Kerberos SPN behavior), distinct from the gateway's 443 segment. SYSTEM
-context pulls additionally need a Machine Tunnel (see the Windows rollout
-section).
+pulls `claude.exe` from a file share (user context); over ZPA that's a
+separate app segment (fileserver FQDN, TCP 445) — address it by FQDN
+(synthetic-IP + Kerberos SPN behavior), distinct from the gateway's 443
+segment. If you use the GPO path for forced login (`docs/client-config.md`),
+a GPP **Files** copy of `managed-settings.json` runs in **machine** context,
+which is not carried by the ZPA *user* tunnel — that pull needs a Zscaler
+Machine Tunnel or a non-ZPA path to the share (a GPP **Registry** item
+avoids the file pull entirely).
 
 **8. Admin console exposure.** `/grafana` rides the same ALB and
 `CLIENT_INGRESS_CIDR` as developer traffic, so every developer can reach
@@ -520,7 +536,7 @@ obvious alternative?" question — revisit only with a concrete reason.
 | Store | RDS PostgreSQL 16 with `rds.force_ssl` + **pgaudit**, client-side `sslmode=verify-full` (RDS CA bundle baked into the image), and SG-to-SG access only. The gateway connects as a **least-privilege application user** (created by a bootstrap Lambda; owns only the gateway schema via a shared owner role — no CREATEROLE, no `rds_superuser`, cannot tamper with pgaudit). The RDS master secret is **break-glass only**, still auto-rotated by RDS. Multi-AZ is on by default because a lost store loses spend tracking and caps, not just re-logins. |
 | Encryption at rest | One customer-managed KMS key (created by the DB stack or bring-your-own via `KMS_KEY_ARN`) covers RDS, all secrets, CloudWatch log groups, the activity archive, and AMP. Exception: the ALB access-logs bucket stays SSE-S3 — ELB log delivery does not support KMS. |
 | Network egress | Every security group has explicit egress (no default allow-all); all VPC endpoints carry resource policies scoped to this account/workload. Bedrock IAM + endpoint policies allow exactly the two configured models. |
-| Client install | Fully offline: pinned binary mirrored from Anthropic's release bucket and verified before distribution; managed settings force gateway login, pin a minimum version, and block **all** update paths (`DISABLE_UPDATES=1`). Works for non-admin users (per-user install + HKCU managed-policy source). |
+| Client install | Fully offline: pinned binary mirrored from Anthropic's release bucket and verified before distribution. **No admin rights**: per-user install + user-scope config (update lockdown `DISABLE_UPDATES=1`, telemetry tags) in `%USERPROFILE%\.claude\settings.json`; interactive gateway `/login`. Forced login / version floor, when wanted, are delivered by GPO/MDM (`docs/client-config.md`); the gateway can also push the lockdown centrally (`MANAGED_CLI_GROUPS`). |
 | Guardrails | IAM task role **and** VPC-endpoint policy are independently scoped to **exactly the two configured models** (inference-profile IDs + their derived foundation-model IDs, from the `*_BEDROCK_MODEL_ID` parameters) — two separate controls on what the org credential can invoke, both following the parameters. |
 
 ### Gotchas — do not re-litigate
@@ -648,7 +664,9 @@ and then works through:
 5. Configure the Zscaler bypass (ZIA exemption or ZPA app segment) for the
    gateway FQDN.
 6. Dry-run `Install-ClaudeCode.ps1` on a test laptop **as a non-admin user**;
-   confirm with `claude doctor` that the managed settings are picked up.
+   confirm `claude --version` runs and that `/login` → Cloud gateway connects.
+   (`claude /status` shows the active setting sources — user settings here,
+   plus any GPO-delivered managed source if you configured one.)
 7. Publish the certificate's SHA-256 fingerprint to developers (first-connect
    pinning prompt).
 8. Optional: deploy the observability stack (mirror the ADOT collector
