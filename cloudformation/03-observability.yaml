@@ -629,6 +629,24 @@ Resources:
                   - aps:GetLabels
                   - aps:GetMetricMetadata
                 Resource: !GetAtt Workspace.Arn
+              # Querying a CMK-encrypted workspace requires the CALLER to hold
+              # kms:Decrypt on the CMK - the aps.<region> service grant covers
+              # AMP's internal use but the query-time decrypt is charged to
+              # this task role. Without it, every /api/v1/* call returns a
+              # server-side 403 and Grafana shows "Unable to retrieve metric
+              # names / unable to connect to your data source" (test-run
+              # lesson). Only when the workspace is CMK-encrypted; scoped to
+              # aps via kms:ViaService.
+              - !If
+                - WantAmpCmk
+                - Effect: Allow
+                  Action: kms:Decrypt
+                  Resource:
+                    Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+                  Condition:
+                    StringEquals:
+                      kms:ViaService: !Sub 'aps.${AWS::Region}.amazonaws.com'
+                - !Ref 'AWS::NoValue'
 
   GrafanaTaskDefinition:
     Type: AWS::ECS::TaskDefinition

@@ -55,9 +55,27 @@ default** (`TelemetryFailClosed=true`, AU-5): it is Essential + health-checked
 and the gateway waits on it HEALTHY, so the gateway will not serve traffic while
 telemetry/audit processing is down; a **missing-telemetry alarm** (03,
 `AWS/Usage ResourceCount`/`IngestionRate` on the workspace) is the end-to-end
-backstop that container health cannot provide. Sidecar end-to-end (metrics
-landing in AMP; the fail-closed chain; the alarm's OK→ALARM→OK) NEEDS LIVE
-VERIFICATION.
+backstop that container health cannot provide.
+
+**Fixed + LIVE-PROVEN 2026-07-23 (deployed): two AMP telemetry bugs.**
+(1) *CMK-encrypted AMP needs caller-side KMS.* Grafana ("Unable to retrieve
+metric names") and the sidecar (missing-telemetry ALARM) both got a server-side
+403. Querying a CMK-encrypted AMP workspace needs the *caller* to hold
+`kms:Decrypt`; remote-write needs `kms:GenerateDataKey` — the `aps.<region>`
+service grant covers only AMP's internal use, not the data-plane API. Fix
+(deployed): 03's `GrafanaTaskRole` gains `kms:Decrypt` (gated on `WantAmpCmk`),
+02's `telemetry-sidecar` role gains `kms:GenerateDataKey`, both scoped
+`kms:ViaService=aps.${AWS::Region}.amazonaws.com`. (2) *Alarm false-fired on
+idle fleet.* Client usage metrics are push-only/bursty, so an idle fleet
+produced no ingestion → `missing-telemetry` (TreatMissingData: breaching) would
+fire every quiet period. Fix (deployed): the sidecar's `prometheus` receiver
+now scrapes the collector's own `otelcol_*` self-metrics (loopback :8888) every
+30 s into the remote_write pipeline — a **continuous heartbeat** that also
+exercises the full SigV4+KMS+AMP write path (genuine AU-5 liveness). **Proven:**
+AMP now holds 20 `otelcol_*` series; alarm is OK. Still pending: fail-closed
+stop-on-broken-config, shutdown flush, alarm OK→ALARM→OK cycle (now cheap to
+test — stop the sidecar). Full proof in the 2026-07-23 fix-log entries of
+`docs/security-review-2026-07.md`.
 
 ## Repo map
 

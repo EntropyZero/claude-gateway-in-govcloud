@@ -181,7 +181,11 @@ Mechanics:
   the literal `http://localhost:4318`, which is exempt from the gateway's
   HTTPS requirement). The gateway **task role** becomes the telemetry writer —
   `aps:RemoteWrite` on the workspace + the activity log-group `logs:` actions
-  (least privilege; no KMS statements, log-group encryption is service-side).
+  + `kms:GenerateDataKey` on the CMK (least privilege). **Correction
+  (2026-07-23):** the original "no KMS statements" claim here was wrong for
+  AMP — the log-group encryption *is* service-side, but remote-write to a
+  CMK-encrypted workspace needs caller-side `kms:GenerateDataKey`. See the
+  2026-07-23 fix-log entry below.
   No new SG ingress for 4317/4318 anywhere (loopback only).
 - **Failure posture (added 2026-07-22, user decision): fail-closed by
   default — AU-5.** `TelemetryFailClosed=true` (default) marks the sidecar
@@ -211,6 +215,22 @@ Mechanics:
   failure — and, deliberately, a full gateway outage (no tasks = no
   telemetry; triage order in O&M runbook 9). Known benign firing: the window
   between the 03 deploy and the telemetry-enabled 02 re-run.
+  **Heartbeat makes `breaching` correct on a bursty fleet (added 2026-07-23).**
+  The client usage/cost metrics are *push-only* and *bursty* — the gateway
+  forwards them only when a developer is actively using Claude Code, so an idle
+  fleet (nights/weekends) emits nothing and `IngestionRate` would go to zero →
+  the alarm would false-fire every quiet period, indistinguishable from a
+  broken pipeline. Fixed by adding a **continuous heartbeat**: the sidecar's
+  `prometheus` receiver scrapes the collector's own `otelcol_*` self-telemetry
+  (loopback `127.0.0.1:8888`, always served) every 30 s into the same
+  remote_write pipeline (02). AMP ingestion is therefore continuous whenever
+  the pipeline is healthy, so `IngestionRate ≤ 0` now unambiguously means
+  **pipeline broken**, not **fleet idle** — and the heartbeat traverses the
+  full SigV4 + `kms:GenerateDataKey` + AMP write path, so it is a genuine AU-5
+  liveness probe, not just a container-health echo. Loopback only (no new
+  network/SG surface). **LIVE-PROVEN 2026-07-23:** after deploy, AMP holds 20
+  `otelcol_*` series (incl. `otelcol_exporter_sent_metric_points`) and the
+  alarm is OK.
   **Scope — metrics only.** This alarm watches the AMP *metrics* pipeline
   (`AWS/Usage IngestionRate`); the AI-activity **audit** stream is a
   separate collector pipeline (`awscloudwatchlogs` → activity log group →
@@ -229,11 +249,11 @@ Mechanics:
   **Surfaced limits (not buried):** (1) it detects *total cessation*, not
   degradation — `Average ≤ 0` resets on any non-zero minute, so a pipeline
   dropping 99% of samples does not fire (a floor, not a coverage guarantee);
-  (2) it is a *fail-loud* control while unverified — if the AMP vended-metric
-  dimensions or GovCloud emission differ from the doc-implied values, the
-  metric is permanently missing → `breaching` → the alarm sits in ALARM (or
-  flaps), so **verify with `list-metrics` before wiring it to a paging
-  topic** (live-verification item (f)); (3) compound-config hazard — with
+  (2) ~~it is a *fail-loud* control while unverified~~ **[RESOLVED 2026-07-23]**
+  — the `AWS/Usage IngestionRate` vended metric *does* emit in GovCloud
+  `us-gov-west-1` (confirmed: live datapoints observed and the alarm went OK
+  once ingestion started); the earlier "verify with `list-metrics` before
+  paging" caveat is discharged; (3) compound-config hazard — with
   `TelemetryFailClosed=false` AND (`AlarmSnsTopicArn` unset **or**
   `MissingTelemetryAlarmMinutes=0`) there is *no* task-stop and *no*
   notification on telemetry loss: total silent loss, an AU-5/AU-12 hole. Do
@@ -266,22 +286,69 @@ This **supersedes** findings D6 (collector single-task telemetry blackout — th
 sidecar shares the gateway's lifecycle and `RestartPolicy` self-heals, so
 `CollectorDesiredCount` is gone) and D8 (fresh-deploy circular order — there is
 no forward URL to pre-set), and moots the collector-specific parts of A2/A5.
-**Needs live verification:** (a) sidecar end-to-end — metrics landing in AMP
-through the loopback receiver; (b) container `RestartPolicy`
-(`ContainerRestartPolicy`) support in GovCloud `us-gov-west-1` + CloudFormation
-(fallback: `Essential: true` is now the default anyway via
-`TelemetryFailClosed`); (c) the pinned ADOT image still honors
-`AOT_CONFIG_CONTENT` and accepts the `127.0.0.1` receiver bind; (d) the
-fail-closed chain — collector health check goes green at start
-(`/healthcheck` against loopback `:13133`), gateway waits on HEALTHY, and a
-deliberately-broken collector config stops the task; (e) shutdown flush — a
-forced service roll loses no tail-of-window metrics in AMP; (f) the AMP
-vended metrics (`AWS/Usage` / `Service=Prometheus`) actually emit in
-GovCloud `us-gov-west-1` — doc-implied only
-(`aws cloudwatch list-metrics --namespace AWS/Usage --dimensions
-Name=Service,Value=Prometheus` after telemetry flows); (g) the
-missing-telemetry alarm transitions OK → ALARM when the sidecar is stopped
-and back to OK when it resumes.
+**Live verification (updated 2026-07-23).** **PROVEN:** (a) sidecar
+end-to-end — the heartbeat's `otelcol_*` metrics land in AMP through the
+loopback pipeline (20 series incl. `otelcol_exporter_sent_metric_points`),
+confirming the full OTLP-receiver→SigV4→`kms:GenerateDataKey`→AMP write path;
+(c) the pinned ADOT `v0.43.0` image honors `AOT_CONFIG_CONTENT`, accepts the
+`127.0.0.1` OTLP + prometheus-receiver binds, and the `prometheus` receiver is
+present (scrape job `otel-collector-self` started clean); (f) the `AWS/Usage`
+`IngestionRate` vended metric emits in GovCloud `us-gov-west-1` (live
+datapoints; alarm cleared to OK on ingestion). **STILL PENDING:** (b) container
+`RestartPolicy` (`ContainerRestartPolicy`) support in GovCloud + CloudFormation
+(fallback: `Essential: true` is the default anyway via `TelemetryFailClosed`);
+(d) the fail-closed chain — collector health goes green at start
+(`/healthcheck` on loopback `:13133`) [health-ready observed], gateway waits on
+HEALTHY, and a deliberately-broken collector config stops the task [the
+stop-on-broken-config half is unexercised]; (e) shutdown flush — a forced
+service roll loses no tail-of-window metrics in AMP; (g) the missing-telemetry
+alarm OK → ALARM when the sidecar is stopped and back to OK when it resumes
+(now cheap to test end-to-end with the always-on heartbeat: stop the sidecar →
+ingestion stops → ALARM; restart → OK).
+
+**CMK-encrypted AMP needs caller-side KMS on both the read and write paths
+(2026-07-23, LIVE-PROVEN).** First live use of the observability stack surfaced
+a hard bug: **Grafana** showed *"Unable to retrieve metric names / We are unable
+to connect to your data source (Unknown error)"* and the usage dashboard was
+empty, while the `missing-telemetry` alarm sat in ALARM. Root cause — both
+proven against the live workspace (`ws-8eccdd93…`, CMK `23bef21f…`) with scoped
+throwaway test roles:
+- The AMP workspace is **CMK-encrypted**. Both the Grafana task role
+  (`aps:QueryMetrics/GetSeries/GetLabels/GetMetricMetadata`) and the gateway
+  task role (`aps:RemoteWrite`) were correct on the `aps:` side, and the
+  interface-endpoint policy and network path were correct (a correctly-signed
+  call returns 200; connectivity was never the issue — the Grafana 403s were
+  `status_source=server`, 13–100 ms).
+- **AMP charges the KMS crypto op to the *calling* principal, not (only) to the
+  `aps.<region>` service grant.** The service grant (`AMP-Workspace-Grant-1`,
+  ops `Decrypt`/`GenerateDataKey`, present on the key) covers AMP's *internal*
+  ingestion, but the data-plane API requires the caller to hold KMS directly.
+  Proven by mirroring each task role in a throwaway role:
+  - read, `aps`-only → **403** `not authorized to perform kms:Decrypt on
+    <CMK>`; add `kms:Decrypt` (scoped `kms:ViaService=aps.us-gov-west-1…`) →
+    **200**.
+  - write, `aps:RemoteWrite`-only → **403** `not authorized to perform
+    kms:GenerateDataKey on <CMK>`; add `kms:GenerateDataKey` (same
+    `kms:ViaService` scope) → **200**.
+  - CloudTrail confirms AMP's own KMS calls are `userIdentity.type=AWSService`,
+    `invokedBy=aps.amazonaws.com` — the grant path is real but does *not*
+    substitute for caller IAM on the query/write APIs.
+  This also confirms the AWS "encryption at rest" doc's Grafana step ("add the
+  workspace's IAM role as a **key user**") is *mandatory*, not optional, for a
+  CMK workspace — and symmetrically for the writer.
+Fix applied (both templates):
+- **02-gateway.yaml** `telemetry-sidecar` policy gains `kms:GenerateDataKey` on
+  the imported CMK, `Condition kms:ViaService=aps.${AWS::Region}.amazonaws.com`.
+- **03-observability.yaml** `GrafanaTaskRole` `amp-query` policy gains
+  `kms:Decrypt` on the imported CMK with the same `kms:ViaService` scope,
+  gated on `WantAmpCmk` (an AWS-owned-key workspace needs no caller KMS).
+Diagnostic side effects, all reverted: sample metrics (`claude_debug_sample`,
+`claude_rwtest`) were remote-written to prove the data plane (they age out per
+retention); a bastion→`aps-workspaces`-endpoint SG rule and a throwaway test
+IAM role were created for the proof and **removed**. **Needs live verification
+(h):** the deployed `02` re-run + `03` update actually flip Grafana to serving
+data and the sidecar to landing metrics (alarm OK), rather than the scoped-role
+proxy proof.
 
 **No-admin client redesign (2026-07-22, resolves the B4 SYSTEM-context
 contradiction).** The Windows rollout was reworked to a **no-admin default**,

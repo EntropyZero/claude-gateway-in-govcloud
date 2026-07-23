@@ -817,8 +817,15 @@ Resources:
                     - Model: !Join ['', !Split ['us-gov.', !Ref SonnetBedrockModelId]]
         # Telemetry sidecar credentials (only when enabled): the co-resident
         # collector runs under THIS task role and writes to AMP + the activity
-        # log group. Ported from 03's former CollectorTaskRole. No KMS
-        # statement needed - the log group's CMK encryption is service-side.
+        # log group. Ported from 03's former CollectorTaskRole. The activity
+        # log group's CMK encryption is service-side (no caller KMS needed),
+        # but AMP remote_write is NOT: writing to a CMK-encrypted workspace
+        # requires the CALLER to hold kms:GenerateDataKey on the CMK. The
+        # aps.<region> service grant on the key covers ingestion but the
+        # data-plane write is charged to this task role - without it,
+        # remote_write returns 403 "not authorized to perform
+        # kms:GenerateDataKey" and NO metrics ever land (test-run lesson).
+        # Scoped to aps via kms:ViaService.
         - !If
           - HaveTelemetry
           - PolicyName: telemetry-sidecar
@@ -829,6 +836,14 @@ Resources:
                   Effect: Allow
                   Action: aps:RemoteWrite
                   Resource: !Ref ObservabilityAmpWorkspaceArn
+                - Sid: AmpRemoteWriteKms
+                  Effect: Allow
+                  Action: kms:GenerateDataKey
+                  Resource:
+                    Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+                  Condition:
+                    StringEquals:
+                      kms:ViaService: !Sub 'aps.${AWS::Region}.amazonaws.com'
                 - Sid: ActivityLogWrite
                   Effect: Allow
                   Action:
@@ -1152,6 +1167,25 @@ Resources:
                           endpoint: 127.0.0.1:4317
                         http:
                           endpoint: 127.0.0.1:4318
+                    # Heartbeat: scrape the collector's OWN internal telemetry
+                    # (otelcol_* on loopback :8888, always served) into the
+                    # remote_write pipeline. This makes AMP ingestion CONTINUOUS
+                    # regardless of client activity, so the missing-telemetry
+                    # alarm (03: AWS/Usage IngestionRate <= 0, breaching) means
+                    # "pipeline broken", NOT "fleet idle" - an idle fleet emits
+                    # no client metrics, and without this the alarm false-fires
+                    # every quiet period (night/weekend). It also exercises the
+                    # full write path end-to-end (SigV4 + kms:GenerateDataKey +
+                    # AMP), so it is a genuine AU-5 liveness control, not just a
+                    # container-health signal. Loopback only - no new network
+                    # surface. 30s scrape >> the 60s alarm period.
+                    prometheus:
+                      config:
+                        scrape_configs:
+                          - job_name: otel-collector-self
+                            scrape_interval: 30s
+                            static_configs:
+                              - targets: ['127.0.0.1:8888']
                   processors:
                     attributes/cardinality:
                       actions:
@@ -1181,7 +1215,10 @@ Resources:
                     extensions: [sigv4auth, health_check]
                     pipelines:
                       metrics:
-                        receivers: [otlp]
+                        # otlp = client usage/cost metrics (bursty, only on
+                        # active use); prometheus = collector self-metrics
+                        # (continuous heartbeat, see the receiver comment).
+                        receivers: [otlp, prometheus]
                         processors: [attributes/cardinality, batch]
                         exporters: [prometheusremotewrite]
                       logs:
