@@ -14,10 +14,15 @@
   - workstation configuration (telemetry attributes, update lockdown,
     enterprise CA trust) is written as an 'env' block in the USER settings
     file %USERPROFILE%\.claude\settings.json,
-  - gateway sign-in is interactive: run 'claude', then /login, choose
-    "Cloud gateway", and paste the gateway URL (printed at the end of the
-    install). Central policy is applied by the GATEWAY after login via its
-    /managed/settings endpoint.
+  - gateway sign-in requires an admin-delivered managed policy
+    (forceLoginMethod:"gateway" + forceLoginGatewayUrl). Claude Code offers the
+    "Cloud gateway" login ONLY from a managed source (HKLM policy or a machine
+    managed-settings.json) - never from user settings - so this installer does
+    NOT write it. Deliver it by GPO/MDM (docs/ad-request-email.md) or self-serve
+    with local admin (docs/client-config.md). With it present, 'claude' opens
+    the locked, pre-filled gateway login (no menu, no URL to type; press Enter
+    to connect) for a one-time Okta sign-in. Central runtime policy is still
+    applied by the GATEWAY after login via its /managed/settings endpoint.
 
   This script deliberately writes NO machine-wide or policy-source settings
   (no %ProgramFiles%\ClaudeCode\managed-settings.json, no
@@ -355,13 +360,24 @@ if ($WhatIfPreference) {
   if ($settingsFailed) {
     Write-Host 'Binary installed; the user settings update failed (see warning above).' -ForegroundColor Yellow
   }
-  Write-Host 'Done. Sign in to the gateway (one time):' -ForegroundColor Green
-  Write-Host '  1. Open a NEW terminal and run:  claude'
-  Write-Host '  2. Run /login and choose:  Cloud gateway'
+  Write-Host 'Done. Binary installed (user scope, no admin).' -ForegroundColor Green
+  Write-Host ''
+  Write-Host 'Gateway sign-in needs an admin-delivered policy setting.' -ForegroundColor Yellow
+  Write-Host '  Claude Code only offers the "Cloud gateway" login when forceLoginMethod'
+  Write-Host '  and forceLoginGatewayUrl are set in a MANAGED source (HKLM policy or a'
+  Write-Host '  machine managed-settings.json) - by design it will NOT appear in /login'
+  Write-Host '  otherwise. Your IT team delivers this by GPO/MDM; see docs/client-config.md'
+  Write-Host '  and docs/ad-request-email.md.'
   if ($GatewayUrl) {
-    Write-Host "  3. Paste the gateway URL:  $GatewayUrl"
-  } else {
-    Write-Host '  3. Paste your gateway URL (ask your platform team).'
+    Write-Host ''
+    Write-Host 'If you have LOCAL ADMIN on this machine, set it yourself once (elevated):'
+    Write-Host "  New-Item -Path 'HKLM:\SOFTWARE\Policies\ClaudeCode' -Force | Out-Null"
+    $json = '{"forceLoginMethod":"gateway","forceLoginGatewayUrl":"' + $GatewayUrl + '"}'
+    Write-Host "  Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\ClaudeCode' -Name Settings -Type String -Value '$json'"
   }
-  Write-Host '  Confirm the TLS fingerprint your IT team published when prompted.'
+  Write-Host ''
+  Write-Host 'Once the policy is present: open a NEW terminal and run  claude  - it'
+  Write-Host 'opens the pre-filled gateway login (no menu, no URL to type; press Enter'
+  Write-Host 'to connect), then your browser for a one-time Okta sign-in. Confirm the'
+  Write-Host 'TLS fingerprint your IT team published at the first-connect prompt.'
 }

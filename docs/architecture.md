@@ -58,8 +58,9 @@ Key boundary statements for the reviewer:
   Egress rides TGW central NAT or the mandated corporate proxy, port-scoped
   by security groups.
 - **Client fleet never contacts Anthropic:** binaries are mirrored,
-  checksum- and GPG-verified, and distributed from an internal share; all
-  update paths are disabled by managed settings.
+  checksum- and GPG-verified, and distributed from an internal share; update
+  paths are disabled via the installer's user settings (and optionally the
+  gateway's central push), and the mirror-only network path is the backstop.
 
 ---
 

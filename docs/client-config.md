@@ -1,11 +1,14 @@
 # Client configuration & enforcement model
 
-How Claude Code is configured on developer laptops, and how gateway-only use is
-enforced — under a **no-admin default**. The Windows rollout
-(`client/Install-ClaudeCode.ps1`, the download portal ZIP) installs and
-configures entirely in user scope; nothing it does needs administrator rights.
-Where an organization wants *forced* gateway login, that is delivered through
-an admin channel (GPO/MDM), documented in full below.
+How Claude Code is configured on developer laptops. The Windows rollout
+(`client/Install-ClaudeCode.ps1`, the download portal ZIP) installs the binary
+and writes workstation config **entirely in user scope** — no admin rights.
+**Gateway login, however, requires one admin-delivered managed setting**:
+Claude Code only offers the "Cloud gateway" login when it is present, by
+Anthropic's design (§1.2). That setting is delivered by GPO/MDM (the AD request
+is [`ad-request-email.md`](ad-request-email.md)) or self-served by a developer
+with local admin. So the model is *no-admin install + one required managed
+policy for login* — see §2.
 
 This is an operations how-to (like [`test-run-runbook.md`](test-run-runbook.md))
 and is deliberately **not** part of the PDF review package. The ConOps
@@ -36,11 +39,18 @@ Per the repo honesty rule (`.claude/rules/process.md`), claims here are tagged:
 
 ---
 
-## 1. The no-admin default
+## 1. The no-admin binary install and user config
 
-Every workstation-side action is user-scope. No installer step writes a
+Every *installer* action is user-scope: the binary, the user PATH, and a small
+`env` block in the developer's own settings file. No installer step writes a
 machine-wide or policy-source setting, and a SYSTEM-context run is refused
 outright (`client/Install-ClaudeCode.ps1` preconditions).
+
+**Gateway login is the exception and it is not negotiable:** it requires one
+admin-delivered managed setting (§1.2, §2). So the model is *no-admin install +
+one small managed policy for login* — not fully admin-free. The managed setting
+is static (one gateway URL) and set once, by GPO/MDM for a locked-down fleet or
+self-served by a developer who has local admin on their own machine.
 
 ### 1.1 What the installer / portal ZIP does
 
@@ -70,27 +80,49 @@ These are ordinary environment variables, honored from the user settings file �
 `%ProgramFiles%\ClaudeCode\managed-settings.json` and never touches
 `HKx\SOFTWARE\Policies\ClaudeCode`.
 
-### 1.2 The one-time sign-in flow
+### 1.2 The sign-in flow — requires the managed policy (§2)
 
-Gateway sign-in is **interactive and needs no settings** [BINARY-VERIFIED for
-the picker/prompt; NEEDS TEST-RUN CONFIRMATION for the live round-trip]. Both
-the installer and the portal ZIP `README.txt` print these three steps:
+**Gateway sign-in is not available from user scope.** Claude Code offers the
+"Cloud gateway" login *only* when `forceLoginMethod: "gateway"` and
+`forceLoginGatewayUrl` are present in an **admin-controlled managed source**
+(§2). This is Anthropic's deliberate design — so a user can never be socially
+engineered into typing a hostile gateway URL that harvests their corporate SSO.
+Without the managed policy, `/login` shows the standard account picker with **no
+gateway option at all** — there is nothing for the developer to select, and no
+place to type a URL.
+
+- [DOC-VERIFIED] Anthropic docs: *"Without this, `/login` shows the standard
+  account picker with no gateway option."*
+- [BINARY-VERIFIED] The picker has no selectable gateway entry; the binary
+  comment reads *`forceLoginMethod: "gateway"` "so users never type the URL"*;
+  and a user-level `forceLoginMethod:"gateway"` in `~/.claude/settings.json` is
+  explicitly ignored (honored only from source types `hklm`/`plist`/`file`/`helper`).
+
+**With the managed policy in place** (delivered by GPO/MDM, or self-served on a
+machine where the developer has local admin — §2), the experience is
+**choice-free**:
 
 1. Open a **new** terminal and run `claude`.
-2. Run `/login` and choose **"Cloud gateway"**.
-3. Paste the **gateway URL** (e.g. `https://claude-gateway.example.com`) when
-   prompted.
+2. Claude Code opens directly on the gateway login: the method is **locked** to
+   gateway and the URL is **pre-filled** — no menu to pick, no URL to type; the
+   developer just **presses Enter** to connect [BINARY-VERIFIED:
+   `gatewayScreenLocked`; the binary describes `forceLoginGatewayUrl` as
+   "pre-fill and auto-connect", and Anthropic's docs describe the observable
+   step as opening the pre-filled screen and pressing Enter].
+3. The browser opens for a **one-time Okta SSO** (+MFA). That is the *only* real
+   interactive step; the issued token persists (with refresh). A later re-login
+   after expiry runs `/login`, still forced to gateway (again no choice).
 
 At first connect Claude Code validates the ALB certificate chain and then pins
 the leaf's SHA-256 fingerprint (**trust-on-first-use**, per hostname); the
-developer confirms it against the fingerprint IT published. This is why TLS
+developer confirms it against the fingerprint IT published — which is why TLS
 inspection must not sit in front of the gateway FQDN
 ([`networking-request-email.md`](networking-request-email.md) §3).
 
-No `forceLoginMethod` / `forceLoginGatewayUrl` is written to make this happen —
-those keys only *pre-fill and auto-connect* the URL and are managed-only
-(§2). The interactive flow is the no-admin default; the forced flow is the
-opt-in admin-channel variant.
+So the managed setting is **not optional**: it is what makes the gateway login
+exist *and* makes it one-touch. The AD/GPO request for it is
+[`ad-request-email.md`](ad-request-email.md). [NEEDS TEST-RUN CONFIRMATION for
+the live Okta round-trip.]
 
 ### 1.3 What the gateway pushes centrally
 
@@ -112,42 +144,48 @@ telemetry config only.
 Central push is a per-connected-client server-side control; it does **not**
 require or imply any admin rights on the laptop.
 
-### 1.4 Why no admin is needed — old managed-settings key → no-admin replacement
+### 1.4 Which settings are user-scope, and which must be managed
 
-The previous rollout wrote a machine-wide `managed-settings.json`. Every key it
-carried now has a user-scope replacement or a server-side / network
-compensation, which is why the installer no longer needs elevation:
+The previous rollout wrote a machine-wide `managed-settings.json`. Most of what
+it carried now lives in the user settings file or is compensated server-side —
+**but the two login keys genuinely cannot** and must come from a managed source:
 
-| Old managed-settings key | What it did | No-admin replacement / compensation |
+| Old managed-settings key | What it did | Where it lives now |
 |---|---|---|
-| `forceLoginMethod: "gateway"` | Force the CLI onto gateway login | Interactive `/login` → "Cloud gateway" (§1.2); the **network blocks consumer `claude.ai`/Anthropic endpoints**, so clients can only reach the gateway FQDN. Hard enforcement → GPO/MDM (§2) |
-| `forceLoginGatewayUrl` | Pre-fill + auto-connect the URL | Developer pastes the URL once (printed by the installer and the portal ZIP). Forced pre-fill → GPO/MDM (§2) |
-| `requiredMinimumVersion` | Refuse to start below a version floor | The **gateway enforces a minimum client version (2.1.195+) server-side**; the mirror-only network path pins the distributed build. Client-side hard floor → GPO/MDM (§2) |
+| `forceLoginMethod: "gateway"` | Make the CLI offer/use gateway login | **Managed source only (§1.2, §2) — no user-scope substitute exists.** Without it, `/login` has no gateway option at all. The network also blocks consumer `claude.ai`/Anthropic endpoints, but that does not create the login option; only the managed key does. |
+| `forceLoginGatewayUrl` | Pre-fill the URL on the login screen (press Enter to connect) | **Managed source only (§2).** There is no user-facing way to type a gateway URL — by design. |
+| `requiredMinimumVersion` | Refuse to start below a version floor | The **gateway enforces a minimum client version (2.1.195+) server-side**, and the mirror-only network path pins the distributed build; a *client-side* hard floor is managed-only (§2, optional). |
 | `env.DISABLE_UPDATES` / `env.DISABLE_AUTOUPDATER` | Lock auto-update | Written to the **user** settings `env` block by the installer; the gateway can also push it centrally via `/managed/settings` (`MANAGED_CLI_GROUPS`, §1.3); the mirror-only network path is the real control |
 | `env.OTEL_RESOURCE_ATTRIBUTES` (`team` / `cost_center`) | Telemetry grouping | User settings `env` block (`-Team` / `-CostCenter`) |
 | `env.NODE_EXTRA_CA_CERTS` | Enterprise CA trust | User settings `env` block (`-ExtraCaCertPath`) |
 | (Okta auth, allowed email domains) | Who may use the gateway | **Gateway enforces Okta authentication + allowed email domains server-side** — never a client setting |
 
-The residual gap versus the old model is a *client-side hard lock* on login
-method and version floor. Without forced login, that gap is covered by two
-compensations working together: the **network** admits only the gateway FQDN
-(consumer endpoints blocked), and the **gateway** rejects unauthenticated,
-wrong-domain, or below-minimum-version clients server-side. When an
-organization needs the hard client-side lock on top of those, it uses the
-admin channel below.
+So the model is **no-admin binary + user config, plus one required managed
+setting for login.** The network (only the gateway FQDN is reachable) and the
+gateway (rejects unauthenticated / wrong-domain / below-min-version clients)
+are compensations that *harden* the deployment, but they do **not** substitute
+for the login key — the "Cloud gateway" option simply does not exist on a
+client without it. The admin channel below is therefore required, not optional.
 
 ---
 
-## 2. The GPO/MDM path for forced login (admin channel)
+## 2. The managed-settings path for gateway login (required)
 
-When the organization wants **enforced gateway-only login** — the CLI itself
-refusing any other login method, auto-connecting the gateway URL, and refusing
-to start below a version floor — those settings are delivered as **managed
-settings** through Group Policy (or an equivalent MDM configuration profile),
-not by the user-run installer. `forceLoginMethod`, `forceLoginGatewayUrl`, and
-`requiredMinimumVersion` are keys Claude Code honors **only from a managed
-source** [DOC-VERIFIED], and a managed source **overrides user and project
-settings** — so a developer cannot edit their way around them.
+**This is the required path for gateway login, not an optional "enforcement"
+add-on.** Claude Code only exposes the "Cloud gateway" login when
+`forceLoginMethod: "gateway"` and `forceLoginGatewayUrl` are present in a
+**managed source**; delivering them also locks the method and pre-fills the URL
+so the developer just signs in (§1.2). `forceLoginMethod`, `forceLoginGatewayUrl`,
+and the optional `requiredMinimumVersion` are honored **only from a managed
+source** [DOC-VERIFIED + BINARY-VERIFIED], and a managed source **overrides user
+and project settings** — so a developer cannot edit their way around them
+(nor edit their way *into* the gateway login without one).
+
+Deliver them by **Group Policy / MDM** for a locked-down fleet (the AD request
+is [`ad-request-email.md`](ad-request-email.md)), or self-serve them once on a
+machine where the developer has **local admin**. The core value is the same
+small JSON either way (the two login keys; `parentSettingsBehavior` is an
+optional third — §2.1). Two interchangeable mechanisms follow.
 
 The managed-settings JSON to deliver (single object, one line for the registry
 value):
@@ -219,16 +257,22 @@ custom profile / script) that writes the same file to
 `HKLM\SOFTWARE\Policies\ClaudeCode`. Deliver it in **device** context, not user
 context.
 
-### 2.3 Why not `HKCU\SOFTWARE\Policies\ClaudeCode`
+### 2.3 Why `HKCU\SOFTWARE\Policies\ClaudeCode` is not a no-admin backdoor
 
-Claude Code also treats `HKCU\SOFTWARE\Policies\ClaudeCode` as a managed source
-[DOC-VERIFIED], and a per-user policy value would not need admin rights to
-write in principle. It is **not** used here because on hardened fleets the
-`Policies` subtree is **GPO-locked / ACL-restricted** (STIG/CIS baselines deny
-standard users write access to `...\Policies\...` even under HKCU), so a
-user-run install cannot reliably write it — which is exactly why the installer
-no longer attempts any policy-source write and leaves enforcement to the
-machine-scope channels above.
+Anthropic's settings docs list `HKCU\SOFTWARE\Policies\ClaudeCode` as a real
+managed source (lowest policy priority) [DOC-VERIFIED], and a non-admin can
+write their own HKCU hive — so it's fair to ask whether a developer could
+self-serve the gateway login there without admin. **They cannot, for the login
+keys specifically:** the 2.1.211 binary honors `forceLoginMethod` /
+`forceLoginGatewayUrl` only from source types `helper` / `plist` / `hklm` /
+`file` — **`hklm` but not `hkcu`** [BINARY-VERIFIED: the source-gate function].
+So even on a machine where the `Policies` subtree is *not* ACL-locked, a
+user-written HKCU policy value is ignored for these keys. (On hardened fleets
+the `Policies` subtree is additionally GPO-locked / ACL-restricted under
+STIG/CIS baselines, so a non-admin can't write it at all.) This
+login-keys-rejected-from-HKCU behavior is security-critical — **[NEEDS TEST-RUN
+CONFIRMATION on the exact deployed binary version]**, since it is stricter than
+the general source precedence the public docs describe.
 
 ### 2.4 Upgrading from an earlier installer — clear stale managed settings
 
@@ -270,20 +314,21 @@ from the managed layer confirms the lock is in force.
 
 ---
 
-## 3. Summary — two composable channels
+## 3. Summary — three channels
 
 - **Installer + user settings (no admin):** the binary, PATH, telemetry tags,
-  update lockdown, and enterprise CA trust — everything a developer needs to
-  install and sign in interactively. This is the default and covers the whole
-  fleet with zero elevation.
+  update lockdown, and enterprise CA trust — everything except login, entirely
+  in user scope for the whole fleet with zero elevation.
+- **Managed settings for login (admin — REQUIRED):** `forceLoginMethod:"gateway"`
+  + `forceLoginGatewayUrl` (optionally `requiredMinimumVersion`), delivered by
+  GPO/MDM ([`ad-request-email.md`](ad-request-email.md)) or self-served with
+  local admin. Without this the gateway login does not exist on the client; with
+  it, login is method-locked and URL-prefilled (§1.2). This is the one part that
+  is not admin-free.
 - **Gateway `/managed/settings` (server-side):** central telemetry config for
   every connected client, plus optional update lockdown for named Okta groups
   (`MANAGED_CLI_GROUPS`).
-- **GPO/MDM managed settings (admin channel, opt-in):** forced gateway login,
-  auto-connect URL, and a client-side version floor, when the organization
-  wants a hard lock beyond the network + gateway server-side controls.
 
-The channels compose cleanly: the installer never contends with the admin
-channel because it writes no policy source, and the gateway push and GPO
-managed settings target different keys (central telemetry/update lockdown vs.
-forced-login enforcement).
+The channels compose cleanly and target different keys: the installer writes no
+policy source, the managed-settings channel owns forced login, and the gateway
+push owns central telemetry/update lockdown.

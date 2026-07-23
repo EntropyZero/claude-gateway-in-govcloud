@@ -89,6 +89,17 @@ Legend: ☐ = do it · 🔎 = checkpoint, confirm before moving on.
   **empty** for now; `deploy-observability.sh` fills them from stack 03's
   outputs, and the 02 re-run attaches the collector sidecar with them.
 
+**Client login (test laptop)**
+- ☐ Plan to seed the managed login setting **before** the §9 developer-login
+  test: the **Cloud gateway** login path appears only when
+  `forceLoginMethod: "gateway"` (+ `forceLoginGatewayUrl`) is present in a
+  **managed source** (HKLM / `%ProgramFiles%\ClaudeCode\managed-settings.json`),
+  never from user settings ([BINARY-VERIFIED]). On a test laptop a one-time
+  **elevated** command is the quickest unblock (the exact one-liner is in §9);
+  a real fleet gets it by GPO/MDM ([`client-config.md`](client-config.md),
+  [`ad-request-email.md`](ad-request-email.md)). The **binary install itself
+  stays no-admin** — only this login config needs the managed entry.
+
 **GPG decision for the image mirror** (the mirror now fails closed)
 - ☐ Either put Anthropic's release-signing key on the host and
   `export ANTHROPIC_GPG_KEY=/path/to/key`, **or** decide to accept TLS-only
@@ -370,9 +381,25 @@ the obs stack exists and keeps the AMP params set.)
 ## 9. End-to-end validation checklist
 
 - ☐ **Gateway health**: `verify-gateway.sh` all green; targets healthy.
-- ☐ **Developer login**: on a test laptop (or any host on the ingress CIDR),
-  `claude` → `/login` → **Cloud gateway** → Okta SSO → fingerprint matches
-  the published value → a prompt returns a Bedrock completion.
+- ☐ **Developer login**: the gateway login path appears **only** when the
+  managed setting `forceLoginMethod: "gateway"` (+ `forceLoginGatewayUrl`) is
+  present in a **managed source** (HKLM or
+  `%ProgramFiles%\ClaudeCode\managed-settings.json`) — it is **not** a
+  user-selectable option and is **not** honored from user settings/HKCU
+  ([BINARY-VERIFIED]; see [`client-config.md`](client-config.md),
+  [`ad-request-email.md`](ad-request-email.md)). On the test laptop the quickest
+  unblock is a **one-time elevated** command to seed the HKLM value (a real
+  fleet gets it by GPO/MDM), then run `claude` non-elevated:
+  ```powershell
+  # elevated (Administrator) PowerShell, once, on the test laptop:
+  New-Item -Path 'HKLM:\SOFTWARE\Policies\ClaudeCode' -Force | Out-Null
+  Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\ClaudeCode' -Name Settings `
+    -Value '{"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<FQDN>"}'
+  ```
+  With it in place, `claude` **auto-drives to the locked gateway login** (no
+  picker, URL pre-filled) → **one-time Okta SSO** → fingerprint matches the
+  published value → a prompt returns a Bedrock completion.
+  **[NEEDS TEST-RUN CONFIRMATION]** for the live round-trip.
 - ☐ **App DB user in use, not master**: the running task authenticates as
   `gateway_app*` (check `/ecs/<prefix>` logs for a clean DB connect; the
   execution role has no access to the master secret).

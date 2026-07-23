@@ -46,9 +46,11 @@ laptops without a public internet dependency on the AI provider.
 - An **offline Windows client rollout**: a mirrored, integrity-verified
   `claude` binary and a **no-admin, user-scope installer** — it writes the
   binary and a user-settings `env` block (telemetry tags, update lockdown, CA
-  trust) and needs no elevation; forced gateway login, when wanted, is a
-  separate GPO/MDM admin channel (`client/mirror-claude-release.sh`,
-  `client/Install-ClaudeCode.ps1`; [`client-config.md`](client-config.md)).
+  trust) and needs no elevation. The gateway **login** requires a managed
+  setting (`forceLoginMethod: "gateway"` + `forceLoginGatewayUrl`) that Claude
+  Code honors only from a managed source, delivered by a separate GPO/MDM
+  channel (`client/mirror-claude-release.sh`, `client/Install-ClaudeCode.ps1`;
+  [`client-config.md`](client-config.md), [`ad-request-email.md`](ad-request-email.md)).
 - An **optional usage/cost observability stack**: Amazon Managed Prometheus
   (AMP) and a self-hosted Grafana behind the same ALB and IdP
   (`cloudformation/03-observability.yaml`). Usage metrics reach AMP through an
@@ -128,11 +130,14 @@ holds the RDS master credential.
   entirely user-scope install to the per-user profile
   (`client/Install-ClaudeCode.ps1`; the installer refuses a SYSTEM-context run
   and writes no machine/policy settings — only a user-settings `env` block).
-  Forced gateway login, when the org wants it, is delivered separately by
-  GPO/MDM ([`client-config.md`](client-config.md)).
-- Authenticate interactively through **Okta SSO** at first `/login` and receive
-  a gateway session (`cloudformation/02-gateway.yaml` `oidc:` and `session:`
-  blocks).
+- Reach the gateway login through the **required managed setting**
+  (`forceLoginMethod: "gateway"` + `forceLoginGatewayUrl`) — Claude Code offers
+  no user-selectable gateway option, so this setting must be delivered by
+  GPO/MDM (or self-served with local admin) before the developer can sign in
+  ([`client-config.md`](client-config.md), [`ad-request-email.md`](ad-request-email.md)).
+  With it in place, `claude` auto-drives to the locked gateway login; the
+  developer completes a **one-time Okta SSO** and receives a gateway session
+  (`cloudformation/02-gateway.yaml` `oidc:` and `session:` blocks).
 - Are gated at sign-in by **allowed email domain**
   (`allowed_email_domains` in `cloudformation/02-gateway.yaml`, from the
   `ALLOWED_EMAIL_DOMAINS` parameter). Okta **group** claims are available but
@@ -276,13 +281,17 @@ flow through the fielded system and cites the file that implements it.
    Either way, the installer places the binary in the per-user profile
    **without admin rights** and writes a **user-settings `env` block** that
    locks down auto-updates (`DISABLE_UPDATES=1`, `DISABLE_AUTOUPDATER=1`) and
-   stamps telemetry tags; the developer points the CLI at the gateway
-   interactively at first `/login` (step 2 below), and the gateway pushes central
-   config after login via `/managed/settings`. Forced gateway-only login, when
-   the org wants a client-side lock, is delivered by GPO/MDM, not this installer
-   (`client/Install-ClaudeCode.ps1`; [`client-config.md`](client-config.md)).
-2. **First login (Okta OIDC).** The developer runs `claude`, chooses the cloud
-   gateway login, and is taken through the Okta authorization-code flow (PKCE,
+   stamps telemetry tags. The **gateway login itself requires a managed
+   setting** (`forceLoginMethod: "gateway"` + `forceLoginGatewayUrl`) that this
+   installer does **not** write — Claude Code honors those keys only from a
+   managed source, so they are delivered by GPO/MDM (or self-served with local
+   admin) before first login (`client/Install-ClaudeCode.ps1`;
+   [`client-config.md`](client-config.md), [`ad-request-email.md`](ad-request-email.md)).
+   After login the gateway pushes central config via `/managed/settings`.
+2. **First login (Okta OIDC).** With the managed setting present the developer
+   runs `claude`; the login screen is **locked to gateway** with the URL
+   **pre-filled** (no picker, no URL typing — press Enter to connect), and the
+   developer is taken through a one-time Okta authorization-code flow (PKCE,
    org authorization server). On success the gateway issues a session JWT that
    carries the Okta identity. The full sequence is diagrammed in
    `architecture.md` §3.

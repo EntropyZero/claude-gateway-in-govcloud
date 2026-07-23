@@ -502,12 +502,14 @@ def build_readme(gateway_url, version, sha256, team, cost_center, bundle_extra_c
         "  - Install-ClaudeCode.ps1: the installer (unmodified).\r\n"
         "  - install.cmd           : runs the installer with your options.\r\n"
         "%s"
-        "\r\nSign in (one time) after installing:\r\n"
-        "  1. Open a NEW terminal and run:  claude\r\n"
-        "  2. Run /login and choose:  Cloud gateway\r\n"
-        "  3. Paste the gateway URL:  %s\r\n"
-        "Verify the gateway certificate fingerprint with your IT team at the\r\n"
-        "first-connect prompt.\r\n"
+        "\r\nSigning in to the gateway:\r\n"
+        "  Gateway login needs a one-time policy setting from your IT team,\r\n"
+        "  delivered by group policy / MDM - the 'Cloud gateway' login does\r\n"
+        "  not appear without it. (Gateway URL, for reference: %s)\r\n"
+        "  Once that policy is in place: open a NEW terminal and run  claude .\r\n"
+        "  It opens the pre-filled gateway login (no menu, no URL to type; press\r\n"
+        "  Enter to connect), then your browser for a one-time sign-in. Confirm\r\n"
+        "  the gateway certificate fingerprint with IT at the first-connect prompt.\r\n"
         % (version, gateway_url, team, cost_center, sha256, ca_note, gateway_url)
     )
 

@@ -115,6 +115,50 @@ own Lambda, with the service roll built into the rotation itself; the
 master secret became break-glass and its rotation affects no running
 task. See the C-batch header below for the item-by-item mapping.
 
+**Client gateway-login model corrected (2026-07-22).** The earlier "no-admin
+client redesign" (fix-log entry below) carried a **wrong assumption**: that a
+developer could run `claude` → `/login` → pick **Cloud gateway** with **no**
+managed settings. That is **false**. Verified against Anthropic's official docs
+**and** the mirrored 2.1.211 binary [BINARY-VERIFIED]:
+
+- The **Cloud gateway** login path does **not appear** in `/login` at all
+  unless `forceLoginMethod: "gateway"` (+ `forceLoginGatewayUrl`) is present in
+  a **managed** settings source. Anthropic docs: *"Without this, /login shows
+  the standard account picker with no gateway option."* Binary design comment:
+  `forceLoginMethod: "gateway"` *"so users never type the URL."* There is **no**
+  user-selectable gateway option and **no** way for a user to type a gateway URL
+  (deliberate anti-phishing design — an arbitrary user-typed gateway URL would
+  let an attacker harvest corporate SSO).
+- Those keys are honored **only** from a managed source: Windows
+  `HKLM\SOFTWARE\Policies\ClaudeCode` (REG_SZ value `Settings` = one-line JSON)
+  or `%ProgramFiles%\ClaudeCode\managed-settings.json` (BOM-less; moved from
+  `%ProgramData%` at v2.1.75); macOS plist; Linux
+  `/etc/claude-code/managed-settings.json`. **Never** from user `settings.json`
+  or HKCU — a user-level `forceLoginMethod:"gateway"` is explicitly nulled by
+  the binary (accepted source types: helper/plist/hklm/file only). [DOC-VERIFIED]
+- With the managed keys set, the login method is **forced** and the screen is
+  **locked to gateway** (no picker), the URL is **pre-filled** (press Enter to
+  connect), and the developer's only interactive step is a **one-time Okta SSO** (+MFA);
+  the token persists with refresh. A later expiry re-login runs `/login`, still
+  forced to gateway. [BINARY-VERIFIED]
+- **Consequence:** a fully no-admin *interactive* gateway login is **not
+  possible** by design. The requirement is a managed-source entry: a developer
+  **with local admin** can self-serve it once on their own box; a locked-down
+  non-admin fleet needs it pushed by GPO/MDM. The **binary install itself stays
+  no-admin** — only the login *config* needs the managed setting. (The only
+  genuinely user-scope alternative is headless mode —
+  `CLAUDE_CODE_USE_GATEWAY=1` + `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` —
+  but it needs a pre-obtained token, not interactive login; impractical for
+  normal devs.)
+
+Remediation applied: the installer's printed instructions and the client docs
+were corrected; a new AD/GPO request template `docs/ad-request-email.md` (create
+the GPO that delivers the managed setting) was added; `docs/client-config.md`
+was rewritten; README, ConOps §3.1/§5.1, O&M runbooks 5–6, and the test-run
+runbook's login steps were aligned to "gateway login **requires** the managed
+setting." The live forced-login round-trip on a real laptop is **[NEEDS
+TEST-RUN CONFIRMATION]**.
+
 **OTLP collector → localhost sidecar (2026-07-22, closes C2 by hop
 elimination).** The first live telemetry attempt disproved the documented C2
 posture: the Claude apps gateway **refuses** a non-HTTPS `telemetry.forward_to`
@@ -268,16 +312,22 @@ arrives on three composable channels:
   `managed-settings.json` to `%ProgramFiles%\ClaudeCode\`). Full AD-admin steps
   in the new `docs/client-config.md`.
 
-Sign-in is interactive (`claude` → `/login` → "Cloud gateway" → paste URL);
-without forced login the compensations are the network (gateway FQDN only,
-consumer Anthropic endpoints blocked) and the gateway's server-side Okta +
-allowed-email-domain + minimum-client-version (2.1.195+) checks. **Needs
-test-run confirmation:** (a) the interactive Cloud-gateway login flow end to
-end; (b) the gateway `/managed/settings` push, including `MANAGED_CLI_GROUPS`;
-(c) a GPO-delivered `HKLM\SOFTWARE\Policies\ClaudeCode` managed source being
-honored by the CLI (visible via `/status`). Login-picker option, "Gateway URL"
-prompt, and the `%ProgramFiles%` managed path are binary-verified against the
-mirrored 2.1.211 build.
+**CORRECTION (2026-07-22, see the top fix-log entry):** the claim that sign-in
+is a no-settings interactive flow (`claude` → `/login` → "Cloud gateway" → paste
+URL) was **wrong**. The **Cloud gateway** login path appears **only** when the
+managed keys `forceLoginMethod: "gateway"` (+ `forceLoginGatewayUrl`) are
+present in a managed source; there is no user-selectable gateway option and no
+user URL prompt, and the keys are never honored from user settings/HKCU
+[BINARY-VERIFIED]. So the **forced-login channel is not optional** for gateway
+sign-in — it is the *only* way in. The gateway's server-side compensations
+(network to the gateway FQDN only, consumer Anthropic endpoints blocked, Okta +
+allowed-email-domain + minimum-client-version 2.1.195+ checks) still apply on
+top. **Needs test-run confirmation:** (a) the forced Cloud-gateway login flow
+end to end; (b) the gateway `/managed/settings` push, including
+`MANAGED_CLI_GROUPS`; (c) a GPO-delivered `HKLM\SOFTWARE\Policies\ClaudeCode`
+managed source being honored by the CLI (visible via `/status`). The
+method-locked login UX, URL pre-fill, and the `%ProgramFiles%` managed path are
+binary-verified against the mirrored 2.1.211 build.
 
 **Log-retention hardening (2026-07-18, operator decision).** Prompted by the
 test-run observation that some CloudWatch logs outlive teardown while others

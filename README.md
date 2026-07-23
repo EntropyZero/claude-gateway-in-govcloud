@@ -170,16 +170,29 @@ depth), the `team`/`cost_center` telemetry attributes, and any
 clobber an unparseable file). The installer writes **no** machine-wide or
 policy-source settings.
 
-Gateway sign-in is interactive and needs no settings: after install, open a
-new terminal → `claude` → `/login` → **Cloud gateway** → paste the gateway
-URL (the installer prints it) → Okta SSO → confirm the published TLS
-fingerprint. If the organization wants **forced** gateway login or a version
-floor (`forceLoginMethod`, `forceLoginGatewayUrl`, `requiredMinimumVersion` —
-keys Claude Code honors only from a managed source), deliver them by GPO/MDM;
-`docs/client-config.md` documents both mechanisms (GPP Registry to
-`HKLM\SOFTWARE\Policies\ClaudeCode`, or `managed-settings.json` to
-`%ProgramFiles%\ClaudeCode\`). The user-scope lockdown here is a convenience,
-not enforcement — the mirror-only network path (no reachable
+Gateway sign-in **requires one managed setting** — it is not a user-selectable
+option. Claude Code shows the **Cloud gateway** login path only when
+`forceLoginMethod: "gateway"` (+ `forceLoginGatewayUrl`) is present in a
+**managed** settings source; without it `/login` shows the standard account
+picker with **no gateway option and no way for a user to type a gateway URL**
+(a deliberate anti-phishing design — an arbitrary user-typed gateway URL would
+let an attacker harvest corporate SSO). Those keys are honored **only** from a
+managed source (Windows `HKLM\SOFTWARE\Policies\ClaudeCode` or
+`%ProgramFiles%\ClaudeCode\managed-settings.json`; macOS plist; Linux
+`/etc/claude-code/managed-settings.json`) — **never** from user
+`settings.json` or HKCU. [BINARY-VERIFIED]
+
+So the split is: the **binary install is no-admin**, but the gateway **login
+requires the managed setting**, delivered by GPO/MDM (or self-served once by a
+developer **with local admin**) — see `docs/client-config.md` for both
+mechanisms and `docs/ad-request-email.md` for the AD/GPO request. Once the
+managed setting is present, the developer just runs `claude`: the login screen
+is **locked to gateway** with the URL **pre-filled** (no menu choice, no URL
+typing — press Enter to connect), and the only interactive step is a **one-time
+Okta SSO** in the browser (+MFA); the token persists with refresh. [DOC-VERIFIED]
+The live gateway round-trip is [NEEDS TEST-RUN CONFIRMATION]. The user-scope
+lockdown the installer writes (`DISABLE_UPDATES=1`, telemetry tags) is a
+convenience, not enforcement — the mirror-only network path (no reachable
 `downloads.claude.ai`) and the gateway's server-side controls are the real
 guardrails, and the gateway can additionally push the lockdown centrally
 (`MANAGED_CLI_GROUPS`).
@@ -209,17 +222,23 @@ refused.** A SYSTEM run would install `claude.exe` into SYSTEM's own
 **user** context (Intune "user" install behavior, the download portal ZIP, or
 the manual command above). The installer writes workstation config (update
 lockdown, telemetry tags, CA trust) into the user's own
-`%USERPROFILE%\.claude\settings.json`; it has no settings-push mode. If the
-organization wants **forced** gateway login or a version floor
-(managed-only keys), deliver them by GPO/MDM — see
-`docs/client-config.md` for both mechanisms (GPP Registry to
+`%USERPROFILE%\.claude\settings.json`; it has **no settings-push mode**, and
+the gateway login keys are **not** honored from user settings anyway. The
+gateway login therefore **requires** the managed setting
+(`forceLoginMethod: "gateway"` + `forceLoginGatewayUrl`) delivered by GPO/MDM —
+see `docs/client-config.md` for both mechanisms (GPP Registry to
 `HKLM\SOFTWARE\Policies\ClaudeCode`, or `managed-settings.json` to
-`%ProgramFiles%\ClaudeCode\`).
+`%ProgramFiles%\ClaudeCode\`) and `docs/ad-request-email.md` for the AD/GPO
+request. A developer **with local admin** can self-serve the managed entry
+once on their own box; a locked-down non-admin fleet needs it pushed.
 
-Developer experience after install: new terminal → `claude` → `/login` →
-**Cloud gateway** → paste the gateway URL (printed by the installer; a GPO
-`forceLoginGatewayUrl` pre-fills it instead) → Okta SSO → compare the
-fingerprint prompt against the published value.
+Developer experience after install (with the managed setting in place): new
+terminal → `claude` → login is **locked to gateway** with the URL
+**pre-filled** (no picker, no URL typing — press Enter to connect) → **one-time
+Okta SSO** in the browser (+MFA) → compare the fingerprint prompt against the
+published value. A later re-login on expiry runs `/login`, still forced to
+gateway. [BINARY-VERIFIED] The live round-trip is [NEEDS TEST-RUN
+CONFIRMATION].
 
 ## Model configuration
 
@@ -536,7 +555,7 @@ obvious alternative?" question — revisit only with a concrete reason.
 | Store | RDS PostgreSQL 16 with `rds.force_ssl` + **pgaudit**, client-side `sslmode=verify-full` (RDS CA bundle baked into the image), and SG-to-SG access only. The gateway connects as a **least-privilege application user** (created by a bootstrap Lambda; owns only the gateway schema via a shared owner role — no CREATEROLE, no `rds_superuser`, cannot tamper with pgaudit). The RDS master secret is **break-glass only**, still auto-rotated by RDS. Multi-AZ is on by default because a lost store loses spend tracking and caps, not just re-logins. |
 | Encryption at rest | One customer-managed KMS key (created by the DB stack or bring-your-own via `KMS_KEY_ARN`) covers RDS, all secrets, CloudWatch log groups, the activity archive, and AMP. Exception: the ALB access-logs bucket stays SSE-S3 — ELB log delivery does not support KMS. |
 | Network egress | Every security group has explicit egress (no default allow-all); all VPC endpoints carry resource policies scoped to this account/workload. Bedrock IAM + endpoint policies allow exactly the two configured models. |
-| Client install | Fully offline: pinned binary mirrored from Anthropic's release bucket and verified before distribution. **No admin rights**: per-user install + user-scope config (update lockdown `DISABLE_UPDATES=1`, telemetry tags) in `%USERPROFILE%\.claude\settings.json`; interactive gateway `/login`. Forced login / version floor, when wanted, are delivered by GPO/MDM (`docs/client-config.md`); the gateway can also push the lockdown centrally (`MANAGED_CLI_GROUPS`). |
+| Client install | Fully offline: pinned binary mirrored from Anthropic's release bucket and verified before distribution. **The binary install is no-admin**: per-user install + user-scope config (update lockdown `DISABLE_UPDATES=1`, telemetry tags) in `%USERPROFILE%\.claude\settings.json`. The gateway **login**, however, **requires** the managed keys `forceLoginMethod: "gateway"` + `forceLoginGatewayUrl` (honored only from a managed source — HKLM/`%ProgramFiles%` managed-settings.json/plist, never user settings), delivered by GPO/MDM (`docs/client-config.md`, `docs/ad-request-email.md`) or self-served with local admin. With it present, `/login` is locked to gateway with the URL pre-filled; the developer only completes a one-time Okta SSO. The gateway can also push the lockdown centrally (`MANAGED_CLI_GROUPS`). |
 | Guardrails | IAM task role **and** VPC-endpoint policy are independently scoped to **exactly the two configured models** (inference-profile IDs + their derived foundation-model IDs, from the `*_BEDROCK_MODEL_ID` parameters) — two separate controls on what the org credential can invoke, both following the parameters. |
 
 ### Gotchas — do not re-litigate
@@ -677,9 +696,12 @@ and then works through:
 5. Configure the Zscaler bypass (ZIA exemption or ZPA app segment) for the
    gateway FQDN.
 6. Dry-run `Install-ClaudeCode.ps1` on a test laptop **as a non-admin user**;
-   confirm `claude --version` runs and that `/login` → Cloud gateway connects.
-   (`claude /status` shows the active setting sources — user settings here,
-   plus any GPO-delivered managed source if you configured one.)
+   confirm `claude --version` runs. To exercise the gateway login the test
+   laptop needs the managed setting present first (HKLM or
+   `%ProgramFiles%\ClaudeCode\managed-settings.json` — pushed by GPO/MDM, or a
+   one-time elevated command on the test box); with it in place `claude`
+   auto-drives to the locked gateway login. (`claude /status` shows the active
+   setting sources — user settings plus the managed source.)
 7. Publish the certificate's SHA-256 fingerprint to developers (first-connect
    pinning prompt).
 8. Optional: deploy the observability stack (mirror the ADOT collector

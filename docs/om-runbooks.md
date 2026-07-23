@@ -536,20 +536,26 @@ release is confirmed across the fleet.
   `OTEL_RESOURCE_ATTRIBUTES`, `NODE_EXTRA_CA_CERTS`), never a machine/policy
   source. For a device-context binary push use the MDM "user" install behavior
   (Intune) or the download portal.
-- **Forced gateway login on hardened / GPO-managed fleets — an admin-channel
-  concern, not the installer's.** `forceLoginMethod` / `forceLoginGatewayUrl` /
-  `requiredMinimumVersion` are honored only from a **managed source**, and on
-  hardened fleets the `Policies` subtree (even `HKCU\SOFTWARE\Policies\ClaudeCode`)
-  is ACL-locked under STIG/CIS baselines — which is why the installer no longer
-  writes any policy source. When the org wants the client-side lock, deliver the
-  managed settings by GPO/MDM: a GPP Registry `REG_SZ` value `Settings` under
+- **Gateway login REQUIRES the managed setting — an admin-channel concern, not
+  the installer's.** `forceLoginMethod: "gateway"` + `forceLoginGatewayUrl` are
+  what make the **Cloud gateway** login path appear at all; without them
+  `/login` shows only the standard account picker with **no gateway option and
+  no way for a user to type a gateway URL** (Anthropic's anti-phishing design).
+  These keys are honored **only** from a **managed source** — `HKLM\SOFTWARE\Policies\ClaudeCode`
+  or `%ProgramFiles%\ClaudeCode\managed-settings.json` — **never** from user
+  `settings.json` or HKCU (a user-level `forceLoginMethod:"gateway"` is
+  explicitly nulled by the binary), which is why the installer writes no policy
+  source. `requiredMinimumVersion` rides the same managed JSON. On hardened
+  fleets the `Policies` subtree is ACL-locked under STIG/CIS baselines, so the
+  entry is delivered by GPO/MDM: a GPP Registry `REG_SZ` value `Settings` under
   `HKLM\SOFTWARE\Policies\ClaudeCode`, or a GPP Files copy of
   `managed-settings.json` to `%ProgramFiles%\ClaudeCode\` (Claude Code moved off
-  `%ProgramData%` at v2.1.75; admin-write-only = tamper-resistant; verified
-  against the mirrored 2.1.211 binary). Full AD-admin steps are in
-  [`client-config.md`](client-config.md) §2. Without it, the network (gateway
-  FQDN only) + the gateway's server-side Okta/domain/min-version checks are the
-  enforcement. The binary stays user-installable either way.
+  `%ProgramData%` at v2.1.75; admin-write-only = tamper-resistant;
+  **[BINARY-VERIFIED]** against the mirrored 2.1.211 binary). A developer **with
+  local admin** can self-serve the entry once. Full AD-admin steps are in
+  [`client-config.md`](client-config.md) §2; the AD/GPO request template is
+  [`ad-request-email.md`](ad-request-email.md). The **binary install stays
+  no-admin either way** — only the login config needs the managed setting.
 - Never bypass GPG verification as a matter of routine; `ALLOW_UNVERIFIED_MANIFEST=1`
   is for a deliberately air-gapped one-off only.
 

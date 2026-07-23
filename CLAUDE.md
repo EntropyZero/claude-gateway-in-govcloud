@@ -79,6 +79,7 @@ VERIFICATION.
 | `docs/client-config.md` | **client config & enforcement model**: no-admin user-scope installer, one-time `/login` flow, gateway `/managed/settings` push (`MANAGED_CLI_GROUPS`), and the **GPO/MDM forced-login** path (ops how-to; not in the PDF set) |
 | `docs/networking-request-email.md` | cert/DNS/Zscaler request template |
 | `docs/okta-request-email.md` | Okta OIDC app request template (org server, Web app, groups) |
+| `docs/ad-request-email.md` | AD/GPO request template — the machine-policy managed setting that enables gateway login |
 | `tests/` + `Makefile` | test suites (`make test`); CI in `.github/workflows/tests.yml` |
 
 ## Deploy model (details in the runbook)
