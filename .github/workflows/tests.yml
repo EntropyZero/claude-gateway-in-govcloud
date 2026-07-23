@@ -48,8 +48,17 @@ jobs:
       - run: cfn-lint cloudformation/*.yaml
       - name: Install cfn-guard
         run: |
+          set -euo pipefail
+          # Pin the version: install-guard.sh WITHOUT -v calls the GitHub API
+          # (/releases/latest), which anonymous CI runners hit with a 403
+          # rate-limit; -v downloads the release asset directly (no API call).
+          # pipefail + the explicit version check make a failed install fail
+          # THIS step loudly, instead of masquerading as 'cfn-guard: command
+          # not found' (exit 127) in the gates step below.
           curl --proto '=https' --tlsv1.2 -sSf \
-            https://raw.githubusercontent.com/aws-cloudformation/cloudformation-guard/main/install-guard.sh | sh
+            https://raw.githubusercontent.com/aws-cloudformation/cloudformation-guard/main/install-guard.sh \
+            | sh -s -- -v 3.2.0
+          "$HOME/.guard/bin/cfn-guard" --version
           echo "$HOME/.guard/bin" >> "$GITHUB_PATH"
       - name: cfn-guard policy gates
         run: |
