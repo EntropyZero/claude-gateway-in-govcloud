@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import urllib.parse
+import urllib.error
 import urllib.request
 
 try:
@@ -71,6 +72,67 @@ def names(pattern):
     return sorted(d.get("data", []))
 
 
+def qsum_by(metric, label):
+    """Instant PromQL sum(metric) by (label) -> {labelvalue: float}. {} if absent."""
+    d = q("api/v1/query", {"query": "sum(%s) by (%s)" % (metric, label)})
+    out = {}
+    for r in (d.get("data", {}).get("result", []) or []):
+        try:
+            out[r["metric"].get(label, "?")] = float(r["value"][1])
+        except (KeyError, IndexError, ValueError):
+            pass
+    return out
+
+
+def collector_pipeline_report():
+    """When the receiver IS wired to metrics but claude_code_* still don't land,
+    the collector's OWN throughput counters (already in AMP as otelcol_*)
+    pinpoint where the points are lost between OTLP-accept and remote_write."""
+    acc = qsum_by("otelcol_receiver_accepted_metric_points", "receiver")
+    ref = qsum_by("otelcol_receiver_refused_metric_points", "receiver")
+    sent = qsum_by("otelcol_exporter_sent_metric_points", "exporter")
+    failed = qsum_by("otelcol_exporter_send_failed_metric_points", "exporter")
+    if not acc and not sent:
+        print("  [skip] no otelcol_*_metric_points counters in AMP - cannot trace")
+        print("         the pipeline (older ADOT, or self-metrics scrape not landing)")
+        return
+    otlp_acc = acc.get("otlp", 0.0)
+    otlp_ref = ref.get("otlp", 0.0)
+    rw_sent = sent.get("prometheusremotewrite", sum(sent.values()) if sent else 0.0)
+    rw_fail = failed.get("prometheusremotewrite",
+                         sum(failed.values()) if failed else 0.0)
+    print("  receiver accepted : otlp=%.0f  prometheus=%.0f"
+          % (otlp_acc, acc.get("prometheus", 0.0)))
+    print("  receiver refused  : otlp=%.0f" % otlp_ref)
+    print("  remote_write      : sent=%.0f  failed=%.0f" % (rw_sent, rw_fail))
+    print()
+    if otlp_acc == 0:
+        print("  [verdict] The OTLP receiver has accepted ZERO metric points, even")
+        print("            though it is wired to the metrics pipeline. The client")
+        print("            metric DATA is not arriving at :4318. So either the gateway")
+        print("            is not relaying client metrics (only its own activity LOG,")
+        print("            which explains logs working), or clients POST /v1/metrics")
+        print("            with no metric points. Check the gateway startup line lists")
+        print("            `metrics` under signals enabled, and that a real session has")
+        print("            produced usage. If otlp_ref > 0, they arrive but are refused")
+        print("            (payload/format) - check the sidecar logs.")
+    elif rw_fail > 0:
+        print("  [verdict] OTLP metrics ARE accepted, but remote_write is FAILING for")
+        print("            some/all points. AMP is rejecting them. The prime suspect is")
+        print("            DELTA temporality: Prometheus/AMP need CUMULATIVE, and the")
+        print("            otelcol_* self-metrics ARE cumulative (which is why they")
+        print("            land while claude_code_* do not). Confirm in the SIDECAR")
+        print("            LOGS (exact remote_write error), then set")
+        print("            OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative")
+        print("            on the client, or add a deltatocumulative processor.")
+    else:
+        print("  [verdict] OTLP metrics accepted AND remote_write succeeding, yet no")
+        print("            claude_code_* by name. The points are dropped BETWEEN accept")
+        print("            and export - query otelcol_processor_dropped_metric_points")
+        print("            and inspect the attributes/cardinality + batch processors,")
+        print("            or a metric-name rewrite. Otherwise re-check the name filter.")
+
+
 client = names("claude_code.*")
 selfm = names("otelcol.*")
 
@@ -84,11 +146,9 @@ if not selfm and not client:
           "check the sidecar container logs for export errors.")
 elif not client:
     print("\n[verdict] The write path is HEALTHY (otelcol_* present) but NO client")
-    print("          usage metrics have been ingested. Clients reach the ALB, so the")
-    print("          break is gateway-relay -> sidecar for the METRICS signal only:")
-    print("            - confirm the gateway startup line lists metrics:")
-    print("                telemetry relay: N destination(s), signals enabled: metrics,logs")
-    print("            - check sidecar logs for OTLP receive/export errors")
+    print("          usage metrics are in AMP. Tracing the collector pipeline from")
+    print("          its own throughput counters (already in AMP):\n")
+    collector_pipeline_report()
     sys.exit(0)
 else:
     # Client data exists - so an empty dashboard is a QUERY problem, not ingestion.
