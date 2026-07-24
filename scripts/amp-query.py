@@ -37,8 +37,20 @@ if _creds is None:
 _creds = _creds.get_frozen_credentials()
 
 
+def encode_query(params):
+    """RFC3986 percent-encoding ONLY - never quote_plus. quote_plus turns
+    spaces into '+', an ambiguous byte under SigV4: botocore signs one
+    canonicalization of it, the AMP front end computes another, and the
+    request 403s with SignatureDoesNotMatch. Only queries containing spaces
+    (the PromQL '... by (label)' throughput calls) were affected, which is
+    why SOME calls failed while name lookups succeeded.
+    """
+    return urllib.parse.urlencode(params, doseq=True,
+                                  quote_via=urllib.parse.quote)
+
+
 def q(path, params):
-    url = ENDPOINT + path + "?" + urllib.parse.urlencode(params, doseq=True)
+    url = ENDPOINT + path + "?" + encode_query(params)
     req = AWSRequest(method="GET", url=url)
     SigV4Auth(_creds, "aps", REGION).add_auth(req)
     r = urllib.request.Request(url, headers=dict(req.headers))
@@ -47,6 +59,15 @@ def q(path, params):
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "replace")[:200]
+        if e.code == 403 and ("does not match" in body.lower()
+                              or "signature" in body.lower()):
+            raise SystemExit(
+                f"  [FAIL] 403 SignatureDoesNotMatch from AMP.\n"
+                f"         This is a SIGNING bug in the request encoding, NOT an\n"
+                f"         IAM/permissions problem - do not chase key policies.\n"
+                f"         (Historic cause here: quote_plus space-encoding; fixed\n"
+                f"         2026-07-24. If you see this, the URL encoding regressed.)\n"
+                f"         body: {body}")
         if e.code == 403:
             raise SystemExit(
                 f"  [FAIL] 403 from AMP. In likelihood order:\n"

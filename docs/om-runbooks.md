@@ -957,9 +957,14 @@ present on `claude_code_cost_usage` for exactly this reason. `team`/`cost_center
 come from the installer's `OTEL_RESOURCE_ATTRIBUTES`; `user_groups` is stamped by
 the gateway from the Okta claim.
 
-*Note:* a 403 from the AMP query is an **operator-role** gap (missing
-`aps:QueryMetrics`, or the CMK `kms:Decrypt` trap from 2026-07-23) and says
-nothing about whether ingestion is working.
+*Note:* read a 403 from the AMP query by its body. **SignatureDoesNotMatch**
+("the request signature we calculated does not match") is a client-side
+SIGNING/encoding bug, not permissions - do not chase key policies. (Historic
+instance: `quote_plus` encoded PromQL spaces as `+`, an ambiguous byte under
+SigV4, so only the space-carrying throughput queries failed; fixed 2026-07-24,
+regression-tested.) A 403 **without** that phrasing is the operator-role gap
+(missing `aps:QueryMetrics`, or the CMK `kms:Decrypt` trap from 2026-07-23) -
+and either way it says nothing about whether ingestion is working.
 
 > ⚠️ **The silent-drop trap (root-caused 2026-07-24, live).** Claude Code
 > clients export **delta**-temporality sums by default, and the sidecar's
