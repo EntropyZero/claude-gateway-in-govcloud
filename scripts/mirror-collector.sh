@@ -9,7 +9,10 @@
 # (public.ecr.aws) plus AWS creds. Pick the release with ADOT_VERSION.
 source "$(dirname "$0")/common.sh"
 
-ADOT_VERSION="${ADOT_VERSION:-v0.43.0}"
+# v0.49.0 = the deployed/validated pin (2026-07-24): the delta-temporality
+# drop, add_metric_suffixes honoring, and dashboard-exact metric names were
+# all verified against BOTH v0.43.0 and v0.49.0.
+ADOT_VERSION="${ADOT_VERSION:-v0.49.0}"
 UPSTREAM="${COLLECTOR_UPSTREAM_IMAGE:-public.ecr.aws/aws-observability/aws-otel-collector:${ADOT_VERSION}}"
 REPO_NAME="${ADOT_ECR_REPO_NAME:-claude-gw-adot}"
 

@@ -1350,12 +1350,16 @@ Resources:
                         authenticator: sigv4auth
                       # Keep metric names exactly as emitted (claude_code_cost_usage,
                       # not ..._USD_total) so the provisioned dashboard queries match.
-                      # Newer ADOT builds (> the pinned v0.43.0) log a deprecation
-                      # suggesting translation_strategy instead - IGNORE IT here:
-                      # add_metric_suffixes is still honored, and translation_strategy
-                      # does not exist in v0.43.0 (unknown config = boot failure), so
-                      # switching would break the documented pin. Revisit only when
-                      # ADOT_VERSION is deliberately raised for all deployments.
+                      # ADOT >= ~v0.49 logs a deprecation suggesting
+                      # translation_strategy instead. add_metric_suffixes is still
+                      # HONORED (verified on v0.49.0: stored name is exactly
+                      # claude_code_cost_usage) - keep it for compatibility with
+                      # older pins (unknown key = boot failure on v0.43.0). If it
+                      # is ever removed upstream, the equivalent is
+                      #   translation_strategy: UnderscoreEscapingWithoutSuffixes
+                      # - WITHOUT, not the WithSuffixes variant the default-config
+                      # deprecation text suggests, which would re-add _USD/_total
+                      # suffixes and break every provisioned dashboard query.
                       add_metric_suffixes: false
                       resource_to_telemetry_conversion:
                         enabled: true

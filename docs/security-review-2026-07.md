@@ -332,12 +332,15 @@ gateway + live store). Fixing at the **source** rather than a
 `DesiredCount: 2` the ALB round-robins one client's exports across both
 sidecars, and two independent delta→cumulative reconstructions of the same
 series would conflict. `amp-query.py` now reads the translations counter and
-verdicts on it FIRST; the runbook documents the signature. A newer-ADOT
-deprecation warning (`add_metric_suffixes` → `translation_strategy`) observed
-in the deployed sidecar is unrelated and harmless, but revealed the deployed
-collector is newer than the documented v0.43.0 pin — `translation_strategy`
-must NOT be adopted while the pin stands (unknown key = boot failure on
-v0.43.0). **Needs deploy confirmation:** after the 02 re-run and a client
+verdicts on it FIRST; the runbook documents the signature. The deployed
+collector turned out to be pinned at **v0.49.0** (revealed by its
+`add_metric_suffixes` deprecation warning, which v0.43.0 does not emit); the
+full battery was re-run against v0.49.0 with identical results — delta drop,
+counted-as-sent, silence, and `add_metric_suffixes: false` still honored
+(names dashboard-exact). `mirror-collector.sh` default raised to v0.49.0 to
+match. `translation_strategy` stays un-adopted (unknown key = boot failure on
+older pins); if ever migrated, the equivalent is
+`UnderscoreEscapingWithoutSuffixes`, NOT the WithSuffixes variant. **Needs deploy confirmation:** after the 02 re-run and a client
 settings re-fetch, `claude_code_*` names appearing in AMP and
 `failed_translations` going flat.
 

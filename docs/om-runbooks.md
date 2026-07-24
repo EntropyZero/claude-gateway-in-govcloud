@@ -975,10 +975,11 @@ nothing about whether ingestion is working.
 > fetch. A `deltatocumulative` processor in the sidecar was deliberately
 > rejected: with `DesiredCount: 2` the ALB round-robins one client's exports
 > across both sidecars, whose independent delta->cumulative reconstructions of
-> the same series would conflict. (A newer-ADOT deprecation warning about
-> `add_metric_suffixes` vs `translation_strategy` is unrelated and harmless -
-> do not switch the key; `translation_strategy` does not exist in the pinned
-> v0.43.0.)
+> the same series would conflict. (Verified on both v0.43.0 and the deployed v0.49.0 pin. The v0.49
+> deprecation warning about `add_metric_suffixes` is harmless - the key is
+> still honored. If ever migrating, the equivalent is `translation_strategy:
+> UnderscoreEscapingWithoutSuffixes` - the WithOUT variant; the WithSuffixes
+> variant would re-add unit/type suffixes and break the dashboard names.)
 
 ---
 
