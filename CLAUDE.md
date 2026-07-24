@@ -57,6 +57,20 @@ telemetry/audit processing is down; a **missing-telemetry alarm** (03,
 `AWS/Usage ResourceCount`/`IngestionRate` on the workspace) is the end-to-end
 backstop that container health cannot provide.
 
+**Fixed 2026-07-24 (committed, NOT yet deployed): client usage metrics were
+silently dropped at prometheus translation — delta temporality.** With the
+sidecar finally reachable, `otelcol_*` landed in AMP but zero `claude_code_*`
+did, while every counter looked healthy: delta points are dropped at
+TRANSLATION yet **still counted as sent**, `send_failed` 0, nothing logged
+(reproduced on the pinned ADOT v0.43.0; live giveaway =
+`otelcol_exporter_prometheusremotewrite_failed_translations` climbing with
+client activity — operator-found). Fix: the managed catch-all policy now pushes
+`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "cumulative"` to every
+client; a sidecar `deltatocumulative` processor was rejected (two sidecars
+behind the ALB would rebuild conflicting cumulative sums for the same series).
+Re-run `deploy-gateway.sh`; clients pick the env up on their next settings
+fetch; confirm `claude_code_*` appears and `failed_translations` goes flat.
+
 **Fixed 2026-07-24 (committed, NOT yet deployed): the loopback telemetry
 sidecar could never work.** Live symptom: `forward to http://localhost:4318
 failed: ECONNREFUSED_SSRF: blocked (cloud metadata / link-local): localhost ->

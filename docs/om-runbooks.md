@@ -947,7 +947,7 @@ in Grafana:
 | no `/managed/settings` | enrollment - clients never got the OTLP env vars |
 | settings but no `/v1/metrics` | push lands, export never starts |
 | exports, AMP empty of `otelcol_*` too | remote_write not landing at all |
-| exports, `otelcol_*` present, no `claude_code_*` | metrics signal lost gateway->sidecar |
+| exports, `otelcol_*` present, no `claude_code_*` | check `otelcol_exporter_prometheusremotewrite_failed_translations` FIRST (see below) |
 | `claude_code_*` present | **ingestion is fine** - it is a dashboard/query problem |
 
 That last row is the easy one to misread: the dashboard filters on
@@ -960,6 +960,25 @@ the gateway from the Okta claim.
 *Note:* a 403 from the AMP query is an **operator-role** gap (missing
 `aps:QueryMetrics`, or the CMK `kms:Decrypt` trap from 2026-07-23) and says
 nothing about whether ingestion is working.
+
+> ⚠️ **The silent-drop trap (root-caused 2026-07-24, live).** Claude Code
+> clients export **delta**-temporality sums by default, and the sidecar's
+> `prometheusremotewrite` exporter **cannot represent delta** - it drops those
+> points at *translation*. The dropped points are **still counted in
+> `otelcol_exporter_sent_metric_points`**, `send_failed` stays 0, and nothing
+> is logged (reproduced on the pinned ADOT v0.43.0) - so every throughput
+> counter looks healthy while zero client metrics reach AMP. The giveaway is
+> `otelcol_exporter_prometheusremotewrite_failed_translations` climbing in step
+> with client activity. Fix (02, 2026-07-24): the gateway pushes
+> `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative` to every
+> client via `/managed/settings`; clients pick it up on their next settings
+> fetch. A `deltatocumulative` processor in the sidecar was deliberately
+> rejected: with `DesiredCount: 2` the ALB round-robins one client's exports
+> across both sidecars, whose independent delta->cumulative reconstructions of
+> the same series would conflict. (A newer-ADOT deprecation warning about
+> `add_metric_suffixes` vs `translation_strategy` is unrelated and harmless -
+> do not switch the key; `translation_strategy` does not exist in the pinned
+> v0.43.0.)
 
 ---
 

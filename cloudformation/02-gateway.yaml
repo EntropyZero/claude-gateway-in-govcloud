@@ -1170,6 +1170,19 @@ Resources:
             #    -DisableUpdates. This USED to be scoped to `MANAGED_CLI_GROUPS`
             #    Okta groups; it now applies to everyone, which is strictly broader
             #    coverage AND drops the groups-claim dependency (2026-07-24).
+            #  * OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative -
+            #    REQUIRED for usage metrics to reach AMP. Clients export DELTA
+            #    sums by default, and the sidecar's prometheusremotewrite exporter
+            #    SILENTLY DROPS delta at translation - counted in
+            #    otelcol_exporter_prometheusremotewrite_failed_translations, while
+            #    STILL counted in ..._sent_metric_points with send_failed=0 and
+            #    nothing logged (reproduced on the pinned ADOT v0.43.0,
+            #    2026-07-24). Fixing at the CLIENT (not a deltatocumulative
+            #    processor in the sidecar) is deliberate: with DesiredCount=2 the
+            #    ALB round-robins one client's exports across BOTH sidecars, and
+            #    two independent delta->cumulative reconstructions of the SAME
+            #    series would conflict. Cumulative from the source is coherent
+            #    through any number of relays.
             #
             # Ordering note (kept for the next maintainer): selection is
             # FIRST-MATCH-WINS over a SINGLE policy, and a `match:`-less policy is
@@ -1184,7 +1197,12 @@ Resources:
                       - cli:
                           availableModels: ['${OpusModelId}', '${SonnetModelId}']
                           enforceAvailableModels: true
-                          env: { DISABLE_UPDATES: "1", DISABLE_AUTOUPDATER: "1" }
+                          env:
+                            DISABLE_UPDATES: "1"
+                            DISABLE_AUTOUPDATER: "1"
+                            # delta sums are silently dropped by the sidecar's
+                            # prometheus translation - see the comment above
+                            OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "cumulative"
           Secrets:
             - Name: OIDC_CLIENT_SECRET
               ValueFrom: !Ref OktaClientSecret
@@ -1332,6 +1350,12 @@ Resources:
                         authenticator: sigv4auth
                       # Keep metric names exactly as emitted (claude_code_cost_usage,
                       # not ..._USD_total) so the provisioned dashboard queries match.
+                      # Newer ADOT builds (> the pinned v0.43.0) log a deprecation
+                      # suggesting translation_strategy instead - IGNORE IT here:
+                      # add_metric_suffixes is still honored, and translation_strategy
+                      # does not exist in v0.43.0 (unknown config = boot failure), so
+                      # switching would break the documented pin. Revisit only when
+                      # ADOT_VERSION is deliberately raised for all deployments.
                       add_metric_suffixes: false
                       resource_to_telemetry_conversion:
                         enabled: true

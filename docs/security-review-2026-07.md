@@ -306,6 +306,41 @@ alarm OK → ALARM when the sidecar is stopped and back to OK when it resumes
 (now cheap to test end-to-end with the always-on heartbeat: stop the sidecar →
 ingestion stops → ALARM; restart → OK).
 
+**Client usage metrics silently dropped at prometheus translation — delta
+temporality (2026-07-24, ROOT-CAUSED LIVE + REPRODUCED ON THE PINNED IMAGE).**
+After the loopback fix, activity logs flowed and `otelcol_*` reached AMP, but
+zero `claude_code_*` did — while every throughput counter looked healthy
+(receiver accepted == exporter sent, `send_failed` 0, sidecar logs clean). The
+operator found the discriminating counter live:
+`otelcol_exporter_prometheusremotewrite_failed_translations` climbing in step
+with client activity.
+
+Mechanism, reproduced against the pinned ADOT v0.43.0: Claude Code clients
+export **delta**-temporality sums by default; `prometheusremotewrite` cannot
+represent delta and drops the points at **translation** — before the send — so
+they are **still counted in `sent_metric_points`**, `send_failed` stays 0, and
+nothing is logged. The collector's own `otelcol_*` self-metrics are cumulative,
+which is exactly why they landed while client metrics vanished. Diagnostic
+counters were unreliable narrators in both directions (a poisoned batch was
+also observed counted `failed` yet partially stored).
+
+Fix: 02's managed catch-all policy now pushes
+`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "cumulative"` in `cli.env`
+to every client via `/managed/settings` (boot-validated against the mirrored
+gateway + live store). Fixing at the **source** rather than a
+`deltatocumulative` processor in the sidecar is deliberate: with
+`DesiredCount: 2` the ALB round-robins one client's exports across both
+sidecars, and two independent delta→cumulative reconstructions of the same
+series would conflict. `amp-query.py` now reads the translations counter and
+verdicts on it FIRST; the runbook documents the signature. A newer-ADOT
+deprecation warning (`add_metric_suffixes` → `translation_strategy`) observed
+in the deployed sidecar is unrelated and harmless, but revealed the deployed
+collector is newer than the documented v0.43.0 pin — `translation_strategy`
+must NOT be adopted while the pin stands (unknown key = boot failure on
+v0.43.0). **Needs deploy confirmation:** after the 02 re-run and a client
+settings re-fetch, `claude_code_*` names appearing in AMP and
+`failed_translations` going flat.
+
 **Loopback sidecar needs `CLAUDE_GATEWAY_ALLOW_LOOPBACK` (2026-07-24,
 RUNTIME-VERIFIED; completes the C2 story).** Live symptom after the sidecar
 migration:

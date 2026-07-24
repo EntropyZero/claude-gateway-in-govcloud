@@ -67,9 +67,37 @@ def q(path, params):
                          f"interface endpoint or run it from in-VPC)")
 
 
+import time as _time
+
+WINDOW_H = int(os.environ.get("AMP_QUERY_WINDOW_HOURS", "48"))
+
+
 def names(pattern):
-    d = q("api/v1/label/__name__/values", {"match[]": '{__name__=~"%s"}' % pattern})
+    """Metric names matching pattern seen in the last WINDOW_H hours.
+
+    Explicit start/end matter: without them the label-values API uses
+    server-side defaults, and instant queries only look back 5 minutes -
+    both can miss BURSTY client metrics (written only while a session is
+    active) while the 30s heartbeat keeps otelcol_* perpetually fresh.
+    """
+    now = int(_time.time())
+    d = q("api/v1/label/__name__/values", {
+        "match[]": '{__name__=~"%s"}' % pattern,
+        "start": str(now - WINDOW_H * 3600),
+        "end": str(now),
+    })
     return sorted(d.get("data", []))
+
+
+def ever_stored(pattern):
+    """Count of series with ANY sample in the window - immune to burstiness."""
+    d = q("api/v1/query", {
+        "query": 'count(count_over_time({__name__=~"%s"}[%dh]))' % (pattern, WINDOW_H)})
+    r = d.get("data", {}).get("result", [])
+    try:
+        return int(float(r[0]["value"][1])) if r else 0
+    except (KeyError, IndexError, ValueError):
+        return 0
 
 
 def qsum_by(metric, label):
@@ -92,6 +120,8 @@ def collector_pipeline_report():
     ref = qsum_by("otelcol_receiver_refused_metric_points", "receiver")
     sent = qsum_by("otelcol_exporter_sent_metric_points", "exporter")
     failed = qsum_by("otelcol_exporter_send_failed_metric_points", "exporter")
+    xlate = qsum_by("otelcol_exporter_prometheusremotewrite_failed_translations",
+                    "exporter")
     if not acc and not sent:
         print("  [skip] no otelcol_*_metric_points counters in AMP - cannot trace")
         print("         the pipeline (older ADOT, or self-metrics scrape not landing)")
@@ -101,11 +131,31 @@ def collector_pipeline_report():
     rw_sent = sent.get("prometheusremotewrite", sum(sent.values()) if sent else 0.0)
     rw_fail = failed.get("prometheusremotewrite",
                          sum(failed.values()) if failed else 0.0)
+    xl_fail = sum(xlate.values()) if xlate else 0.0
     print("  receiver accepted : otlp=%.0f  prometheus=%.0f"
           % (otlp_acc, acc.get("prometheus", 0.0)))
     print("  receiver refused  : otlp=%.0f" % otlp_ref)
     print("  remote_write      : sent=%.0f  failed=%.0f" % (rw_sent, rw_fail))
+    print("  FAILED TRANSLATIONS: %.0f   <- the silent-drop counter" % xl_fail)
     print()
+    if xl_fail > 0:
+        print("  [verdict] FOUND IT: prometheusremotewrite is DROPPING points at")
+        print("            TRANSLATION. Dropped points are STILL counted in")
+        print("            sent_metric_points with send_failed=0 and NOTHING is")
+        print("            logged (reproduced on ADOT v0.43.0) - which is why every")
+        print("            other counter looked healthy. The canonical cause is")
+        print("            DELTA temporality sums, which Prometheus cannot")
+        print("            represent; the otelcol_* self-metrics are cumulative,")
+        print("            which is why THEY land. Fix at the SOURCE: the gateway")
+        print("            now pushes")
+        print("            OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=")
+        print("            cumulative via /managed/settings (02, 2026-07-24) -")
+        print("            redeploy 02, then clients pick it up on their next")
+        print("            settings fetch. Do NOT add a deltatocumulative")
+        print("            processor instead: with DesiredCount=2 the two sidecars")
+        print("            would rebuild conflicting cumulative sums for the same")
+        print("            series.")
+        return
     if otlp_acc == 0:
         print("  [verdict] The OTLP receiver has accepted ZERO metric points, even")
         print("            though it is wired to the metrics pipeline. The client")
@@ -135,11 +185,21 @@ def collector_pipeline_report():
 
 client = names("claude_code.*")
 selfm = names("otelcol.*")
+client_ever = ever_stored("claude_code.+")
+target_info = ever_stored("target_info")
 
+print(f"  window: last {WINDOW_H}h (AMP_QUERY_WINDOW_HOURS to change)")
 print(f"  otelcol_* series (collector heartbeat) : {len(selfm)} metric name(s)")
 print(f"  claude_code_* series (CLIENT usage)    : {len(client)} metric name(s)")
+print(f"  claude_code_* series with ANY sample   : {client_ever} (burst-proof)")
+print(f"  target_info series (client payloads)   : {target_info}")
 for n in client[:12]:
     print(f"      {n}")
+
+if client_ever and not client:
+    print("\n  [note] samples EXIST in the window but the name lookup missed them -")
+    print("         trust the burst-proof count; the data is in AMP.")
+client = client or (["claude_code_cost_usage"] if client_ever else [])
 
 if not selfm and not client:
     print("\n[verdict] AMP holds NOTHING. remote_write is not landing at all - "

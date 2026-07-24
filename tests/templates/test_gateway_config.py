@@ -245,6 +245,15 @@ def test_model_allowlist_and_lockdown_reach_every_user():
     )
     assert cli["env"]["DISABLE_UPDATES"] == "1"
     assert cli["env"]["DISABLE_AUTOUPDATER"] == "1"
+    # Clients export DELTA sums by default and the sidecar's prometheus
+    # translation SILENTLY drops them (counted sent, failed=0, no log -
+    # reproduced on the pinned ADOT v0.43.0). Cumulative-from-the-source is
+    # what makes usage metrics reach AMP at all; a deltatocumulative processor
+    # in the sidecar would conflict across DesiredCount=2 relays.
+    assert cli["env"]["OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE"] == "cumulative", (
+        "without cumulative temporality, claude_code_* metrics are silently "
+        "dropped at prometheusremotewrite translation and never reach AMP"
+    )
 
 
 def test_available_models_is_never_at_policy_level():
