@@ -877,6 +877,31 @@ nothing to roll back beyond the underlying runbook's own recovery.
 
 ---
 
+### Is the gateway capturing usage at all? (dump Postgres)
+
+*Run:* `scripts/dump-usage.sh` (in-VPC host or bastion; needs IAM to read
+`<prefix>/db-app-user`). Read-only, connects the same way the gateway does
+(app-user secret + RDS CA, verify-full).
+
+*What Postgres holds - and does not.* The gateway does **not** store per-request
+token counts in Postgres. It stores:
+  - `spend` - aggregate **cents per principal per period** (derived from tokens
+    via the model rate table). This is the token-perspective capture, summed.
+  - `principal_emails` - identity and the **Okta groups** the gateway resolved.
+  - `spend_limits` / `admin_audit` - caps and the admin mutation log.
+Raw per-request token metrics live only in AMP - use `diagnose-telemetry.sh`.
+
+*Reading it:*
+  - `spend` empty while inference is happening -> the gateway is metering
+    nothing. Check the gateway logs for `spend meter has no exact rates for
+    model` (the served model IDs are not in the rate table).
+  - `principal_emails` present but every `groups` is NULL/empty -> the gateway
+    is not getting the Okta groups claim. This is the usual reason the Grafana
+    `user_groups` filter shows nothing AND per-group spend caps match nobody.
+    Fix at the Okta side (see `okta-request-email.md`), not in the gateway.
+
+---
+
 ### Client usage metrics not reaching AMP / empty Grafana dashboard
 
 *Symptom:* activity logs arrive, but `claude_code_*` panels in Grafana are empty.

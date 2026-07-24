@@ -38,3 +38,4 @@ docker/portal/tls/
 
 # Agent worktree isolation checkouts (never commit)
 .claude/worktrees/
+scripts/.rds-ca-bundle.pem
