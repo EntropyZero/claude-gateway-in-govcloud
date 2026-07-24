@@ -125,6 +125,26 @@ exist *and* makes it one-touch. The AD/GPO request for it is
 [`ad-request-email.md`](ad-request-email.md). [NEEDS TEST-RUN CONFIRMATION for
 the live Okta round-trip.]
 
+> ⚠️ **Tell developers to sign out with `claude auth logout` — never `/logout`.**
+> The two are not equivalent, and on a gateway-only egress path `/logout`
+> **locks the developer out of their own client**. `/logout` also clears
+> onboarding (`hasCompletedOnboarding = false`) and deletes the whole
+> credential store, including the pinned TLS fingerprint. The next launch
+> therefore re-enters onboarding, and because the login method is derived from
+> *whether gateway credentials exist*, a credential-less client resolves to
+> `firstParty` — which puts a **connectivity preflight first in the onboarding
+> steps**. That preflight requires HTTP 200 from both `api.anthropic.com` and
+> `platform.claude.com` (fixed hosts; the gateway URL never substitutes for
+> them), which this network does not permit, so Claude Code prints *"Unable to
+> connect to Anthropic services"* and exits **before drawing the login screen**.
+> `claude auth login` cannot rescue it either — the managed policy sends the
+> user back to interactive `/login`. `claude auth logout` keeps onboarding
+> intact and leaves `/login` reachable. Recovery for a developer already stuck
+> is O&M runbook 11. [BINARY-VERIFIED against the mirrored 2.1.211 build,
+> 2026-07-24; the recovery steps are NEEDS TEST-RUN CONFIRMATION.] The same
+> preflight sits in front of a **first-ever run** on a clean profile — verify a
+> fresh install before broad rollout.
+
 ### 1.3 What the gateway pushes centrally
 
 After a client authenticates, the **gateway pushes settings to it** via its

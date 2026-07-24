@@ -939,7 +939,102 @@ same pattern as the JWT secret in §7.
 
 ---
 
-## 11. Teardown
+## 11. Client recovery — Claude Code won't start after `/logout`
+
+*Trigger / Frequency:* A developer reports that `claude` exits at launch with
+**"Unable to connect to Anthropic services"**, and `claude auth login` refuses
+with *"forceLoginMethod is 'gateway' in managed settings; run interactive
+/login to authenticate."* Typically right after they ran `/logout`. Status:
+**[BINARY-VERIFIED against `mirror/2.1.211/claude`, 2026-07-24; NEEDS TEST-RUN
+CONFIRMATION of the recovery steps on a real laptop]** — the mechanism was read
+out of the shipped build during the live run; the fix has not yet been
+re-exercised end to end.
+
+*Why it happens (this deployment makes a benign check fatal):* the two logout
+paths are **not** equivalent.
+
+- **`/logout` (slash command)** clears credentials **and** onboarding
+  (`clearOnboarding: true`): it sets `hasCompletedOnboarding = false` in
+  `%USERPROFILE%\.claude.json` and **deletes the whole credential store** —
+  including `enterpriseGateway` (the session) *and* `gatewayTrust` (the pinned
+  TLS fingerprint).
+- **`claude auth logout` (CLI subcommand)** clears credentials only
+  (`clearOnboarding: false`) and leaves the client able to start.
+
+After `/logout`, the next launch re-enters the **onboarding** flow. Claude Code
+derives the login method from *whether gateway credentials exist* — with them
+deleted it resolves to `firstParty`, which flips OAuth onboarding on and puts a
+**connectivity preflight first in the step list**. That preflight is absent
+while a gateway session exists, which is why the failure only appears after a
+logout. It `GET`s `https://api.anthropic.com/api/hello` **and**
+`https://platform.claude.com/v1/oauth/hello`, requires **HTTP 200 on both**, and
+on failure prints the error and exits 1 — **before** the gateway login screen is
+ever drawn. Those two hosts are fixed in the build: the gateway URL never
+substitutes for them. On a gateway-only egress path they are unreachable by
+design, so the developer is deadlocked — the CLI dies before login, and
+`claude auth login` is barred by the managed policy.
+
+*Confirming it is this and not a gateway outage* (a non-200 — including a
+Zscaler block page — is the failure):
+```powershell
+curl.exe -sS -o NUL -w "%{http_code}`n" https://api.anthropic.com/api/hello
+curl.exe -sS -o NUL -w "%{http_code}`n" https://platform.claude.com/v1/oauth/hello
+```
+
+*Steps (run as the affected developer; no admin rights needed):* restore the
+onboarding flag, which removes the preflight step from the startup path.
+```powershell
+$p = "$env:USERPROFILE\.claude.json"
+Copy-Item $p "$p.bak"          # this file also holds project history — back it up
+$j = Get-Content $p -Raw | ConvertFrom-Json
+if ($j.PSObject.Properties.Name -contains 'hasCompletedOnboarding') {
+  $j.hasCompletedOnboarding = $true
+} else {
+  $j | Add-Member -NotePropertyName hasCompletedOnboarding -NotePropertyValue $true
+}
+$j | ConvertTo-Json -Depth 100 | Set-Content $p -Encoding utf8
+```
+Then open a **new** terminal, run `claude`, and run `/login` — the locked
+"Cloud gateway" screen appears with the URL pre-filled (§1.2 of
+[`client-config.md`](client-config.md)).
+
+*Verification:* `claude` starts to a prompt instead of exiting; `/login`
+completes the Okta round-trip; `/model` lists only the two served models
+(runbook 6 / the test-run checklist).
+
+*Notes & pitfalls:*
+
+- **The TLS fingerprint prompt comes back.** `/logout` deleted `gatewayTrust`
+  along with the session, so the next connect is a fresh trust-on-first-use.
+  The developer must confirm it against the fingerprint IT published (runbook
+  1) — do not let them click through it, since that prompt is the control that
+  detects TLS interception in front of the gateway FQDN.
+- **`forceRemoteSettingsRefresh` is not the culprit** and does not need
+  removing. Its startup gate short-circuits as *succeeded* while logged out
+  (remote managed settings only apply once a gateway session exists), so it
+  does not block recovery. Resist the temptation to strip it from the GPO
+  during triage — that would silently drop the model allowlist fleet-wide.
+- **Opening `api.anthropic.com` / `platform.claude.com` in Zscaler also
+  "fixes" it** and is the wrong lever: it widens egress permanently to work
+  around a one-line local config, against the gateway-only posture the
+  deployment is built on.
+- **This is not user error to be trained away** — `/logout` is a documented,
+  discoverable command. Treat recurrence as expected and keep this runbook
+  reachable by the service desk.
+
+*Prevention:* tell developers to sign out with **`claude auth logout`**, never
+`/logout`; that path leaves onboarding intact, so `claude` still starts and
+`/login` reconnects. The same trap applies to a **fresh install** on a
+locked-down laptop — a first-ever run has `hasCompletedOnboarding` unset and
+takes the identical preflight path — so exercise a clean profile during the
+test run before broad rollout rather than discovering it per-user.
+
+*Rollback / recovery:* the edit is a single boolean in a backed-up file;
+restore `.claude.json.bak` to undo. Nothing server-side changes.
+
+---
+
+## 12. Teardown
 
 *Trigger / Frequency:* Decommissioning the deployment (test account cleanup or
 end of life). Rare and deliberate. Status:

@@ -420,6 +420,23 @@ the obs stack exists and keeps the AMP params set.)
   picker, URL pre-filled) → **one-time Okta SSO** → fingerprint matches the
   published value → a prompt returns a Bedrock completion.
   **[NEEDS TEST-RUN CONFIRMATION]** for the live round-trip.
+- ☐ **Clean-profile first run** (do this on a profile that has *never* run
+  `claude`, not just a re-login): a first-ever run has `hasCompletedOnboarding`
+  unset, so it enters onboarding — and because the login method derives from
+  whether gateway credentials exist, a credential-less client resolves to
+  `firstParty` and puts a **connectivity preflight first**, requiring HTTP 200
+  from both `api.anthropic.com` and `platform.claude.com` before the login
+  screen is drawn. On a gateway-only egress path that fails and the CLI exits
+  with *"Unable to connect to Anthropic services"* — which would block **every
+  new developer**, not just this laptop. Confirm whether it reproduces here — a
+  `curl.exe` probe of `https://api.anthropic.com/api/hello` returning anything
+  but 200 (a Zscaler block page counts) means it will. If it does, the
+  rollout needs a decision before broad deployment: seed
+  `hasCompletedOnboarding: true` into the user profile as part of
+  `Install-ClaudeCode.ps1`, or allow the two hosts. Recovery for an
+  already-stuck developer, and the matching `/logout` trap, are O&M runbook 11.
+  **[BINARY-VERIFIED against `mirror/2.1.211/claude`, 2026-07-24; NEEDS TEST-RUN
+  CONFIRMATION.]**
 - ☐ **App DB user in use, not master**: the running task authenticates as
   `gateway_app*` (check `/ecs/<prefix>` logs for a clean DB connect; the
   execution role has no access to the master secret).
