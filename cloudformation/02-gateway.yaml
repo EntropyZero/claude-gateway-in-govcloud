@@ -1109,6 +1109,27 @@ Resources:
                   # groups claim, so it is a hard prerequisite rather than an
                   # opt-in. Kept as a Sub var to avoid reindenting the body.
                   - OidcScopesLine: 'scopes: [openid, profile, email, offline_access, groups]'
+            # SSRF guard override - REQUIRED for the loopback sidecar.
+            # The gateway installs a custom DNS lookup that refuses any address
+            # resolving into a blocked range, and LOOPBACK IS BLOCKED BY DEFAULT:
+            #   if (range === "loopback") return !allowLoopback()
+            #   allowLoopback() = truthy(process.env.CLAUDE_GATEWAY_ALLOW_LOOPBACK)
+            # Without this the forward fails at RUNTIME (config validates fine):
+            #   forward to http://localhost:4318 failed:
+            #   ECONNREFUSED_SSRF: blocked (cloud metadata / link-local): localhost -> 127.0.0.1
+            # This does NOT weaken cloud-metadata protection: the flag re-permits
+            # only `loopback` and `unspecified`. `linkLocal` (169.254.0.0/16, incl.
+            # EC2 IMDS 169.254.169.254), 100.100.100.200 and fd00:ec2::254 stay
+            # blocked unconditionally. Truthy values: 1/true/yes/on.
+            # Scoped to HaveTelemetry so the guard stays maximally strict when no
+            # sidecar exists. Side effect: suppresses the startup "pod can reach
+            # cloud metadata endpoint" probe warning (diagnostic only).
+            # BINARY-VERIFIED against the mirrored 2.1.211 gateway, 2026-07-24.
+            - !If
+              - HaveTelemetry
+              - Name: CLAUDE_GATEWAY_ALLOW_LOOPBACK
+                Value: '1'
+              - !Ref 'AWS::NoValue'
             # Telemetry forwarding, appended to gateway.yaml by the
             # entrypoint when set. The gateway also auto-pushes the OTLP
             # enable env vars to every connected client via /managed/settings.
@@ -1116,7 +1137,8 @@ Resources:
             # the gateway REFUSES a non-HTTPS forward_to URL unless the host is
             # localhost, so localhost:4318 is both the point of the sidecar and
             # the only plaintext target it will accept (live-run lesson; see the
-            # otel-collector container below and SECURITY_REVIEW C2).
+            # otel-collector container below and SECURITY_REVIEW C2). NOTE the
+            # loopback target ALSO requires CLAUDE_GATEWAY_ALLOW_LOOPBACK above.
             - !If
               - HaveTelemetry
               - Name: GATEWAY_TELEMETRY_B64

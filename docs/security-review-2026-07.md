@@ -306,6 +306,49 @@ alarm OK → ALARM when the sidecar is stopped and back to OK when it resumes
 (now cheap to test end-to-end with the always-on heartbeat: stop the sidecar →
 ingestion stops → ALARM; restart → OK).
 
+**Loopback sidecar needs `CLAUDE_GATEWAY_ALLOW_LOOPBACK` (2026-07-24,
+RUNTIME-VERIFIED; completes the C2 story).** Live symptom after the sidecar
+migration:
+
+    forward to http://localhost:4318 failed: Error: ECONNREFUSED_SSRF:
+    blocked (cloud metadata / link-local): localhost -> 127.0.0.1
+
+The gateway installs a custom DNS lookup that rejects any address resolving into
+a blocked range, and **loopback is blocked by default**:
+
+    if (range === "linkLocal")   return true;          // always blocked
+    if (range === "unspecified") return !allowLoopback();
+    if (range === "loopback")    return !allowLoopback();
+    allowLoopback() = truthy(process.env.CLAUDE_GATEWAY_ALLOW_LOOPBACK)
+
+So C2's resolution had a missing half. The gateway **refuses a non-HTTPS
+`forward_to` unless the host is loopback**, and then its SSRF guard **blocks
+loopback** — the sidecar architecture cannot work without the env override. Fix:
+`CLAUDE_GATEWAY_ALLOW_LOOPBACK=1` on the gateway container, gated on
+`HaveTelemetry` so the guard stays strict when no sidecar exists.
+
+**Why config validation did not catch it.** The static check runs on the URL's
+*hostname*; `localhost` does not parse as an IP literal, so it passes. Only the
+runtime DNS resolution sees `localhost -> 127.0.0.1` and rejects. A config-only
+probe therefore validates clean and fails in production — the same class of gap
+as the `cli` blob (validated only after the store connects).
+
+**This does NOT weaken cloud-metadata protection** (the SC-8/SSRF posture C2
+cares about). The flag re-permits **only** `loopback` and `unspecified`.
+Verified by direct probe with the flag ON: `169.254.169.254` (EC2 IMDS) and
+`100.100.100.200` are still rejected; `fd00:ec2::254` is likewise unconditional
+in the same predicate. Side effect: it suppresses the startup "pod can reach
+cloud metadata endpoint" probe *warning* — a diagnostic, not a control.
+
+RUNTIME-VERIFIED 2026-07-24 against the mirrored 2.1.211 gateway by driving the
+same predicate through `upstreams[].base_url` (which the gateway validates at
+config load with the identical function): loopback rejected with the flag unset,
+accepted with it set, metadata/link-local rejected either way. `tests/templates`
+gained a gate pairing the override with the loopback `forward_to`, confirmed to
+go red when the override is removed. **Needs deploy confirmation:** the actual
+OTLP forward succeeding end to end (the relay path needs an authenticated
+client, so it could not be driven offline).
+
 **Per-user / per-group spend caps enabled; `MANAGED_CLI_GROUPS` retired
 (2026-07-24, BINARY-VERIFIED end to end; needs deploy confirmation).** The
 gateway has a first-class spend-limit subsystem that this deployment was not

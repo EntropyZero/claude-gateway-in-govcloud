@@ -877,6 +877,36 @@ nothing to roll back beyond the underlying runbook's own recovery.
 
 ---
 
+### Telemetry forward failing with `ECONNREFUSED_SSRF`
+
+*Symptom:* gateway logs `forward to http://localhost:4318 failed: Error:
+ECONNREFUSED_SSRF: blocked (cloud metadata / link-local): localhost ->
+127.0.0.1`. Metrics stop reaching AMP and the `missing-telemetry` alarm fires,
+while the gateway itself keeps serving traffic.
+
+*Cause:* the gateway blocks loopback addresses by default in its SSRF guard.
+The sidecar is reached over loopback, so the forward is rejected. Note the
+gateway *requires* a loopback host for a non-HTTPS `forward_to` — so the two
+rules conflict unless the override below is set.
+
+*Fix:* `CLAUDE_GATEWAY_ALLOW_LOOPBACK=1` on the gateway container. The template
+sets this whenever telemetry is enabled; if you see this error, the running task
+predates that change — re-run `deploy-gateway.sh` and confirm the new task
+definition carries the variable:
+
+```bash
+aws ecs describe-task-definition --task-definition <gateway-td> \
+  --query "taskDefinition.containerDefinitions[?name=='gateway'].environment[?name=='CLAUDE_GATEWAY_ALLOW_LOOPBACK']"
+```
+
+*Security note:* the override re-permits only `loopback` and `unspecified`.
+Link-local (169.254.0.0/16, including EC2 IMDS `169.254.169.254`),
+`100.100.100.200`, and `fd00:ec2::254` remain blocked — probe-verified. It does
+suppress the startup "pod can reach cloud metadata endpoint" warning, which is a
+diagnostic only; the egress controls are unchanged.
+
+---
+
 ## 10. Spend caps (per-user / per-group cost limits)
 
 *Trigger / Frequency:* Onboarding a team or user, a budget change, or a spend

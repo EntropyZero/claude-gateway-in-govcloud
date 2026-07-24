@@ -57,6 +57,18 @@ telemetry/audit processing is down; a **missing-telemetry alarm** (03,
 `AWS/Usage ResourceCount`/`IngestionRate` on the workspace) is the end-to-end
 backstop that container health cannot provide.
 
+**Fixed 2026-07-24 (committed, NOT yet deployed): the loopback telemetry
+sidecar could never work.** Live symptom: `forward to http://localhost:4318
+failed: ECONNREFUSED_SSRF: blocked (cloud metadata / link-local): localhost ->
+127.0.0.1`. The gateway refuses a non-HTTPS `forward_to` unless the host is
+loopback — and then its SSRF guard blocks loopback — so C2's sidecar resolution
+was missing a half. Fix: `CLAUDE_GATEWAY_ALLOW_LOOPBACK=1` on the gateway
+container (gated on `HaveTelemetry`). It re-permits only loopback/unspecified;
+EC2 IMDS and the other metadata addresses stay blocked — probe-verified.
+Config validation cannot catch this (the static check sees the hostname
+`localhost`, not the resolved `127.0.0.1`), which is why it surfaced only in
+production.
+
 **Added 2026-07-24 (committed, NOT yet deployed): per-user / per-group spend
 caps; `MANAGED_CLI_GROUPS` retired.** 02 now configures the gateway's `admin:`
 block (the master switch for spend enforcement) + two CMK-encrypted generated

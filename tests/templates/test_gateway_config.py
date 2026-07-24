@@ -332,3 +332,48 @@ def test_rendered_config_always_requests_group_scope():
         "offline_access",
         "groups",
     ]
+
+
+# ---------------------------------------------------------------------------
+# SSRF guard / loopback sidecar
+# ---------------------------------------------------------------------------
+
+def test_loopback_sidecar_has_ssrf_override():
+    """The telemetry sidecar is reached over loopback, and the gateway BLOCKS
+    loopback by default via a custom DNS lookup:
+
+        if (range === "loopback") return !truthy(CLAUDE_GATEWAY_ALLOW_LOOPBACK)
+
+    Config validation does NOT catch this - the static check parses "localhost"
+    as a hostname, not an IP - so it fails only at runtime:
+        forward to http://localhost:4318 failed: ECONNREFUSED_SSRF:
+        blocked (cloud metadata / link-local): localhost -> 127.0.0.1
+
+    RUNTIME-VERIFIED 2026-07-24: with the flag unset a loopback target is
+    rejected; with it set it is allowed, while 169.254.169.254 and
+    100.100.100.200 stay blocked either way.
+    """
+    text = _template_text()
+    assert "CLAUDE_GATEWAY_ALLOW_LOOPBACK" in text, (
+        "loopback forward_to without CLAUDE_GATEWAY_ALLOW_LOOPBACK - telemetry "
+        "forwarding will fail at runtime with ECONNREFUSED_SSRF"
+    )
+    # must be paired with the sidecar it exists for: anchor on the DECLARATION
+    # (not the prose above it) and require the !If gate immediately before.
+    m = re.search(r"^\s*- Name: CLAUDE_GATEWAY_ALLOW_LOOPBACK$", text, re.M)
+    assert m, "CLAUDE_GATEWAY_ALLOW_LOOPBACK env-var declaration not found"
+    preceding = text[max(0, m.start() - 200):m.start()]
+    assert "HaveTelemetry" in preceding, (
+        "CLAUDE_GATEWAY_ALLOW_LOOPBACK should be gated on HaveTelemetry so the "
+        "SSRF guard stays strict when there is no sidecar"
+    )
+    after = text[m.end():m.end() + 120]
+    assert re.search(r"Value:\s*'1'", after), "override should be set to '1'"
+
+
+def test_telemetry_forward_target_is_loopback():
+    """Pins the pairing: a loopback forward_to is what makes the override
+    necessary. If this ever becomes a non-loopback host, the override should be
+    revisited rather than left enabled."""
+    text = _template_text()
+    assert "url: http://localhost:4318" in text
