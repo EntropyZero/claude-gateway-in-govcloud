@@ -891,6 +891,29 @@ pip install --no-index --find-links docker/db-admin/vendor pg8000
 ```
 No `boto3` needed.
 
+*Two security controls gate this - both by design, neither needs a template
+change:*
+
+1. **Network (RDS security group).** The DB admits only members of the
+   `<prefix>-db-client-sg` SG (stack 01 output `DBClientSecurityGroupId`),
+   described as "attach to workloads that may reach the gateway database" - that
+   is exactly this use. **Attach that SG to your in-VPC admin instance's ENI**
+   (additive; SG rules union, so it disturbs nothing else). The box must be an
+   EC2 instance IN the VPC - security groups don't apply from outside it, so an
+   off-VPC host needs a bastion. Do NOT widen the DB SG ingress; use the
+   membership SG.
+
+2. **Secret decrypt (IAM + KMS).** The app-user secret is CMK-encrypted, so the
+   operator role needs BOTH `secretsmanager:GetSecretValue` on
+   `<prefix>/db-app-user` AND `kms:Decrypt` on the CMK (scoped
+   `kms:ViaService=secretsmanager.<region>.amazonaws.com`). The `kms:Decrypt` is
+   the non-obvious half - the same CMK trap that produced 403s for Grafana/AMP.
+
+The tool uses the **app-user** secret (least-privilege, gateway DB only), never
+the RDS master - the master stays break-glass. The app user auto-assumes
+`gateway_owner` at connect (`ALTER ROLE ... IN DATABASE ... SET role`), so it can
+read these tables with no extra grant - the same path the gateway uses.
+
 *What Postgres holds - and does not.* The gateway does **not** store per-request
 token counts in Postgres. It stores:
   - `spend` - aggregate **cents per principal per period** (derived from tokens
