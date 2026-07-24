@@ -372,7 +372,7 @@ if ($WhatIfPreference) {
     Write-Host ''
     Write-Host 'If you have LOCAL ADMIN on this machine, set it yourself once (elevated):'
     Write-Host "  New-Item -Path 'HKLM:\SOFTWARE\Policies\ClaudeCode' -Force | Out-Null"
-    $json = '{"forceLoginMethod":"gateway","forceLoginGatewayUrl":"' + $GatewayUrl + '"}'
+    $json = '{"forceLoginMethod":"gateway","forceLoginGatewayUrl":"' + $GatewayUrl + '","forceRemoteSettingsRefresh":true}'
     Write-Host "  Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\ClaudeCode' -Name Settings -Type String -Value '$json'"
   }
   Write-Host ''

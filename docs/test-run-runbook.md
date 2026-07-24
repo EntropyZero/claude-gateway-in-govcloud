@@ -408,6 +408,14 @@ the obs stack exists and keeps the AMP params set.)
   Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\ClaudeCode' -Name Settings `
     -Value '{"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<FQDN>"}'
   ```
+  This bring-up seed deliberately **omits** `forceRemoteSettingsRefresh` (which
+  the real GPO object carries — see [`ad-request-email.md`](ad-request-email.md)):
+  that key makes the CLI exit if it cannot fetch the gateway's managed settings,
+  which is the behavior you want in production but which leaves you without a
+  working CLI to debug with while the gateway is still being brought up. Once
+  login succeeds, add `"forceRemoteSettingsRefresh":true` and re-test, so the
+  test laptop matches the fleet configuration — the `/model` check above is what
+  confirms the push actually landed.
   With it in place, `claude` **auto-drives to the locked gateway login** (no
   picker, URL pre-filled) → **one-time Okta SSO** → fingerprint matches the
   published value → a prompt returns a Bedrock completion.

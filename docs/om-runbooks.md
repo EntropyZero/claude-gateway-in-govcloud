@@ -490,7 +490,7 @@ offline image builds are **[VERIFIED-LIVE]**.
    the GPO already delivers (default floor is `2.1.195`, the gateway's minimum):
 
    ```json
-   {"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<GATEWAY_FQDN>","requiredMinimumVersion":"2.1.208"}
+   {"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<GATEWAY_FQDN>","forceRemoteSettingsRefresh":true,"requiredMinimumVersion":"2.1.208"}
    ```
 
    Update the GPP Registry value `Settings` under

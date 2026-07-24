@@ -226,10 +226,15 @@ small JSON either way (the two login keys; `parentSettingsBehavior` is an
 optional third — §2.1). Two interchangeable mechanisms follow.
 
 The managed-settings JSON to deliver (single object, one line for the registry
-value):
+value). `forceRemoteSettingsRefresh: true` makes the CLI block startup until it
+has freshly fetched the gateway's `/managed/settings` and **exit if that fetch
+fails** — which is what guarantees the model allowlist (§1.3) actually reaches
+the client instead of the client silently falling back to its built-in model
+menu. Trade-off: a gateway outage then stops Claude Code from starting at all.
+[BINARY-VERIFIED 2026-07-24.]
 
 ```json
-{"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<GATEWAY_FQDN>","requiredMinimumVersion":"2.1.195"}
+{"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<GATEWAY_FQDN>","forceRemoteSettingsRefresh":true,"requiredMinimumVersion":"2.1.195"}
 ```
 
 Bump `requiredMinimumVersion` when you raise the fleet's floor (default is

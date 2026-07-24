@@ -42,6 +42,7 @@ delivered (substitute our gateway FQDN):
 {
   "forceLoginMethod": "gateway",
   "forceLoginGatewayUrl": "https://<GATEWAY_FQDN>",
+  "forceRemoteSettingsRefresh": true,
   "parentSettingsBehavior": "merge"
 }
 ```
@@ -64,7 +65,7 @@ staging, and no text-encoding pitfalls.
 - **Value data** (single line, substitute the FQDN):
 
   ```
-  {"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<GATEWAY_FQDN>","parentSettingsBehavior":"merge"}
+  {"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<GATEWAY_FQDN>","forceRemoteSettingsRefresh":true,"parentSettingsBehavior":"merge"}
   ```
 
 Machine scope (Computer Configuration) so it applies to any user who signs on.
@@ -125,11 +126,27 @@ without churn.
   pre-selected.
 - `forceLoginGatewayUrl` — the gateway URL, pre-filled on the login screen so
   developers never type it (they press Enter to connect).
-- `parentSettingsBehavior: "merge"` — *(optional; harmless to include)* governs
-  whether settings injected by a **launching process** (Claude Desktop, an IDE
-  extension) are merged on a machine that has this managed source. It only
-  matters if developers start Claude Code from Claude Desktop / an IDE; machines
-  where they just run `claude` and sign in don't need it.
+- `forceRemoteSettingsRefresh: true` — the CLI **blocks startup until it has
+  freshly fetched the gateway's managed settings, and exits if that fetch
+  fails**. This is what guarantees the gateway's central policy actually reaches
+  the client. Without it, a laptop that cannot reach the gateway starts anyway
+  with **no** gateway policy applied — which means the model allowlist is
+  absent and Claude Code falls back to its own built-in model menu, none of
+  whose entries our gateway serves.
+
+  **Trade-off, stated plainly:** this converts a gateway or network outage from
+  "Claude Code runs with an unrestricted model menu" into "Claude Code will not
+  start". Since the gateway is already a hard dependency for inference, this
+  mostly makes an existing dependency honest rather than adding a new one — but
+  it does remove any offline grace period. Drop this key if you would rather
+  developers retain a (non-functional for inference) CLI during an outage.
+- `parentSettingsBehavior: "merge"` — *(optional; harmless to include)* controls
+  whether managed settings supplied by an **embedding process via the SDK**
+  (`Options.managedSettings` / `--managed-settings`, e.g. Claude Desktop or an
+  IDE extension launching Claude Code) layer underneath this admin policy tier.
+  `first-wins` (the default) drops them entirely. It has no effect on the
+  gateway's own `/managed/settings` push, and no effect at all on machines where
+  developers just run `claude` and sign in. [BINARY-VERIFIED 2026-07-24.]
 - *(Optional)* `requiredMinimumVersion: "2.1.195"` — refuse to start below this
   client version. Add it if you want a hard client-side version floor; the
   gateway also enforces a minimum server-side, so this is optional.
