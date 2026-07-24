@@ -22,6 +22,11 @@
 #
 # Precedence: a per-user cap wins over group caps. Multiple group caps combine
 # per the stack's SpendGroupLimitMode (`min` = most restrictive wins).
+#
+# TLS: the gateway ALB cert is issued by your internal PKI. If curl fails with
+# "unable to get local issuer certificate", point the script at the issuing CA:
+#   export GATEWAY_CA_BUNDLE=/path/to/org-ca-chain.pem
+# (falls back to EXTRA_CA_CERT_PATH). Never use -k.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,7 +43,7 @@ while [ $# -gt 0 ]; do
     --period) PERIOD="${2:?--period needs a value}"; shift 2 ;;
     --clear)  CLEAR=1; shift ;;
     --list)   LIST=1; shift ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -47,6 +52,20 @@ case "$PERIOD" in
   daily|weekly|monthly) ;;
   *) echo "--period must be daily, weekly or monthly (got '$PERIOD')" >&2; exit 2 ;;
 esac
+
+# CA trust for the gateway ALB cert. The ALB presents a cert for GATEWAY_FQDN
+# issued by the org's internal PKI, which the system trust store does not carry,
+# so curl fails "unable to get local issuer certificate". We NEVER pass -k (the
+# repo rule is verification-fails-closed); instead point curl at the issuing CA
+# bundle. Priority: GATEWAY_CA_BUNDLE (explicit) -> EXTRA_CA_CERT_PATH (the
+# enterprise root CA already in deploy.env). curl also natively honors
+# CURL_CA_BUNDLE / SSL_CERT_FILE from the environment.
+CA_BUNDLE="${GATEWAY_CA_BUNDLE:-${EXTRA_CA_CERT_PATH:-}}"
+CURL_CA=()
+if [ -n "$CA_BUNDLE" ]; then
+  [ -r "$CA_BUNDLE" ] || { echo "CA bundle not readable: $CA_BUNDLE" >&2; exit 1; }
+  CURL_CA=(--cacert "$CA_BUNDLE")
+fi
 
 # The admin key never goes on a command line (ps/-/proc leak): pull it into a
 # variable and hand it to curl via a mode-600 header file.
@@ -64,16 +83,17 @@ api() { # $1=method $2=key-name; body on stdin (empty for GET)
   printf 'x-api-key: %s\n' "$key" > "$hdr"
   unset key
   body="$(mktemp)"; chmod 600 "$body"
+  # ${arr[@]+"${arr[@]}"} - safe expansion of a possibly-empty array under set -u
   if [ "$method" = "GET" ]; then
     set +e
-    curl -sS --fail-with-body -X GET \
+    curl -sS --fail-with-body ${CURL_CA[@]+"${CURL_CA[@]}"} -X GET \
       -H @"$hdr" \
       "https://${GATEWAY_FQDN}/v1/organizations/spend_limits" > "$body"
     rc=$?
     set -e
   else
     set +e
-    curl -sS --fail-with-body -X "$method" \
+    curl -sS --fail-with-body ${CURL_CA[@]+"${CURL_CA[@]}"} -X "$method" \
       -H @"$hdr" -H 'content-type: application/json' \
       --data-binary @- \
       "https://${GATEWAY_FQDN}/v1/organizations/spend_limits" > "$body"
@@ -83,6 +103,12 @@ api() { # $1=method $2=key-name; body on stdin (empty for GET)
   rm -f "$hdr"
   cat "$body"; echo
   rm -f "$body"
+  if [ "$rc" -ne 0 ] && [ -z "$CA_BUNDLE" ]; then
+    echo "[hint] TLS verification failed and no CA bundle is set. The gateway ALB" >&2
+    echo "       cert is issued by your internal PKI. Point this script at that CA:" >&2
+    echo "         export GATEWAY_CA_BUNDLE=/path/to/org-ca-chain.pem   (or set" >&2
+    echo "         EXTRA_CA_CERT_PATH in deploy.env). Do NOT work around it with -k." >&2
+  fi
   return $rc
 }
 
