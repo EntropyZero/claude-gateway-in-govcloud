@@ -105,3 +105,64 @@ srcf() { run bash -c "DEPLOY_ENV_FILE='$ENVFILE' COMMON_SH_OPTIONAL_ENV=1 source
   [ "$status" -ne 0 ]
   [ "$(cat "$marker")" = "4" ]
 }
+
+# ---- dollars_to_cents ----------------------------------------------------
+# Money conversion for the gateway spend API (whole-number cents as a STRING).
+# The float route (a*100+0.5 then %.0f) put "0.05" on 6 cents - these pin the
+# exact-string behavior so that regression cannot come back.
+
+@test "dollars_to_cents: whole dollars" {
+  src 'dollars_to_cents 50'
+  [ "$status" -eq 0 ]
+  [ "$output" = "5000" ]
+}
+
+@test "dollars_to_cents: trailing .00 is the same as whole dollars" {
+  src 'dollars_to_cents 50.00'
+  [ "$status" -eq 0 ]
+  [ "$output" = "5000" ]
+}
+
+@test "dollars_to_cents: sub-dollar amount does not double-round (0.05 -> 5)" {
+  src 'dollars_to_cents 0.05'
+  [ "$status" -eq 0 ]
+  [ "$output" = "5" ]
+}
+
+@test "dollars_to_cents: single decimal place is padded, not truncated" {
+  src 'dollars_to_cents 0.5'
+  [ "$status" -eq 0 ]
+  [ "$output" = "50" ]
+}
+
+@test "dollars_to_cents: cents are preserved exactly" {
+  src 'dollars_to_cents 1234.56'
+  [ "$status" -eq 0 ]
+  [ "$output" = "123456" ]
+}
+
+@test "dollars_to_cents: large amount stays exact (no float precision loss)" {
+  src 'dollars_to_cents 99999999.99'
+  [ "$status" -eq 0 ]
+  [ "$output" = "9999999999" ]
+}
+
+@test "dollars_to_cents: rejects more than 2 decimal places rather than rounding money" {
+  src 'dollars_to_cents 0.001'
+  [ "$status" -eq 2 ]
+}
+
+@test "dollars_to_cents: rejects non-numeric input" {
+  src 'dollars_to_cents abc'
+  [ "$status" -eq 2 ]
+}
+
+@test "dollars_to_cents: rejects multiple dots" {
+  src 'dollars_to_cents 1.2.3'
+  [ "$status" -eq 2 ]
+}
+
+@test "dollars_to_cents: rejects empty input" {
+  src 'dollars_to_cents ""'
+  [ "$status" -eq 2 ]
+}

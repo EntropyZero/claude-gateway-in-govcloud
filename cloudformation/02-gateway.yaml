@@ -121,17 +121,25 @@ Parameters:
     Type: String
     Description: 'Comma-separated email domains accepted at sign-in (e.g.: example.com, example.gov).'
 
-  ManagedCliGroups:
+  SpendGroupLimitMode:
     Type: String
-    Default: ''
+    Default: min
+    AllowedValues: [min, max]
     Description: >-
-      Comma-separated Okta group names whose members get update-lockdown pushed
-      to their client via the gateway's /managed/settings (DISABLE_UPDATES=1 +
-      DISABLE_AUTOUPDATER=1 as cli.env). A member of ANY listed group matches.
-      Leave empty to skip the update lockdown - the model allowlist is pushed
-      to everyone regardless. Requires the Okta groups claim (same
-      prerequisite as the download portal); group claims require the `groups`
-      scope, which this template enables on the OIDC block only when this is set.
+      How multiple matching per-group spend caps combine for one user. `min`
+      (default) takes the MOST RESTRICTIVE cap, so adding a user to a group can
+      only ever tighten their limit. `max` takes the most permissive, so a
+      higher-tier group raises the cap. Per-user caps always win over group caps.
+
+  SpendBlockedMessage:
+    Type: String
+    Default: 'Contact the Claude Code platform team to request an increase.'
+    AllowedPattern: "[^']*"
+    MaxLength: 200
+    Description: >-
+      Org-specific text appended to the 429 a developer sees when a spend cap is
+      hit ("spend limit reached - <this>"). Single quotes are not allowed (the
+      value is rendered into a single-quoted YAML scalar).
 
   SessionTtlHours:
     Type: Number
@@ -461,7 +469,6 @@ Conditions:
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
   HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
   HaveTelemetry: !Not [!Equals [!Ref ObservabilityAmpRemoteWriteEndpoint, '']]
-  HaveManagedCli: !Not [!Equals [!Ref ManagedCliGroups, '']]
   # Fail-closed telemetry (AU-5): only meaningful when the sidecar exists.
   WantTelemetryFailClosed: !And
     - !Condition HaveTelemetry
@@ -496,6 +503,34 @@ Resources:
     Properties:
       Name: !Sub '${NamePrefix}/jwt-secret'
       Description: Gateway session-signing secret (rotate per the runbook - prepend new value, roll, remove old).
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  # Spend-limit admin API keys. The gateway's `admin:` block is what ENABLES
+  # spend enforcement at all (without it, `enforcement.fail_closed_on_error`
+  # is inert), and mutating a cap requires a write key. Generated here rather
+  # than set out-of-band: they are random bearer tokens, not operator-supplied
+  # values, so there is no placeholder-clobber hazard. `id:` in the config is
+  # the audit attribution recorded in the gateway's admin_audit table.
+  SpendAdminWriteKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/spend-admin-write-key'
+      Description: Write key for the gateway spend-limit admin API (create/update/delete caps).
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  SpendAdminReadKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/spend-admin-read-key'
+      Description: Read-only key for the gateway spend-limit admin API (list caps / period-to-date spend).
       KmsKeyId:
         Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
       GenerateSecretString:
@@ -774,6 +809,8 @@ Resources:
                   - !Ref OktaClientSecret
                   - !Ref JwtSecret
                   - !Ref DbAppUserSecret
+                  - !Ref SpendAdminWriteKeySecret
+                  - !Ref SpendAdminReadKeySecret
               # The secrets are CMK-encrypted; decrypt rides IAM (the key
               # policy delegates to IAM via the account-root statement).
               - Effect: Allow
@@ -943,12 +980,11 @@ Resources:
             - Name: GATEWAY_CONFIG_B64
               Value:
                 # Two-arg !Sub: the config body is the first element; the second
-                # supplies OidcScopesLine, which is the full `scopes:` line ONLY
-                # when ManagedCliGroups is set (HaveManagedCli) and empty
-                # otherwise. Only GROUP-KEYED managed policies need the `groups`
-                # scope, so it is requested precisely when a group-keyed policy will
-                # be pushed. The unconditional model-allowlist policy carries no
-                # `match:` and needs no claim - default behavior is unchanged.
+                # supplies OidcScopesLine, the full `scopes:` line. It is now a
+                # CONSTANT (was conditional on the retired ManagedCliGroups): the
+                # `groups` scope is a hard prerequisite because per-group spend caps
+                # (scope_type `rbac_group`) resolve against the Okta groups claim.
+                # Kept as a Sub var purely to avoid reindenting the whole body.
                 Fn::Base64: !Sub
                   - |
                     listen:
@@ -971,9 +1007,8 @@ Resources:
                       # Okta org authorization server omits email/groups from the
                       # id_token; harmless when using a custom auth server.
                       userinfo_fallback: true
-                      # Okta group claims for managed.policies require the `groups`
-                      # scope; the OidcScopesLine Sub var renders the full scopes
-                      # line here when HaveManagedCli, and nothing when not.
+                      # The `groups` scope is required for per-group spend caps
+                      # (rbac_group). Rendered from the OidcScopesLine Sub var.
                       ${OidcScopesLine}
 
                     session:
@@ -1006,6 +1041,40 @@ Resources:
                         upstream_model:
                           bedrock: ${SonnetBedrockModelId}
 
+                    # --- Cost controls (per-user / per-group spend caps) ------
+                    # The `admin:` block is the MASTER SWITCH: the gateway only
+                    # runs spend enforcement when admin is configured, and
+                    # `enforcement.fail_closed_on_error` is explicitly inert
+                    # without it (the config schema refuses the combination).
+                    # Caps themselves are DATA, not config - rows in the
+                    # gateway's `spend_limits` table, written through
+                    # POST /v1/organizations/spend_limits with a write key
+                    # (see scripts/set-spend-limit.sh). No cap rows = no
+                    # enforcement, so this block is safe to ship before any
+                    # limits are set.
+                    # `id:` is audit attribution, recorded in admin_audit.
+                    admin:
+                      write_keys:
+                        - id: deploy-write
+                          key: ${!SPEND_ADMIN_WRITE_KEY}
+                      read_keys:
+                        - id: deploy-read
+                          key: ${!SPEND_ADMIN_READ_KEY}
+                      group_limit_mode: ${SpendGroupLimitMode}
+                      blocked_message: '${SpendBlockedMessage}'
+                      # Retention for the audit / spend / identity tables.
+                      audit_retention_days: 365
+                      spend_retention_months: 13
+                      identity_retention_days: 90
+
+                    # FAIL CLOSED (operator decision, 2026-07-24): if the spend
+                    # store is unreachable or errors, the gateway returns 429
+                    # rather than allowing an uncapped request. This is an
+                    # AVAILABILITY TRADE: a store outage halts ALL inference
+                    # fleet-wide, not just cost tracking. See om-runbooks.
+                    enforcement:
+                      fail_closed_on_error: true
+
                     # Per-IdP-group guardrails and managed settings - this is the
                     # BINARY-VERIFIED shape that GATEWAY_MANAGED_B64 renders below:
                     # managed:
@@ -1035,10 +1104,11 @@ Resources:
                     # unreachable DB will NOT catch a typo in here. Verified against the
                     # mirrored 2.1.211 gateway binary, incl. a live throwaway Postgres,
                     # 2026-07-24.
-                  - OidcScopesLine: !If
-                      - HaveManagedCli
-                      - 'scopes: [openid, profile, email, offline_access, groups]'
-                      - ''
+                  # The `groups` scope is now requested UNCONDITIONALLY: per-group
+                  # spend caps (scope_type `rbac_group`) resolve against the Okta
+                  # groups claim, so it is a hard prerequisite rather than an
+                  # opt-in. Kept as a Sub var to avoid reindenting the body.
+                  - OidcScopesLine: 'scopes: [openid, profile, email, offline_access, groups]'
             # Telemetry forwarding, appended to gateway.yaml by the
             # entrypoint when set. The gateway also auto-pushes the OTLP
             # enable env vars to every connected client via /managed/settings.
@@ -1060,51 +1130,49 @@ Resources:
                             logs: ${LogsFlag}
                     - LogsFlag: !Ref ForwardActivityLogs
               - !Ref 'AWS::NoValue'
-            # Managed client settings, appended to gateway.yaml by the entrypoint.
-            # The gateway pushes these to every connected client via
-            # /managed/settings (the same mechanism the telemetry block relies
-            # on). ALWAYS rendered, because the first policy carries the model
-            # allowlist and that must reach every user:
+            # Managed client settings, appended to gateway.yaml by the entrypoint
+            # and pushed to every connected client via /managed/settings (the same
+            # mechanism the telemetry block relies on). A SINGLE catch-all policy
+            # (no `match:`), so it reaches every authenticated user with no Okta
+            # groups claim required:
             #
-            #  1. Model allowlist (unconditional, no `match:`). Without it the
-            #     client shows its OWN built-in model menu - none of whose entries
-            #     the gateway serves, so every pick 404s at the upstream. This is
-            #     what constrains the `/model` picker to the two configured models;
-            #     `models:` above only controls what the GATEWAY serves, it does not
-            #     reach into the client's picker. `enforceAvailableModels` extends the
-            #     allowlist to the "Default" selection too, so Default can't resolve to
-            #     an unserved model. IDs match the `models:` entries above by
-            #     construction (same two parameters).
-            #  2. Update lockdown (only when ManagedCliGroups is set). Members of ANY
-            #     listed Okta group get auto-updates disabled centrally - the
-            #     server-side twin of the installer's -DisableUpdates. This one needs
-            #     the Okta groups claim; the allowlist above deliberately does not.
-            #     `[${ManagedCliGroups}]` expands the comma-list into a YAML flow
-            #     sequence, the same trick allowed_email_domains uses above.
+            #  * availableModels / enforceAvailableModels - constrains the client's
+            #    `/model` picker to the two configured models. Without it the client
+            #    shows its OWN built-in menu, none of whose entries the gateway
+            #    serves, so every pick fails upstream as unauthorized. `models:`
+            #    above governs only what the GATEWAY SERVES; it does not reach into
+            #    the picker. `enforceAvailableModels` extends the allowlist to the
+            #    "Default" selection so Default can't resolve to an unserved model.
+            #    IDs match the `models:` entries above by construction.
+            #  * env - the update lockdown, the server-side twin of the installer's
+            #    -DisableUpdates. This USED to be scoped to `MANAGED_CLI_GROUPS`
+            #    Okta groups; it now applies to everyone, which is strictly broader
+            #    coverage AND drops the groups-claim dependency (2026-07-24).
+            #
+            # Ordering note (kept for the next maintainer): selection is
+            # FIRST-MATCH-WINS over a SINGLE policy, and a `match:`-less policy is
+            # normalized to `match: {}` = matches everyone. If a group-scoped policy
+            # is ever added back it MUST come BEFORE this one, or it is dead config
+            # - the gateway warns and still boots, so it fails silently.
             - Name: GATEWAY_MANAGED_B64
               Value:
-                Fn::Base64: !If
-                  - HaveManagedCli
-                  - !Sub |
-                      managed:
-                        policies:
-                          - match: { groups: [${ManagedCliGroups}] }
-                            cli:
-                              env: { DISABLE_UPDATES: "1", DISABLE_AUTOUPDATER: "1" }
-                          - cli:
-                              availableModels: ['${OpusModelId}', '${SonnetModelId}']
-                              enforceAvailableModels: true
-                  - !Sub |
-                      managed:
-                        policies:
-                          - cli:
-                              availableModels: ['${OpusModelId}', '${SonnetModelId}']
-                              enforceAvailableModels: true
+                Fn::Base64: !Sub |
+                  managed:
+                    policies:
+                      - cli:
+                          availableModels: ['${OpusModelId}', '${SonnetModelId}']
+                          enforceAvailableModels: true
+                          env: { DISABLE_UPDATES: "1", DISABLE_AUTOUPDATER: "1" }
           Secrets:
             - Name: OIDC_CLIENT_SECRET
               ValueFrom: !Ref OktaClientSecret
             - Name: GATEWAY_JWT_SECRET
               ValueFrom: !Ref JwtSecret
+            # Spend-limit admin API keys (see the `admin:` block in the config).
+            - Name: SPEND_ADMIN_WRITE_KEY
+              ValueFrom: !Ref SpendAdminWriteKeySecret
+            - Name: SPEND_ADMIN_READ_KEY
+              ValueFrom: !Ref SpendAdminReadKeySecret
             # The APP user (created by DbBootstrap), never the master.
             - Name: PGUSER
               ValueFrom: !Sub '${DbAppUserSecret}:username::'

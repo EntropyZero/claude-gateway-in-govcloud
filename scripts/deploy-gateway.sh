@@ -67,7 +67,6 @@ aws cloudformation deploy \
       "OktaIssuer=${OKTA_ISSUER}" \
       "OktaClientId=${OKTA_CLIENT_ID}" \
       "AllowedEmailDomains=${ALLOWED_EMAIL_DOMAINS}" \
-      "ManagedCliGroups=${MANAGED_CLI_GROUPS:-}" \
       "SessionTtlHours=${SESSION_TTL_HOURS:-1}" \
       "AlbIdleTimeoutSeconds=${ALB_IDLE_TIMEOUT_SECONDS:-900}" \
       "DeregistrationDelaySeconds=${DEREGISTRATION_DELAY_SECONDS:-300}" \
@@ -95,7 +94,9 @@ aws cloudformation deploy \
       "OpusModelId=${OPUS_MODEL_ID:-claude-opus-4-8}" \
       "OpusBedrockModelId=${OPUS_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-opus-4-8}" \
       "SonnetModelId=${SONNET_MODEL_ID:-claude-sonnet-4-5}" \
-      "SonnetBedrockModelId=${SONNET_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0}"
+      "SonnetBedrockModelId=${SONNET_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0}" \
+      "SpendGroupLimitMode=${SPEND_GROUP_LIMIT_MODE:-min}" \
+      "SpendBlockedMessage=${SPEND_BLOCKED_MESSAGE:-Contact the Claude Code platform team to request an increase.}"
 
 # Stack policy: refuse any future update that would REPLACE or DELETE the
 # ALB. Its default DNS name is the corporate CNAME target - recreation

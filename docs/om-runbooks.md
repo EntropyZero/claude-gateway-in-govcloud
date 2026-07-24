@@ -877,7 +877,69 @@ nothing to roll back beyond the underlying runbook's own recovery.
 
 ---
 
-## 10. Teardown
+## 10. Spend caps (per-user / per-group cost limits)
+
+*Trigger / Frequency:* Onboarding a team or user, a budget change, or a spend
+alert. Status: **[NEEDS TEST-RUN CONFIRMATION]** end to end — the admin API,
+both cap scopes, and read/write key separation are **verified against the
+gateway binary** (2026-07-24) but not yet exercised on the deployed stack.
+
+*Model:* Stack `02` configures the gateway's `admin:` block — which is the
+**master switch**: the gateway runs spend enforcement *only* when admin is
+configured — and mints two API keys into Secrets Manager
+(`<prefix>/spend-admin-write-key`, `<prefix>/spend-admin-read-key`). The **caps
+themselves are data**, rows in the gateway's `spend_limits` table, set through
+`POST /v1/organizations/spend_limits`. **No cap rows = no enforcement**, so the
+stack is safe to deploy before any limits exist.
+
+*Setting a cap:*
+```bash
+scripts/set-spend-limit.sh --scope user       --id alice@example.com --amount 50
+scripts/set-spend-limit.sh --scope rbac_group --id claude-developers --amount 2500
+scripts/set-spend-limit.sh --scope organization                      --amount 10000
+scripts/set-spend-limit.sh --scope user --id alice@example.com --clear   # remove
+scripts/set-spend-limit.sh --list                                        # review
+```
+`--amount` is **dollars**; the API takes whole **cents as a string** and the
+script converts exactly (no float rounding). `--period` is `daily`, `weekly` or
+`monthly` (default monthly).
+
+*Precedence:* a **per-user** cap wins over group caps. When a user matches
+several **group** caps they combine per `SPEND_GROUP_LIMIT_MODE` — `min`
+(default) takes the most restrictive, so adding someone to a group can only
+tighten their cap.
+
+*Prerequisite:* per-**group** caps resolve against the **Okta groups claim**, so
+that claim must actually be present in the token (see
+[`okta-request-email.md`](okta-request-email.md)). Per-**user** caps key on
+`sub` and have no such dependency — if the groups claim is missing, per-user and
+org-wide caps still work while group caps silently match nothing.
+
+*What a capped developer sees:* HTTP 429, `billing_error`, *"spend limit
+reached — <SPEND_BLOCKED_MESSAGE>"*, with `x-should-retry: false`. It is not a
+transient error and the client will not retry around it.
+
+> ⚠️ **FAIL-CLOSED is enabled** (`enforcement.fail_closed_on_error: true`,
+> operator decision 2026-07-24). If the spend store is unreachable or errors,
+> the gateway returns 429 **for every request** rather than allowing uncapped
+> spend. This is an availability trade taken deliberately: **a database problem
+> halts all inference fleet-wide, not just cost tracking.** If developers report
+> a sudden fleet-wide "spend limit unavailable", suspect the RDS instance
+> first — check the DB alarms and `spend check failed` / `store_error` in the
+> gateway logs — and if you need to restore service before the store is fixed,
+> flip `fail_closed_on_error` to `false` and re-run `deploy-gateway.sh`.
+
+*Audit:* every mutation is attributed to the key `id` (`deploy-write` /
+`deploy-read`) in the gateway's `admin_audit` table, retained 365 days. Spend
+history is retained 13 months, identity records 90 days.
+
+*Key rotation:* both keys are `GenerateSecretString` secrets. Rotate by updating
+the secret and re-running `deploy-gateway.sh` (the task reads them at start), the
+same pattern as the JWT secret in §7.
+
+---
+
+## 11. Teardown
 
 *Trigger / Frequency:* Decommissioning the deployment (test account cleanup or
 end of life). Rare and deliberate. Status:

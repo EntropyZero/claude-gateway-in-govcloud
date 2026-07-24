@@ -155,19 +155,16 @@ def _managed_b64_block():
     return text[m.start():tail]
 
 
-def _managed_policies(groups=None):
-    """Parse one rendered variant of the managed: block into policy dicts.
+def _managed_policies():
+    """Parse the rendered managed: block into policy dicts.
 
-    groups=None models the default render (ManagedCliGroups unset -> the
-    else-branch !Sub); a list models the HaveManagedCli render. Both branches
-    are block scalars under `- !Sub |` inside the Fn::Base64 !If.
+    Single unconditional `Fn::Base64: !Sub |` block scalar (the ManagedCliGroups
+    variant was retired 2026-07-24 along with the parameter).
     """
     block = _managed_b64_block()
-    subs = [m.end() for m in re.finditer(r"- !Sub \|\n", block)]
-    assert len(subs) == 2, f"expected 2 !Sub branches in GATEWAY_MANAGED_B64, got {len(subs)}"
-    # branch 0 = HaveManagedCli (with groups), branch 1 = default (without)
-    start = subs[0] if groups else subs[1]
-    body_lines = block[start:].split("\n")
+    m = re.search(r"Fn::Base64: !Sub \|\n", block)
+    assert m, "GATEWAY_MANAGED_B64 should be a single Fn::Base64 !Sub block scalar"
+    body_lines = block[m.end():].split("\n")
     base_indent = len(body_lines[0]) - len(body_lines[0].lstrip())
     yaml_lines = []
     for l in body_lines:
@@ -177,82 +174,77 @@ def _managed_policies(groups=None):
             break
         yaml_lines.append(l[base_indent:])
     raw = "\n".join(yaml_lines)
-    raw = raw.replace("${ManagedCliGroups}", ", ".join(groups or []))
     raw = raw.replace("${OpusModelId}", "claude-opus-4-8")
     raw = raw.replace("${SonnetModelId}", "claude-sonnet-4-5")
     return yaml.safe_load(raw)["managed"]["policies"]
 
 
-def test_managed_cli_param_and_condition_exist():
+def test_managed_cli_groups_is_fully_retired():
+    """MANAGED_CLI_GROUPS / HaveManagedCli were removed when spend limits landed
+    (the groups claim became a hard prerequisite instead of an opt-in). A stale
+    !Ref/!If to either would fail the deploy, and a stale parameter would be a
+    silently-ignored knob."""
     text = _template_text()
-    # parameter present with an empty default (opt-in)
-    assert re.search(r"^  ManagedCliGroups:\s*$", text, re.M), "ManagedCliGroups param missing"
-    pblk = text[text.index("ManagedCliGroups:"):]
-    assert re.search(r"Default:\s*''", pblk[:400]), "ManagedCliGroups should default to ''"
-    # condition present and keyed on the parameter being non-empty
-    assert re.search(
-        r"HaveManagedCli:\s*!Not\s*\[!Equals\s*\[!Ref ManagedCliGroups,\s*''\]\]", text
-    ), "HaveManagedCli condition missing or not keyed on ManagedCliGroups != ''"
+    for token in ("!Ref ManagedCliGroups", "HaveManagedCli"):
+        assert token not in text, f"stale {token} left in the template"
+    assert not re.search(r"^  ManagedCliGroups:\s*$", text, re.M), (
+        "ManagedCliGroups parameter should be gone"
+    )
 
 
 def test_managed_b64_is_always_emitted():
     """The model allowlist must reach EVERY client, so the env var is
-    unconditional - only its body varies on HaveManagedCli."""
+    unconditional - no !If, no NoValue branch."""
     block = _managed_b64_block()
     assert "AWS::NoValue" not in block, (
-        "GATEWAY_MANAGED_B64 must not be dropped when ManagedCliGroups is unset - "
-        "the model allowlist has to be pushed regardless"
+        "GATEWAY_MANAGED_B64 must not be droppable - the model allowlist has to "
+        "be pushed on every deployment"
     )
-    assert "Fn::Base64: !If" in block, "GATEWAY_MANAGED_B64 body should be an !If over two !Subs"
-    assert "HaveManagedCli" in block, "GATEWAY_MANAGED_B64 body not keyed on HaveManagedCli"
+    assert "Fn::Base64: !Sub" in block
 
 
-@pytest.mark.parametrize("groups", [None, ["grp-a", "grp-b"]])
-def test_catch_all_policy_must_be_last(groups):
+def test_catch_all_policy_must_be_last():
     """A policy with no `match:` is a CATCH-ALL, and policy selection is
     FIRST-MATCH-WINS over a single policy - so a catch-all anywhere but the end
     shadows every policy after it.
 
-    RUNTIME-VERIFIED against the mirrored 2.1.211 gateway (2026-07-24): with the
-    catch-all first the gateway logs
+    RUNTIME-VERIFIED against the mirrored 2.1.211 gateway (2026-07-24): with a
+    catch-all ahead of another policy the gateway logs
         warn managed.policies[0] is a catch-all (match: {}) but is not the last
              entry - policies after it will never match. Move it to the end.
-    and the group-scoped update lockdown becomes unreachable for everyone. It
-    still BOOTS, so only this gate catches it.
+    and still BOOTS, so only this gate catches it.
     """
-    policies = _managed_policies(groups)
+    policies = _managed_policies()
     catch_alls = [i for i, p in enumerate(policies) if "match" not in p]
-    assert catch_alls, "expected exactly one catch-all (model-allowlist) policy"
+    assert catch_alls, "expected a catch-all (model-allowlist) policy"
     assert catch_alls == [len(policies) - 1], (
-        f"catch-all policy must be LAST; found at index(es) {catch_alls} of "
-        f"{len(policies)} policies - everything after it is dead config"
+        f"catch-all must be LAST; found at {catch_alls} of {len(policies)} "
+        "policies - everything after it is dead config"
     )
 
 
-@pytest.mark.parametrize("groups", [None, ["grp-a", "grp-b"]])
-def test_model_allowlist_is_pushed_to_every_user(groups):
-    """The model-allowlist policy has NO `match:`, so it applies to every
-    authenticated user - no Okta groups claim required.
+def test_model_allowlist_and_lockdown_reach_every_user():
+    """The catch-all carries BOTH the model allowlist and the update lockdown,
+    with no `match:` - so neither depends on an Okta groups claim.
 
-    Without this the client falls back to its own built-in model menu, none of
-    whose entries the gateway serves (live symptom: every model unauthorized).
-    Group members still receive it: the gateway merges the catch-all's `cli` as
-    a BASE into each earlier policy (runtime-verified - "after merge with
-    catch-all base - changed keys: availableModels, enforceAvailableModels").
+    Without the allowlist the client falls back to its own built-in model menu,
+    none of whose entries the gateway serves (live symptom: every model
+    unauthorized).
     """
-    policies = _managed_policies(groups)
-    allow = policies[-1]
-    assert "match" not in allow, (
-        "the model-allowlist policy must not be group-scoped - a `match:` here "
-        "silently drops the allowlist for users outside those Okta groups"
+    policies = _managed_policies()
+    cli = policies[-1]["cli"]
+    assert "match" not in policies[-1], (
+        "the allowlist/lockdown policy must not be group-scoped - a `match:` "
+        "here silently drops both for users outside those Okta groups"
     )
-    cli = allow["cli"]
-    # keys live INSIDE `cli` (the passthrough settings blob), not on the policy
+    # keys live INSIDE `cli` (Claude Code settings.json keys), not on the policy
     assert cli["availableModels"] == ["claude-opus-4-8", "claude-sonnet-4-5"]
     assert cli["enforceAvailableModels"] is True, (
         "without enforceAvailableModels the Default selection can still resolve "
         "to a model the gateway does not serve"
     )
+    assert cli["env"]["DISABLE_UPDATES"] == "1"
+    assert cli["env"]["DISABLE_AUTOUPDATER"] == "1"
 
 
 def test_available_models_is_never_at_policy_level():
@@ -260,65 +252,80 @@ def test_available_models_is_never_at_policy_level():
     gateway rejects it ("Unrecognized key(s) in object") and refuses to boot -
     binary-verified against the mirrored 2.1.211 gateway, 2026-07-24.
     """
-    for groups in (None, ["grp-a"]):
-        for policy in _managed_policies(groups):
-            assert "availableModels" not in policy, (
-                f"availableModels at policy level is a BOOT FAILURE: {policy!r}"
-            )
-            assert "enforceAvailableModels" not in policy, (
-                f"enforceAvailableModels at policy level is a BOOT FAILURE: {policy!r}"
-            )
+    for policy in _managed_policies():
+        assert "availableModels" not in policy, (
+            f"availableModels at policy level is a BOOT FAILURE: {policy!r}"
+        )
+        assert "enforceAvailableModels" not in policy, (
+            f"enforceAvailableModels at policy level is a BOOT FAILURE: {policy!r}"
+        )
 
 
-def test_update_lockdown_policy_matches_groups_only_when_configured():
-    """The update-lockdown policy is group-scoped and appears only when
-    ManagedCliGroups is set; the default render carries the allowlist alone.
+# ---------------------------------------------------------------------------
+# Spend limits (admin: / enforcement: blocks)
+# ---------------------------------------------------------------------------
 
-    It must come BEFORE the catch-all (see test_catch_all_policy_must_be_last),
-    otherwise it is never reached.
-    """
-    assert len(_managed_policies(None)) == 1, (
-        "default render should carry only the model-allowlist policy"
+def test_admin_block_present_and_enables_enforcement():
+    """The `admin:` block is the MASTER SWITCH - the gateway only runs spend
+    enforcement when admin is configured, and the config schema explicitly
+    refuses `fail_closed_on_error` without it."""
+    doc = _load_gateway_config()
+    assert "admin" in doc, "no admin: block - spend enforcement would never run"
+    admin = doc["admin"]
+    assert admin["write_keys"] and admin["write_keys"][0]["id"], (
+        "a write key with an id is required to mutate caps (id = audit attribution)"
     )
-    policies = _managed_policies(["grp-a", "grp-b"])
-    assert len(policies) == 2, "HaveManagedCli render should add the lockdown policy"
-    lockdown = policies[0]
-    assert lockdown["match"]["groups"] == ["grp-a", "grp-b"], lockdown["match"]
-    env = lockdown["cli"]["env"]
-    assert env["DISABLE_UPDATES"] == "1"
-    assert env["DISABLE_AUTOUPDATER"] == "1"
+    assert admin["read_keys"] and admin["read_keys"][0]["id"]
 
 
-def test_oidc_scopes_line_is_conditional_not_hardcoded():
-    """The active `scopes:` line must come from the OidcScopesLine !If, and the
-    body block must NOT hardcode a live (uncommented) scopes line."""
+def test_admin_keys_come_from_runtime_env_not_literals():
+    """Keys must be injected from Secrets Manager at runtime, never baked into
+    the template as literals."""
+    body = _extract_config_block()
+    assert "${!SPEND_ADMIN_WRITE_KEY}" in body, "write key is not a runtime env ref"
+    assert "${!SPEND_ADMIN_READ_KEY}" in body, "read key is not a runtime env ref"
+
+
+def test_enforcement_fails_closed():
+    """Operator decision (2026-07-24): a spend-store error blocks rather than
+    allowing an uncapped request. This is an availability trade - see
+    om-runbooks - so it is pinned by a test."""
+    doc = _load_gateway_config()
+    assert doc["enforcement"]["fail_closed_on_error"] is True
+
+
+def test_groups_scope_is_unconditional():
+    """Per-group caps (scope_type rbac_group) resolve against the Okta groups
+    claim, so the `groups` scope is now a hard prerequisite, not an opt-in."""
     text = _template_text()
-    # the Sub var is wired to HaveManagedCli with the full groups-scope line
-    assert re.search(
-        r"OidcScopesLine:\s*!If", text
-    ), "OidcScopesLine is not driven by an !If"
-    m = re.search(
-        r"OidcScopesLine:\s*!If\s*\n\s*-\s*HaveManagedCli\s*\n\s*-\s*'scopes: \[openid, profile, email, offline_access, groups\]'\s*\n\s*-\s*''",
-        text,
+    assert not re.search(r"OidcScopesLine:\s*!If", text), (
+        "OidcScopesLine must no longer be conditional - per-group spend caps "
+        "need the groups claim on every deployment"
     )
-    assert m, "OidcScopesLine !If wiring (HaveManagedCli -> scopes line / '') not found"
-    # the config body itself must not carry an active `scopes:` line - only the
-    # injected marker and comments. Any bare `scopes:` (not '#', not the Sub var)
-    # would mean the scope is unconditionally requested.
+    doc = _load_gateway_config(scopes_line=True)
+    assert "groups" in doc["oidc"]["scopes"]
+
+
+def test_oidc_scopes_line_comes_from_the_sub_var():
+    """The active `scopes:` line must still come from the OidcScopesLine Sub var
+    (now a constant, not an !If), and the body must not hardcode a second one."""
+    text = _template_text()
+    assert re.search(
+        r"OidcScopesLine:\s*'scopes: \[openid, profile, email, offline_access, groups\]'",
+        text,
+    ), "OidcScopesLine should be the constant full scopes line"
     body = _extract_config_block()
     for l in body.split("\n"):
-        s = l.strip()
-        assert not (s.startswith("scopes:")), f"body hardcodes an active scopes line: {l!r}"
+        assert not l.strip().startswith("scopes:"), (
+            f"body hardcodes a second active scopes line: {l!r}"
+        )
     assert "${OidcScopesLine}" in body, "OidcScopesLine marker missing from config body"
 
 
-def test_both_scope_variants_parse_valid_yaml():
-    """Both rendered variants (managed on/off) must be valid YAML, differing
-    only by the presence of the oidc.scopes list."""
-    off = _load_gateway_config(scopes_line=False)
-    on = _load_gateway_config(scopes_line=True)
-    assert "scopes" not in off["oidc"], "default render should omit oidc.scopes"
-    assert on["oidc"]["scopes"] == [
+def test_rendered_config_always_requests_group_scope():
+    """Only one render exists now - it must always carry the groups scope."""
+    doc = _load_gateway_config(scopes_line=True)
+    assert doc["oidc"]["scopes"] == [
         "openid",
         "profile",
         "email",

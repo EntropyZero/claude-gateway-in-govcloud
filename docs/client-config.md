@@ -35,7 +35,7 @@ Per the repo honesty rule (`.claude/rules/process.md`), claims here are tagged:
 - **[NEEDS TEST-RUN CONFIRMATION]** — behavior we assert but have not yet run
   end to end: the live interactive Cloud-gateway login, the gateway
   `/managed/settings` push (the model allowlist - BINARY-VERIFIED for shape and
-  policy ordering, but not yet live - and `MANAGED_CLI_GROUPS`), and a GPO-delivered
+  policy ordering, but not yet live), and a GPO-delivered
   `HKLM\SOFTWARE\Policies\ClaudeCode` source being honored by the CLI.
 
 ---
@@ -167,15 +167,17 @@ earlier policy, so group members receive the allowlist *and* the lockdown.
 prefixes (`opus-4-5`), and full model IDs; an empty array means "default model
 only". [BINARY-VERIFIED against the mirrored 2.1.211 gateway binary, 2026-07-24.]
 
-**b) Update lockdown — only for listed groups.** The `deploy.env` knob
-**`MANAGED_CLI_GROUPS`** (CloudFormation parameter `ManagedCliGroups`, wired in
-parallel) makes the gateway push `DISABLE_UPDATES` / `DISABLE_AUTOUPDATER` to
-members of the listed Okta groups, so update lockdown can be enforced centrally
-without touching the workstation. This one **requires the Okta groups claim**
-(the `groups` scope alone yields no group membership on an org authorization
-server — see [`okta-request-email.md`](okta-request-email.md) and
-[`conops.md`](conops.md) §8.2). With no groups listed, the gateway pushes the
-model allowlist and telemetry config only.
+**b) Update lockdown — also to everyone.** The same catch-all policy carries
+`DISABLE_UPDATES` / `DISABLE_AUTOUPDATER` as `cli.env`, the server-side twin of
+the installer's `-DisableUpdates`. This **used to** be scoped to Okta groups via
+a `MANAGED_CLI_GROUPS` knob; that knob was **retired on 2026-07-24** when spend
+limits landed. Pushing the lockdown to everyone is strictly broader coverage and
+drops a groups-claim dependency, so nothing is lost by the removal.
+
+The Okta **groups claim is still required**, but now for a different reason:
+per-group spend caps (`scope_type` `rbac_group`) resolve against it, so the
+gateway requests the `groups` scope unconditionally. See
+[`okta-request-email.md`](okta-request-email.md).
 
 Central push is a per-connected-client server-side control; it does **not**
 require or imply any admin rights on the laptop.
@@ -191,7 +193,7 @@ it carried now lives in the user settings file or is compensated server-side —
 | `forceLoginMethod: "gateway"` | Make the CLI offer/use gateway login | **Managed source only (§1.2, §2) — no user-scope substitute exists.** Without it, `/login` has no gateway option at all. The network also blocks consumer `claude.ai`/Anthropic endpoints, but that does not create the login option; only the managed key does. |
 | `forceLoginGatewayUrl` | Pre-fill the URL on the login screen (press Enter to connect) | **Managed source only (§2).** There is no user-facing way to type a gateway URL — by design. |
 | `requiredMinimumVersion` | Refuse to start below a version floor | The **gateway enforces a minimum client version (2.1.195+) server-side**, and the mirror-only network path pins the distributed build; a *client-side* hard floor is managed-only (§2, optional). |
-| `env.DISABLE_UPDATES` / `env.DISABLE_AUTOUPDATER` | Lock auto-update | Written to the **user** settings `env` block by the installer; the gateway can also push it centrally via `/managed/settings` (`MANAGED_CLI_GROUPS`, §1.3); the mirror-only network path is the real control |
+| `env.DISABLE_UPDATES` / `env.DISABLE_AUTOUPDATER` | Lock auto-update | Written to the **user** settings `env` block by the installer; the gateway also pushes it centrally to every user via `/managed/settings` (§1.3); the mirror-only network path is the real control |
 | `env.OTEL_RESOURCE_ATTRIBUTES` (`team` / `cost_center`) | Telemetry grouping | User settings `env` block (`-Team` / `-CostCenter`) |
 | `env.NODE_EXTRA_CA_CERTS` | Enterprise CA trust | User settings `env` block (`-ExtraCaCertPath`) |
 | (Okta auth, allowed email domains) | Who may use the gateway | **Gateway enforces Okta authentication + allowed email domains server-side** — never a client setting |
@@ -364,7 +366,8 @@ from the managed layer confirms the lock is in force.
 - **Gateway `/managed/settings` (server-side):** the **client model allowlist**
   (`availableModels` / `enforceAvailableModels`) and central telemetry config for
   every connected client, plus optional update lockdown for named Okta groups
-  (`MANAGED_CLI_GROUPS`).
+  (to every user; the group-scoped `MANAGED_CLI_GROUPS` knob was retired
+  2026-07-24).
 
 The channels compose cleanly and target different keys: the installer writes no
 policy source, the managed-settings channel owns forced login, and the gateway

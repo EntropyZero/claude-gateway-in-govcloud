@@ -195,8 +195,8 @@ lockdown the installer writes (`DISABLE_UPDATES=1`, telemetry tags) is a
 convenience, not enforcement — the mirror-only network path (no reachable
 `downloads.claude.ai`) and the gateway's server-side controls are the real
 guardrails, and the gateway can additionally push the lockdown centrally
-(`MANAGED_CLI_GROUPS`). The gateway always pushes the **client model
-allowlist** on the same channel (see Models below).
+to every user. The gateway pushes the **client model allowlist** on the same
+channel (see Models below).
 
 Ensure your enterprise root CA is in the Windows certificate store (on
 domain-joined machines it normally already is, via GPO — no admin needed at
@@ -563,7 +563,7 @@ obvious alternative?" question — revisit only with a concrete reason.
 | Store | RDS PostgreSQL 16 with `rds.force_ssl` + **pgaudit**, client-side `sslmode=verify-full` (RDS CA bundle baked into the image), and SG-to-SG access only. The gateway connects as a **least-privilege application user** (created by a bootstrap Lambda; owns only the gateway schema via a shared owner role — no CREATEROLE, no `rds_superuser`, cannot tamper with pgaudit). The RDS master secret is **break-glass only**, still auto-rotated by RDS. Multi-AZ is on by default because a lost store loses spend tracking and caps, not just re-logins. |
 | Encryption at rest | One customer-managed KMS key (created by the DB stack or bring-your-own via `KMS_KEY_ARN`) covers RDS, all secrets, CloudWatch log groups, the activity archive, and AMP. Exception: the ALB access-logs bucket stays SSE-S3 — ELB log delivery does not support KMS. |
 | Network egress | Every security group has explicit egress (no default allow-all); all VPC endpoints carry resource policies scoped to this account/workload. Bedrock IAM + endpoint policies allow exactly the two configured models. |
-| Client install | Fully offline: pinned binary mirrored from Anthropic's release bucket and verified before distribution. **The binary install is no-admin**: per-user install + user-scope config (update lockdown `DISABLE_UPDATES=1`, telemetry tags) in `%USERPROFILE%\.claude\settings.json`. The gateway **login**, however, **requires** the managed keys `forceLoginMethod: "gateway"` + `forceLoginGatewayUrl` (honored only from a managed source — HKLM/`%ProgramFiles%` managed-settings.json/plist, never user settings), delivered by GPO/MDM (`docs/client-config.md`, `docs/ad-request-email.md`) or self-served with local admin. With it present, `/login` is locked to gateway with the URL pre-filled; the developer only completes a one-time Okta SSO. The gateway can also push the lockdown centrally (`MANAGED_CLI_GROUPS`). |
+| Client install | Fully offline: pinned binary mirrored from Anthropic's release bucket and verified before distribution. **The binary install is no-admin**: per-user install + user-scope config (update lockdown `DISABLE_UPDATES=1`, telemetry tags) in `%USERPROFILE%\.claude\settings.json`. The gateway **login**, however, **requires** the managed keys `forceLoginMethod: "gateway"` + `forceLoginGatewayUrl` (honored only from a managed source — HKLM/`%ProgramFiles%` managed-settings.json/plist, never user settings), delivered by GPO/MDM (`docs/client-config.md`, `docs/ad-request-email.md`) or self-served with local admin. With it present, `/login` is locked to gateway with the URL pre-filled; the developer only completes a one-time Okta SSO. The gateway also pushes the lockdown centrally to every user. |
 | Guardrails | IAM task role **and** VPC-endpoint policy are independently scoped to **exactly the two configured models** (inference-profile IDs + their derived foundation-model IDs, from the `*_BEDROCK_MODEL_ID` parameters) — two separate controls on what the org credential can invoke, both following the parameters. |
 
 ### Gotchas — do not re-litigate

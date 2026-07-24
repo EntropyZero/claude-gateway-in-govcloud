@@ -57,6 +57,19 @@ telemetry/audit processing is down; a **missing-telemetry alarm** (03,
 `AWS/Usage ResourceCount`/`IngestionRate` on the workspace) is the end-to-end
 backstop that container health cannot provide.
 
+**Added 2026-07-24 (committed, NOT yet deployed): per-user / per-group spend
+caps; `MANAGED_CLI_GROUPS` retired.** 02 now configures the gateway's `admin:`
+block (the master switch for spend enforcement) + two CMK-encrypted generated
+admin keys, and sets `enforcement.fail_closed_on_error: true` — **an availability
+trade: a spend-store outage halts all inference fleet-wide** (recovery path in
+`om-runbooks.md` §10). Caps are **data, not config**: rows in `spend_limits` set
+by `scripts/set-spend-limit.sh` (per user / per `rbac_group` / org-wide), so no
+cap rows = no enforcement. `MANAGED_CLI_GROUPS` is gone — its update lockdown now
+reaches every user via the catch-all policy — but the `groups` scope is now
+requested **unconditionally**, because per-group caps resolve against the Okta
+groups claim. Verified end to end against the mirrored gateway + a throwaway
+Postgres (both cap scopes created and listed; read key refused for writes).
+
 **Fixed 2026-07-24 (committed, NOT yet deployed): the client model picker
 offered models the gateway does not serve.** End-to-end login now works; the
 first real session showed Claude Code's own built-in `/model` menu, so every
@@ -118,7 +131,7 @@ test — stop the sidecar). Full proof in the 2026-07-23 fix-log entries of
 | `docs/security-review-2026-07.md` | finding-by-finding status; the source of truth for what's done |
 | `docs/test-run-runbook.md` | the deploy runbook |
 | `docs/om-runbooks.md` | steady-state O&M runbooks (cert/secret rotation, CA refresh, updates, backup/restore, alarms, teardown) |
-| `docs/client-config.md` | **client config & enforcement model**: no-admin user-scope installer, one-time `/login` flow, gateway `/managed/settings` push (`MANAGED_CLI_GROUPS`), and the **GPO/MDM forced-login** path (ops how-to; not in the PDF set) |
+| `docs/client-config.md` | **client config & enforcement model**: no-admin user-scope installer, one-time `/login` flow, gateway `/managed/settings` push (model allowlist + update lockdown), and the **GPO/MDM forced-login** path (ops how-to; not in the PDF set) |
 | `docs/networking-request-email.md` | cert/DNS/Zscaler request template |
 | `docs/okta-request-email.md` | Okta OIDC app request template (org server, Web app, groups) |
 | `docs/ad-request-email.md` | AD/GPO request template — the machine-policy managed setting that enables gateway login |

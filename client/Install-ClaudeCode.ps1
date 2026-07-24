@@ -55,7 +55,7 @@
   the version you distribute. User-scope is a convenience, not enforcement:
   the mirror-only network path (downloads.claude.ai unreachable) is the real
   control, and the gateway can push the same lockdown centrally
-  (MANAGED_CLI_GROUPS in deploy.env).
+  (pushed to every user; no deploy.env knob since 2026-07-24).
 
 .PARAMETER CostCenter
   Optional cost-center tag stamped onto all telemetry this workstation

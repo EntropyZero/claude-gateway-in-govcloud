@@ -306,6 +306,50 @@ alarm OK → ALARM when the sidecar is stopped and back to OK when it resumes
 (now cheap to test end-to-end with the always-on heartbeat: stop the sidecar →
 ingestion stops → ALARM; restart → OK).
 
+**Per-user / per-group spend caps enabled; `MANAGED_CLI_GROUPS` retired
+(2026-07-24, BINARY-VERIFIED end to end; needs deploy confirmation).** The
+gateway has a first-class spend-limit subsystem that this deployment was not
+using. Enabled it in `02-gateway.yaml`:
+
+- **`admin:` block** — the master switch. The gateway runs spend enforcement
+  *only* when admin is configured; the config schema explicitly refuses
+  `enforcement.fail_closed_on_error` without it. Carries a write key and a read
+  key (`id` = audit attribution in the `admin_audit` table), `group_limit_mode`,
+  the operator `blocked_message`, and retention (audit 365 d, spend 13 mo,
+  identity 90 d).
+- **Two generated secrets** (`spend-admin-write-key` / `spend-admin-read-key`),
+  CMK-encrypted, injected as task secrets exactly like the JWT/OIDC secrets —
+  the keys are random bearer tokens, so `GenerateSecretString` is used rather
+  than the placeholder pattern (no clobber hazard). Execution role grants
+  `GetSecretValue` on both.
+- **`enforcement.fail_closed_on_error: true`** — operator decision. A spend-store
+  error blocks with 429 rather than allowing an uncapped request. **This is an
+  availability trade: a store outage halts all inference fleet-wide**, and is
+  called out with a recovery path in `om-runbooks.md` §10.
+- **Caps are data, not config** — rows in `spend_limits`, set via
+  `POST /v1/organizations/spend_limits` by the new `scripts/set-spend-limit.sh`.
+  No cap rows = no enforcement, so the stack is safe to deploy before any limits
+  exist. `--amount` is dollars; the API takes whole **cents as a string**, and
+  the conversion is exact string arithmetic in a new `common.sh` helper
+  (`dollars_to_cents`) after the float route put `0.05` on **6** cents — bats
+  tests pin that regression.
+
+**`MANAGED_CLI_GROUPS` retired.** Its only payload was a group-scoped update
+lockdown; that lockdown now rides the same catch-all policy as the model
+allowlist and reaches **every** user, which is strictly broader coverage with no
+groups-claim dependency. The `groups` scope is now requested **unconditionally**
+— not for access control, but because per-group caps (`scope_type` `rbac_group`)
+resolve against the claim. Parameter, `HaveManagedCli` condition, the two-branch
+`!If`, and all deploy-script/doc references removed.
+
+Verified against the mirrored 2.1.211 gateway with a throwaway `postgres:16`
+(the admin API needs a live store): the rendered config boots clean; a per-user
+cap and a per-`rbac_group` cap were both created and listed back over the real
+endpoint; the **read key is refused for writes** (`403 requires
+write:spend_limits`) and an unauthenticated call is `401`. **Needs deploy
+confirmation:** enforcement actually biting on a real over-limit user, and the
+fail-closed path under an induced store outage.
+
 **Model allowlist was never pushed to clients — `/model` offered unserved
 models (2026-07-24, BINARY-VERIFIED; needs live confirmation).** First
 successful end-to-end gateway login surfaced the bug: Claude Code's `/model`

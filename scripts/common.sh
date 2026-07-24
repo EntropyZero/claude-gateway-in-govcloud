@@ -25,6 +25,32 @@ fi
 
 export AWS_REGION="${AWS_REGION:-us-gov-west-1}"
 
+# dollars_to_cents DOLLARS - echo whole cents for a plain dollar figure.
+# EXACT string arithmetic, never floating point: awk/bc round-trips put "0.05"
+# on 6 cents via (a*100)+0.5 then %.0f. Rejects anything that is not
+# digits-with-at-most-one-dot, and refuses >2 decimal places rather than
+# silently rounding money. Used by set-spend-limit.sh (the gateway's spend
+# API takes a whole-number decimal STRING of cents).
+dollars_to_cents() {
+  local amount="${1:-}" dollars frac cents
+  case "$amount" in
+    ''|*[!0-9.]*|*.*.*) echo "dollars_to_cents: '$amount' is not a plain dollar figure" >&2; return 2 ;;
+  esac
+  dollars="${amount%%.*}"
+  if [ "$amount" = "${amount#*.}" ]; then frac=""; else frac="${amount#*.}"; fi
+  [ -n "$dollars" ] || dollars=0
+  case "${#frac}" in
+    0) frac="00" ;;
+    1) frac="${frac}0" ;;
+    2) ;;
+    *) echo "dollars_to_cents: '$amount' has more than 2 decimal places" >&2; return 2 ;;
+  esac
+  cents="$(printf '%d%02d' "$dollars" "$((10#$frac))")"
+  cents="${cents#"${cents%%[!0]*}"}"
+  [ -n "$cents" ] || cents=0
+  printf '%s' "$cents"
+}
+
 # require_vars VAR1 VAR2 ... - abort listing every unset/empty variable.
 require_vars() {
   local missing=()

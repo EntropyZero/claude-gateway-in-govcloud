@@ -145,8 +145,10 @@ holds the RDS master credential.
   (`availableModels`) scoped to all users via a catch-all policy that needs no
   group claim — a UX/model-selection control, not access control. Okta **group**
   claims remain **not yet enforced** as gateway access control: the `groups`
-  scope and the group-matched policy are emitted only when `MANAGED_CLI_GROUPS`
-  is set, and are used solely for client update lockdown. Reviewers should read
+  scope is now requested unconditionally, but for **spend caps** (per-group cost
+  limits resolve against the groups claim), not for access control. The former
+  group-matched update-lockdown policy (`MANAGED_CLI_GROUPS`) was retired
+  2026-07-24; the lockdown now applies to every user. Reviewers should read
   gateway authorization today as "authenticated Okta user in an approved email
   domain," with per-group policy as an available, unexercised extension.
 - Obtain the installer either from an operator/MDM push or **self-service from
