@@ -883,6 +883,14 @@ nothing to roll back beyond the underlying runbook's own recovery.
 `<prefix>/db-app-user`). Read-only, connects the same way the gateway does
 (app-user secret + RDS CA, verify-full).
 
+*Dependencies:* `botocore` (already present - the AWS CLI ships it) and
+`pg8000`. On an offline/hardened box, install pg8000 from the repo's vendored
+wheels rather than PyPI:
+```
+pip install --no-index --find-links docker/db-admin/vendor pg8000
+```
+No `boto3` needed.
+
 *What Postgres holds - and does not.* The gateway does **not** store per-request
 token counts in Postgres. It stores:
   - `spend` - aggregate **cents per principal per period** (derived from tokens

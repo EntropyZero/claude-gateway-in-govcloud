@@ -22,6 +22,10 @@ So this dump answers two things precisely:
      (a NULL/empty groups column here is the likely reason the Grafana
       dashboard's user_groups filter shows nothing)
 
+Dependencies: botocore (ships with the AWS CLI - already on the box) and
+pg8000. Install pg8000 offline from the repo's vendored wheels - no PyPI:
+  pip install --no-index --find-links docker/db-admin/vendor pg8000
+
 Connection reuses the gateway's own path: the app-user secret
 (<NAME_PREFIX>/db-app-user, {host,port,dbname,username,password}) and TLS
 verify-full against the RDS CA. Read-only - only SELECTs.
@@ -48,10 +52,13 @@ if not NAME_PREFIX:
     sys.exit("FATAL: NAME_PREFIX is not set (source scripts/deploy.env)")
 
 try:
-    import boto3
-    import pg8000.native
+    import botocore.session          # ships with the AWS CLI - no separate install
+    import pg8000.native             # vendored in docker/db-admin/vendor/*.whl
 except ImportError as e:
-    sys.exit("FATAL: needs boto3 + pg8000 (pip install pg8000) - missing %s" % e)
+    sys.exit("FATAL: needs botocore (comes with the AWS CLI) + pg8000. Install "
+             "pg8000 offline from the repo's vendored wheels:\n"
+             "  pip install --no-index --find-links docker/db-admin/vendor pg8000\n"
+             "missing: %s" % e)
 
 
 def _rds_ca():
@@ -76,7 +83,8 @@ def _rds_ca():
 
 
 def _connect():
-    sm = boto3.client("secretsmanager", region_name=REGION)
+    sm = botocore.session.get_session().create_client(
+        "secretsmanager", region_name=REGION)
     try:
         raw = sm.get_secret_value(SecretId="%s/db-app-user" % NAME_PREFIX)["SecretString"]
     except Exception as e:  # noqa: BLE001
