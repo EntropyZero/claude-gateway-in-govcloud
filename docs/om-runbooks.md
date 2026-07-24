@@ -877,6 +877,36 @@ nothing to roll back beyond the underlying runbook's own recovery.
 
 ---
 
+### Client usage metrics not reaching AMP / empty Grafana dashboard
+
+*Symptom:* activity logs arrive, but `claude_code_*` panels in Grafana are empty.
+
+*Run:* `scripts/diagnose-telemetry.sh`. It reads the ALB access logs (client ->
+`/managed/settings` and client -> `/v1/metrics`) and then queries AMP directly
+over SigV4, so it distinguishes four different failures that all look identical
+in Grafana:
+
+| Evidence | Meaning |
+|---|---|
+| no `/managed/settings` | enrollment - clients never got the OTLP env vars |
+| settings but no `/v1/metrics` | push lands, export never starts |
+| exports, AMP empty of `otelcol_*` too | remote_write not landing at all |
+| exports, `otelcol_*` present, no `claude_code_*` | metrics signal lost gateway->sidecar |
+| `claude_code_*` present | **ingestion is fine** - it is a dashboard/query problem |
+
+That last row is the easy one to misread: the dashboard filters on
+`team` / `cost_center` / `user_groups`, so if those labels are absent the panels
+render empty even though the data is there. The script prints the labels actually
+present on `claude_code_cost_usage` for exactly this reason. `team`/`cost_center`
+come from the installer's `OTEL_RESOURCE_ATTRIBUTES`; `user_groups` is stamped by
+the gateway from the Okta claim.
+
+*Note:* a 403 from the AMP query is an **operator-role** gap (missing
+`aps:QueryMetrics`, or the CMK `kms:Decrypt` trap from 2026-07-23) and says
+nothing about whether ingestion is working.
+
+---
+
 ### Telemetry forward failing with `ECONNREFUSED_SSRF`
 
 *Symptom:* gateway logs `forward to http://localhost:4318 failed: Error:

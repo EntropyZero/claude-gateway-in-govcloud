@@ -94,13 +94,14 @@ elif [ "$METRICS" -eq 0 ]; then
   suspect the client-side settings merge next.
 EOF
 else
-  cat <<'EOF'
-[verdict] Clients ARE exporting metrics to the gateway.
-  The break is downstream of the ALB. Since the sidecar's own otelcol_* series
-  do reach AMP, the remote_write/SigV4/KMS path is healthy - so check, in order:
-    1. Grafana EXPLORE (no dashboard variables): {__name__=~"claude_code.*"}
-       If data appears here but the dashboard is empty, the dashboard's
-       $team / $cost_center / $okta_group variables are filtering it out.
-    2. Sidecar container logs for export errors or dropped batches.
-EOF
+  echo "[verdict] Clients ARE exporting metrics to the gateway."
+  echo "  The break is downstream of the ALB - querying AMP directly to find it."
 fi
+
+# ---- (2)(3) what is actually stored in AMP -------------------------------
+# Always run: even when the ALB shows no client exports, knowing whether the
+# collector heartbeat is landing separates "nothing works" from "only client
+# metrics are missing".
+echo
+echo "[diag] Querying AMP (SigV4, service aps)"
+python3 "${HERE}/amp-query.py" || true
