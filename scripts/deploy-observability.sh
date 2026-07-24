@@ -44,6 +44,7 @@ aws cloudformation deploy \
       "MissingTelemetryAlarmMinutes=${MISSING_TELEMETRY_ALARM_MINUTES:-15}" \
       "ActivityLogsAlarmMinutes=${ACTIVITY_LOGS_ALARM_MINUTES:-0}" \
       "CreateAmpEndpoint=${CREATE_AMP_ENDPOINT:-false}" \
+      "AdminClientSecurityGroupId=${ADMIN_CLIENT_SG_ID:-}" \
       "CreateSupportingEndpoints=${CREATE_SUPPORTING_ENDPOINTS:-false}" \
       "EncryptAmpWithCmk=${ENCRYPT_AMP_WITH_CMK:-true}" \
       "ActivityLogWindowDays=${ACTIVITY_LOG_WINDOW_DAYS:-14}" \

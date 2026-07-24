@@ -49,6 +49,23 @@ Parameters:
       queries to AMP stay off the NAT/TGW path. Recommended alongside
       CreateSupportingEndpoints in no-NAT VPCs.
 
+  AdminClientSecurityGroupId:
+    Type: String
+    Default: ''
+    AllowedPattern: '(sg-[0-9a-f]+)?'
+    ConstraintDescription: A security group ID (sg-...) or empty.
+    Description: >-
+      Optional. SG of an in-VPC operator host that needs to QUERY AMP directly
+      (e.g. scripts/diagnose-telemetry.sh). Only relevant when
+      CreateAmpEndpoint is true: the endpoint's private DNS captures
+      aps-workspaces calls from EVERY VPC client, but the endpoint SG admits
+      only the gateway task and Grafana - so an operator host's SigV4 query
+      otherwise times out. Grants that SG 443 to the AMP endpoint SG. Mirrors
+      02-gateway's AdminClientSecurityGroupId. Leave empty when querying from
+      outside the VPC (NAT/TGW path). IAM still applies: the caller needs
+      aps:QueryMetrics/GetSeries/GetLabels and, for a CMK workspace, caller-side
+      kms:Decrypt (kms:ViaService=aps.<region>.amazonaws.com).
+
   CreateSupportingEndpoints:
     Type: String
     Default: 'false'
@@ -214,6 +231,8 @@ Parameters:
 
 Conditions:
   WantAmpEndpoint: !Equals [!Ref CreateAmpEndpoint, 'true']
+  HaveAdminClientSg: !Not [!Equals [!Ref AdminClientSecurityGroupId, '']]
+  WantAdminAmpIngress: !And [!Condition WantAmpEndpoint, !Condition HaveAdminClientSg]
   WantSharedEndpoints: !Equals [!Ref CreateSupportingEndpoints, 'true']
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
   HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
@@ -875,6 +894,23 @@ Resources:
         - IpProtocol: '-1'
           CidrIp: 127.0.0.1/32
           Description: no egress
+
+  # In-VPC operator host that queries AMP directly (diagnose-telemetry.sh).
+  # Separate resource, not inline ingress, so it exists ONLY when an admin SG
+  # is supplied - and it is revertible by clearing the parameter, replacing the
+  # hand-added/hand-removed rule the 2026-07-23 AMP debugging needed. Private
+  # DNS forces the operator's aps-workspaces call onto this endpoint; without
+  # this rule it black-holes. Mirrors 02-gateway's AdminToEndpointsIngress.
+  AdminToAmpEndpointIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WantAdminAmpIngress
+    Properties:
+      GroupId: !Ref AmpEndpointSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref AdminClientSecurityGroupId
+      Description: SigV4 queries from the in-VPC operator host
 
   # The gateway task's egress is scoped in 02; this attaches its path to the
   # aps-workspaces endpoint once this stack (and the endpoint) exist. Same
