@@ -6,6 +6,10 @@
 # and clients only export at all if they first fetched policy:
 #   client --(0)--> gateway /managed/settings   (carries the OTLP env vars)
 #
+# It also (a) queries AMP directly to see what is stored, and (b) reads the
+# RUNNING gateway task's collector config to confirm the metrics pipeline
+# actually consumes otlp - the "otelcol_* present but no claude_code_*" trap.
+#
 # Step 0 and 1 are visible in the ALB access logs, which is the only evidence
 # that does not depend on interrogating a laptop. `/status` on the client shows
 # only that enterprise settings exist, not which keys, so it cannot answer this.
@@ -105,3 +109,33 @@ fi
 echo
 echo "[diag] Querying AMP (SigV4, service aps)"
 python3 "${HERE}/amp-query.py" || true
+
+# ---- (2) the DEPLOYED collector metrics-pipeline receivers ----------------
+# Ground truth for the "otelcol_* present but no claude_code_*" case: if the
+# running sidecar's metrics pipeline lacks the otlp receiver, client metrics
+# are dropped at :4318 while the prometheus self-scrape still writes otelcol_*.
+# We read the config from the RUNNING task definition, not the template, so it
+# reflects what is actually deployed (which may have drifted).
+echo
+echo "[diag] Deployed collector config (running gateway task)"
+if [ -z "${NAME_PREFIX:-}" ]; then
+  echo "  [skip] NAME_PREFIX not set - cannot locate the ECS service"
+else
+  CLUSTER="${NAME_PREFIX}-cluster"
+  SERVICE="${NAME_PREFIX}-gateway"
+  TD="$(aws ecs describe-services --region "$REGION" --cluster "$CLUSTER" \
+         --services "$SERVICE" \
+         --query 'services[0].taskDefinition' --output text 2>/dev/null || true)"
+  case "${TD:-}" in
+    ''|None)
+      echo "  [skip] could not resolve the task definition for $SERVICE on $CLUSTER" ;;
+    *)
+      # AOT_CONFIG_CONTENT is the collector's full YAML config, embedded as an
+      # env-var string on the otel-collector container.
+      CFG="$(aws ecs describe-task-definition --region "$REGION" \
+              --task-definition "$TD" \
+              --query "taskDefinition.containerDefinitions[?name=='otel-collector'].environment[] | [?name=='AOT_CONFIG_CONTENT'].value | [0]" \
+              --output text 2>/dev/null || true)"
+      printf '%s' "$CFG" | python3 "${HERE}/check-collector-config.py" || true ;;
+  esac
+fi
