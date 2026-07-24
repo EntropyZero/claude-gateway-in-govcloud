@@ -57,6 +57,30 @@ telemetry/audit processing is down; a **missing-telemetry alarm** (03,
 `AWS/Usage ResourceCount`/`IngestionRate` on the workspace) is the end-to-end
 backstop that container health cannot provide.
 
+**Fixed 2026-07-24 (committed, NOT yet deployed): the client model picker
+offered models the gateway does not serve.** End-to-end login now works; the
+first real session showed Claude Code's own built-in `/model` menu, so every
+pick failed as unauthorized. `models:` only governs what the **gateway serves** —
+constraining the client's picker requires pushing `availableModels` via
+`/managed/settings`, which the template never rendered (it lived only in a
+comment). Worse, that comment put `availableModels` at the **policy** level,
+which the gateway rejects as an unrecognized key — a boot failure had anyone
+implemented it. Correct placement (binary-verified against the mirrored 2.1.211
+gateway) is **inside the policy's `cli:` object**, since
+`availableModels`/`enforceAvailableModels` are Claude Code `settings.json` keys.
+(`cli` is *not* an unvalidated passthrough: unknown keys there are fatal — but
+only checked once the Postgres store connects, so probes against a dead DB miss
+it entirely.)
+`GATEWAY_MANAGED_B64` is now always rendered, with an unconditional (no `match:`)
+allowlist policy that needs no Okta groups claim. **Policy order is load-bearing:**
+selection is first-match-wins and a `match:`-less policy matches everyone, so the
+catch-all allowlist must be **last** or the group-scoped update lockdown becomes
+dead config (caught pre-commit by multi-agent review; runtime-verified against a
+throwaway Postgres). **Next step: confirm the deployed gateway image contains the
+`GATEWAY_MANAGED_B64` stanza from `docker/entrypoint.sh` (added in `1f856ad`) -
+an older image ignores the env var SILENTLY - rebuilding with a bumped tag if
+not; then re-run `deploy-gateway.sh` and confirm `/model` in a live session.**
+
 **Fixed + LIVE-PROVEN 2026-07-23 (deployed): two AMP telemetry bugs.**
 (1) *CMK-encrypted AMP needs caller-side KMS.* Grafana ("Unable to retrieve
 metric names") and the sidecar (missing-telemetry ALARM) both got a server-side

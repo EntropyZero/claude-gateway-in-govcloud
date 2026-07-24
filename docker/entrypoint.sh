@@ -22,11 +22,13 @@ if [ -n "${GATEWAY_TELEMETRY_B64:-}" ]; then
   printf '%s' "$GATEWAY_TELEMETRY_B64" | base64 -d >> /etc/claude/gateway.yaml
 fi
 
-# Optional managed-settings block (update lockdown, keyed on Okta group),
-# rendered as a separate env var by CloudFormation when ManagedCliGroups is
-# set. Appended the same way as telemetry. NOTE: adding this block here means
-# a gateway image REBUILD + immutable tag bump is required before the
-# GATEWAY_MANAGED_B64 task-def change can take effect.
+# Managed-settings block, rendered as a separate env var by CloudFormation on
+# EVERY deploy: it always carries the client model allowlist (availableModels),
+# plus a group-keyed update lockdown when ManagedCliGroups is set. Appended the
+# same way as telemetry. NOTE: this stanza is what consumes GATEWAY_MANAGED_B64,
+# so a gateway image REBUILD + immutable tag bump is required before the
+# task-def change can take effect - on every deploy, not just when groups are
+# configured. An image predating this stanza ignores the env var SILENTLY.
 if [ -n "${GATEWAY_MANAGED_B64:-}" ]; then
   printf '\n' >> /etc/claude/gateway.yaml
   printf '%s' "$GATEWAY_MANAGED_B64" | base64 -d >> /etc/claude/gateway.yaml

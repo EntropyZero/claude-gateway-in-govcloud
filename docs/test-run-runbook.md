@@ -381,6 +381,18 @@ the obs stack exists and keeps the AMP params set.)
 ## 9. End-to-end validation checklist
 
 - ☐ **Gateway health**: `verify-gateway.sh` all green; targets healthy.
+- ☐ **Model picker constrained** (the 2026-07-24 fix): in a logged-in session
+  run `/model` and confirm it lists **only** `<OPUS_MODEL_ID>` and
+  `<SONNET_MODEL_ID>` — not Claude Code's built-in menu. Send a prompt on each
+  to confirm both actually serve, and confirm the **Default** selection resolves
+  to one of the two. If the built-in menu still appears, the running gateway
+  image predates the `GATEWAY_MANAGED_B64` stanza in `docker/entrypoint.sh` —
+  the env var is being ignored silently; rebuild + bump the image tag. Check
+  gateway logs for `managed.policies[...] is a catch-all ... not the last entry`,
+  which means the allowlist is shadowing the update-lockdown policy.
+- ☐ **Background/small-fast model**: confirm routine background work (titles,
+  small edits) still succeeds with the allowlist in force, rather than erroring
+  on a non-permitted Haiku model.
 - ☐ **Developer login**: the gateway login path appears **only** when the
   managed setting `forceLoginMethod: "gateway"` (+ `forceLoginGatewayUrl`) is
   present in a **managed source** (HKLM or

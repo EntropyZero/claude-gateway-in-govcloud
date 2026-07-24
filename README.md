@@ -195,7 +195,8 @@ lockdown the installer writes (`DISABLE_UPDATES=1`, telemetry tags) is a
 convenience, not enforcement — the mirror-only network path (no reachable
 `downloads.claude.ai`) and the gateway's server-side controls are the real
 guardrails, and the gateway can additionally push the lockdown centrally
-(`MANAGED_CLI_GROUPS`).
+(`MANAGED_CLI_GROUPS`). The gateway always pushes the **client model
+allowlist** on the same channel (see Models below).
 
 Ensure your enterprise root CA is in the Windows certificate store (on
 domain-joined machines it normally already is, via GPO — no admin needed at
@@ -243,7 +244,12 @@ CONFIRMATION].
 ## Model configuration
 
 Developers get a **two-model menu** in Claude Code — Opus and Sonnet — each a
-pair of parameters (client-facing ID → GovCloud inference profile):
+pair of parameters (client-facing ID → GovCloud inference profile).
+
+It is a *menu* because the gateway pushes these two IDs to every client as an
+`availableModels` allowlist via `/managed/settings`; the `models:` block alone
+only governs what the gateway **serves**, leaving the client's own built-in
+menu in place (the bug fixed on 2026-07-24):
 
 | Menu ID (`*_MODEL_ID`) | Bedrock profile (`*_BEDROCK_MODEL_ID`) |
 |---|---|
@@ -266,8 +272,10 @@ The task-role and VPC-endpoint IAM policies are scoped to **exactly the two
 configured models** (derived from the `*_BEDROCK_MODEL_ID` parameters — the
 inference profiles plus their underlying foundation models), so nothing
 outside the approved pair is invokable even with the org credential.
-Switching or adding models is still a parameter change only; the policies
-follow the parameters.
+Switching or adding models is still a parameter change only; the IAM policies
+**and the pushed client allowlist** follow the parameters. Changing them needs
+a `deploy-gateway.sh` re-run, and clients pick the new allowlist up on their
+next `/managed/settings` fetch.
 
 ## VPC endpoints
 
@@ -467,8 +475,8 @@ Grafana (https://<fqdn>/grafana) --SigV4 query--> Amazon Managed Prometheus
 ```
 
 The gateway is the telemetry hub — no separate ingest endpoint is needed. It
-automatically pushes the OTLP enable env vars to every connected Claude Code
-client via `/managed/settings`, relays their metrics
+automatically pushes the OTLP enable env vars — alongside the model allowlist —
+to every connected Claude Code client via `/managed/settings`, relays their metrics
 (`claude_code.cost.usage`, `claude_code.token.usage`, sessions, lines of
 code, commits), and stamps each export with `user.id` / `user.email` /
 **`user.groups` from the Okta JWT** — which is where the Okta-group grouping

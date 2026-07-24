@@ -128,7 +128,8 @@ Parameters:
       Comma-separated Okta group names whose members get update-lockdown pushed
       to their client via the gateway's /managed/settings (DISABLE_UPDATES=1 +
       DISABLE_AUTOUPDATER=1 as cli.env). A member of ANY listed group matches.
-      Leave empty to push nothing. Requires the Okta groups claim (same
+      Leave empty to skip the update lockdown - the model allowlist is pushed
+      to everyone regardless. Requires the Okta groups claim (same
       prerequisite as the download portal); group claims require the `groups`
       scope, which this template enables on the OIDC block only when this is set.
 
@@ -944,9 +945,10 @@ Resources:
                 # Two-arg !Sub: the config body is the first element; the second
                 # supplies OidcScopesLine, which is the full `scopes:` line ONLY
                 # when ManagedCliGroups is set (HaveManagedCli) and empty
-                # otherwise. Group-keyed managed policies need the `groups` scope,
-                # so the scope is requested precisely when a managed policy will
-                # be pushed - default behavior (no scopes line) is unchanged.
+                # otherwise. Only GROUP-KEYED managed policies need the `groups`
+                # scope, so it is requested precisely when a group-keyed policy will
+                # be pushed. The unconditional model-allowlist policy carries no
+                # `match:` and needs no claim - default behavior is unchanged.
                 Fn::Base64: !Sub
                   - |
                     listen:
@@ -1005,14 +1007,34 @@ Resources:
                           bedrock: ${SonnetBedrockModelId}
 
                     # Per-IdP-group guardrails and managed settings - this is the
-                    # documented shape that GATEWAY_MANAGED_B64 renders below:
+                    # BINARY-VERIFIED shape that GATEWAY_MANAGED_B64 renders below:
                     # managed:
                     #   policies:
                     #     - match: { groups: [claude-developers] }
-                    #       availableModels: [claude-opus-4-8, claude-sonnet-4-5]
                     #       cli:
                     #         env: { DISABLE_UPDATES: "1" }
-                    #         skipWebFetchPreflight: true
+                    #     - cli:                       # no `match:` = catch-all, MUST BE LAST
+                    #         availableModels: [claude-opus-4-8, claude-sonnet-4-5]
+                    # ORDER IS LOAD-BEARING. Selection is FIRST-MATCH-WINS over a SINGLE
+                    # policy - a catch-all is normalized to `match: {}` and matches
+                    # everyone, so any policy after it is dead config. The gateway warns
+                    # ("is a catch-all ... but is not the last entry") and still BOOTS, so
+                    # this fails silently. With the catch-all LAST the gateway merges its
+                    # `cli` as a BASE into each earlier policy ("after merge with catch-all
+                    # base - changed keys: ..."), so group members get the allowlist AND
+                    # the lockdown, and everyone else falls through to the catch-all.
+                    # `match` is OPTIONAL (a policy without it matches every user, so a
+                    # model allowlist needs no Okta groups claim). Everything the client
+                    # actually honors goes INSIDE `cli` - its keys are Claude Code
+                    # settings.json keys. `availableModels` at the POLICY level is an
+                    # unrecognized key and FAILS config validation ("Unrecognized key(s)
+                    # in object: 'availableModels'") - a boot failure, not a no-op.
+                    # `cli` is NOT a free-form passthrough either: unknown keys inside it
+                    # are fatal too ("unknown settings key"), but that check runs only
+                    # AFTER the Postgres store connects - so a config probe against an
+                    # unreachable DB will NOT catch a typo in here. Verified against the
+                    # mirrored 2.1.211 gateway binary, incl. a live throwaway Postgres,
+                    # 2026-07-24.
                   - OidcScopesLine: !If
                       - HaveManagedCli
                       - 'scopes: [openid, profile, email, offline_access, groups]'
@@ -1038,26 +1060,46 @@ Resources:
                             logs: ${LogsFlag}
                     - LogsFlag: !Ref ForwardActivityLogs
               - !Ref 'AWS::NoValue'
-            # Managed CLI lockdown, appended to gateway.yaml by the entrypoint
-            # when set. The gateway pushes this to every connected client via
+            # Managed client settings, appended to gateway.yaml by the entrypoint.
+            # The gateway pushes these to every connected client via
             # /managed/settings (the same mechanism the telemetry block relies
-            # on): members of ANY listed Okta group get update auto-updates
-            # disabled centrally - the server-side twin of the installer's
-            # -DisableUpdates. `[${ManagedCliGroups}]` expands the comma-list
-            # into a YAML flow sequence, the same trick allowed_email_domains
-            # uses above. Schema is the documented example above; doc-verified,
-            # pending test-run confirmation.
-            - !If
-              - HaveManagedCli
-              - Name: GATEWAY_MANAGED_B64
-                Value:
-                  Fn::Base64: !Sub |
-                    managed:
-                      policies:
-                        - match: { groups: [${ManagedCliGroups}] }
-                          cli:
-                            env: { DISABLE_UPDATES: "1", DISABLE_AUTOUPDATER: "1" }
-              - !Ref 'AWS::NoValue'
+            # on). ALWAYS rendered, because the first policy carries the model
+            # allowlist and that must reach every user:
+            #
+            #  1. Model allowlist (unconditional, no `match:`). Without it the
+            #     client shows its OWN built-in model menu - none of whose entries
+            #     the gateway serves, so every pick 404s at the upstream. This is
+            #     what constrains the `/model` picker to the two configured models;
+            #     `models:` above only controls what the GATEWAY serves, it does not
+            #     reach into the client's picker. `enforceAvailableModels` extends the
+            #     allowlist to the "Default" selection too, so Default can't resolve to
+            #     an unserved model. IDs match the `models:` entries above by
+            #     construction (same two parameters).
+            #  2. Update lockdown (only when ManagedCliGroups is set). Members of ANY
+            #     listed Okta group get auto-updates disabled centrally - the
+            #     server-side twin of the installer's -DisableUpdates. This one needs
+            #     the Okta groups claim; the allowlist above deliberately does not.
+            #     `[${ManagedCliGroups}]` expands the comma-list into a YAML flow
+            #     sequence, the same trick allowed_email_domains uses above.
+            - Name: GATEWAY_MANAGED_B64
+              Value:
+                Fn::Base64: !If
+                  - HaveManagedCli
+                  - !Sub |
+                      managed:
+                        policies:
+                          - match: { groups: [${ManagedCliGroups}] }
+                            cli:
+                              env: { DISABLE_UPDATES: "1", DISABLE_AUTOUPDATER: "1" }
+                          - cli:
+                              availableModels: ['${OpusModelId}', '${SonnetModelId}']
+                              enforceAvailableModels: true
+                  - !Sub |
+                      managed:
+                        policies:
+                          - cli:
+                              availableModels: ['${OpusModelId}', '${SonnetModelId}']
+                              enforceAvailableModels: true
           Secrets:
             - Name: OIDC_CLIENT_SECRET
               ValueFrom: !Ref OktaClientSecret

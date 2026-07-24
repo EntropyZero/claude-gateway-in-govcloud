@@ -34,7 +34,8 @@ Per the repo honesty rule (`.claude/rules/process.md`), claims here are tagged:
   managed-only keys).
 - **[NEEDS TEST-RUN CONFIRMATION]** — behavior we assert but have not yet run
   end to end: the live interactive Cloud-gateway login, the gateway
-  `/managed/settings` push (including `MANAGED_CLI_GROUPS`), and a GPO-delivered
+  `/managed/settings` push (the model allowlist - BINARY-VERIFIED for shape and
+  policy ordering, but not yet live - and `MANAGED_CLI_GROUPS`), and a GPO-delivered
   `HKLM\SOFTWARE\Policies\ClaudeCode` source being honored by the CLI.
 
 ---
@@ -131,15 +132,50 @@ After a client authenticates, the **gateway pushes settings to it** via its
 clients their telemetry (OTLP) configuration [DOC-VERIFIED; NEEDS TEST-RUN
 CONFIRMATION].
 
-A new `deploy.env` knob **`MANAGED_CLI_GROUPS`** (CloudFormation parameter
-`ManagedCliGroups`, wired in parallel) makes the gateway push
-`DISABLE_UPDATES` / `DISABLE_AUTOUPDATER` to members of the listed Okta groups,
-so update lockdown can be enforced centrally without touching the workstation.
-It **requires the Okta groups claim** (the `groups` scope alone yields no group
-membership on an org authorization server — see
-[`okta-request-email.md`](okta-request-email.md) and
-[`conops.md`](conops.md) §8.2). With no groups listed, the gateway pushes
-telemetry config only.
+Two things are pushed:
+
+**a) The model allowlist — always, to every user.** The gateway pushes
+`availableModels: [<OPUS_MODEL_ID>, <SONNET_MODEL_ID>]` plus
+`enforceAvailableModels: true`, which is what constrains the `/model` picker to
+the two configured models. This policy carries **no `match:`**, so it applies to
+every authenticated user and needs no Okta groups claim.
+
+> **This is load-bearing, not cosmetic.** `models:` in the gateway config only
+> controls what the *gateway serves* — it does not reach into the client's
+> picker. Without the allowlist push, `/model` shows Claude Code's own built-in
+> menu, none of whose entries this gateway serves, so every selection fails
+> upstream as unauthorized (live symptom, 2026-07-24).
+
+Both keys are ordinary Claude Code `settings.json` keys and therefore belong
+**inside the policy's `cli:` object** — the blob the gateway forwards as the
+client's managed settings. `availableModels` at the *policy* level is an
+unrecognized key that fails gateway config validation and prevents boot.
+
+`cli` contents are **not** checked when the config loads, but they are strictly
+validated against the CLI settings schema before being served — an unknown key
+there is rejected with *"unknown settings key — fix the typo, upgrade the
+gateway if this key was added in a newer CLI…"*. So a typo inside `cli` survives
+startup and surfaces later, on the `/managed/settings` path. Do not treat `cli`
+as a free-form passthrough.
+
+**Policy order is load-bearing.** Selection is first-match-wins over a *single*
+policy, and a policy with no `match:` is normalized to `match: {}`, which matches
+everyone — so the allowlist policy **must be last**, or every policy after it is
+dead config. With it last, the gateway merges its `cli` as a *base* into each
+earlier policy, so group members receive the allowlist *and* the lockdown.
+[RUNTIME-VERIFIED against the mirrored 2.1.211 gateway, 2026-07-24.] `availableModels` accepts family aliases (`opus`), version
+prefixes (`opus-4-5`), and full model IDs; an empty array means "default model
+only". [BINARY-VERIFIED against the mirrored 2.1.211 gateway binary, 2026-07-24.]
+
+**b) Update lockdown — only for listed groups.** The `deploy.env` knob
+**`MANAGED_CLI_GROUPS`** (CloudFormation parameter `ManagedCliGroups`, wired in
+parallel) makes the gateway push `DISABLE_UPDATES` / `DISABLE_AUTOUPDATER` to
+members of the listed Okta groups, so update lockdown can be enforced centrally
+without touching the workstation. This one **requires the Okta groups claim**
+(the `groups` scope alone yields no group membership on an org authorization
+server — see [`okta-request-email.md`](okta-request-email.md) and
+[`conops.md`](conops.md) §8.2). With no groups listed, the gateway pushes the
+model allowlist and telemetry config only.
 
 Central push is a per-connected-client server-side control; it does **not**
 require or imply any admin rights on the laptop.
@@ -325,10 +361,11 @@ from the managed layer confirms the lock is in force.
   local admin. Without this the gateway login does not exist on the client; with
   it, login is method-locked and URL-prefilled (§1.2). This is the one part that
   is not admin-free.
-- **Gateway `/managed/settings` (server-side):** central telemetry config for
+- **Gateway `/managed/settings` (server-side):** the **client model allowlist**
+  (`availableModels` / `enforceAvailableModels`) and central telemetry config for
   every connected client, plus optional update lockdown for named Okta groups
   (`MANAGED_CLI_GROUPS`).
 
 The channels compose cleanly and target different keys: the installer writes no
 policy source, the managed-settings channel owns forced login, and the gateway
-push owns central telemetry/update lockdown.
+push owns the model allowlist plus central telemetry/update lockdown.

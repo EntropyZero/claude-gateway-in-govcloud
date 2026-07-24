@@ -140,13 +140,15 @@ holds the RDS master credential.
   (`cloudformation/02-gateway.yaml` `oidc:` and `session:` blocks).
 - Are gated at sign-in by **allowed email domain**
   (`allowed_email_domains` in `cloudformation/02-gateway.yaml`, from the
-  `ALLOWED_EMAIL_DOMAINS` parameter). Okta **group** claims are available but
-  are **not yet enforced** as gateway access control: the `groups` scope and the
-  `managed.policies` group-match block are present but commented out in the
-  template (`cloudformation/02-gateway.yaml`, lines around the `oidc:` and
-  `managed:` sections). Reviewers should read gateway authorization today as
-  "authenticated Okta user in an approved email domain," with per-group policy
-  as an available, unexercised extension.
+  `ALLOWED_EMAIL_DOMAINS` parameter). A `managed.policies` block is now
+  **always rendered**, but it carries only a **client model allowlist**
+  (`availableModels`) scoped to all users via a catch-all policy that needs no
+  group claim — a UX/model-selection control, not access control. Okta **group**
+  claims remain **not yet enforced** as gateway access control: the `groups`
+  scope and the group-matched policy are emitted only when `MANAGED_CLI_GROUPS`
+  is set, and are used solely for client update lockdown. Reviewers should read
+  gateway authorization today as "authenticated Okta user in an approved email
+  domain," with per-group policy as an available, unexercised extension.
 - Obtain the installer either from an operator/MDM push or **self-service from
   the download portal** (when stack `04` is deployed): they browse to
   `/portal` on the gateway FQDN, authenticate through Okta, pick their **Team**

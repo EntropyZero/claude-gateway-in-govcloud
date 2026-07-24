@@ -306,6 +306,114 @@ alarm OK → ALARM when the sidecar is stopped and back to OK when it resumes
 (now cheap to test end-to-end with the always-on heartbeat: stop the sidecar →
 ingestion stops → ALARM; restart → OK).
 
+**Model allowlist was never pushed to clients — `/model` offered unserved
+models (2026-07-24, BINARY-VERIFIED; needs live confirmation).** First
+successful end-to-end gateway login surfaced the bug: Claude Code's `/model`
+picker listed its **own built-in model menu**, none of whose entries this
+gateway serves, so every selection failed upstream as unauthorized. Root cause —
+two independent defects in `02-gateway.yaml`:
+
+- **The push never happened.** `auto_include_builtin_models: false` + `models:`
+  constrains only what the **gateway serves**; it does not reach into the
+  client's picker. That requires pushing `availableModels` via
+  `/managed/settings`. The rendered `GATEWAY_MANAGED_B64` only ever emitted
+  `cli.env` (the update lockdown) — the allowlist existed nowhere but a comment.
+- **The documented shape was wrong and would have crashed the gateway.** The
+  template's comment placed `availableModels` at the **policy** level. Probing
+  the mirrored 2.1.211 gateway binary (`claude gateway --config`) shows that is
+  an unrecognized key: `"Unrecognized key(s) in object: 'availableModels'"` —
+  a **boot failure**, not a no-op. Had anyone implemented the commented shape
+  verbatim it would have taken the gateway down. Verified with a negative
+  control (a deliberately bogus key produces the identical error class).
+
+The binary's own settings JSON Schema (extracted from the same mirrored build)
+gives the correct placement: `availableModels` and `enforceAvailableModels` are
+ordinary Claude Code `settings.json` keys, so they belong **inside** the policy's
+`cli:` object.
+
+**Correction to an earlier draft of this entry:** `cli` is *not* an unvalidated
+passthrough. It is strictly validated against the CLI settings schema and an
+unknown key is **fatal** (`managed.policies[N].cli invalid: <key>: unknown
+settings key …`, exit 1). The catch is *when*: that check runs only **after the
+Postgres store connects**, so a config probe against an unreachable database
+never reaches it. An earlier verification pass here used exactly that invalid
+method ("reaches the Postgres error = schema-valid"), which is sound for the
+config schema but proves nothing about `cli`. Re-verified 2026-07-24 against a
+throwaway `postgres:16` container, with a deliberately bogus `cli` key as the
+negative control.
+
+Fix (committed, not yet deployed):
+- `GATEWAY_MANAGED_B64` is now **always** rendered — it previously vanished
+  whenever `ManagedCliGroups` was unset, which would have left the allowlist
+  unpushed on any deployment not using Okta group lockdown.
+- Policy 0 carries `cli.availableModels: [<OpusModelId>, <SonnetModelId>]` +
+  `cli.enforceAvailableModels: true` and has **no `match:`**. `match` is
+  optional (verified), so this applies to every authenticated user and requires
+  **no Okta groups claim** — deliberately decoupled from `MANAGED_CLI_GROUPS`,
+  since a model allowlist must not depend on group membership.
+  `enforceAvailableModels` extends the allowlist to the "Default" selection so
+  Default cannot resolve to a model the gateway does not serve.
+- The group-scoped update lockdown is emitted **first**, and the catch-all
+  allowlist **last**. This ordering is load-bearing and was itself a defect in
+  the first draft of this fix, caught by the pre-commit multi-agent review
+  (three reviewers independently) and **runtime-verified**:
+
+  Policy selection is **first-match-wins over a single policy**, and a policy
+  with no `match:` is normalized to `match: {}` — which matches everyone. With
+  the catch-all first, the gateway logs
+
+      warn managed.policies[0] is a catch-all (match: {}) but is not the last
+           entry - policies after it will never match. Move it to the end.
+
+  and the update lockdown becomes unreachable for **every** user — a silent
+  regression of behavior that previously worked, since the gateway still boots.
+  With the catch-all last the warning disappears and the gateway instead logs
+
+      info managed.policies[0] after merge with catch-all base - changed keys:
+           availableModels, enforceAvailableModels
+
+  i.e. the catch-all's `cli` is merged as a **base** into each earlier policy, so
+  group members receive the allowlist *and* the lockdown, and everyone else falls
+  through to the catch-all. `tests/templates` gained a dedicated gate asserting
+  the catch-all is the last policy in both rendered variants.
+
+Verification performed: both rendered variants of the **full** concatenated
+config (config body + telemetry + managed block, exactly as the entrypoint
+assembles it) were run through the real gateway binary and pass schema
+validation — the only failure is the expected Postgres connect. `tests/templates`
+gained gates covering the allowlist contents, the no-`match:` scoping, the
+catch-all-must-be-last ordering, and a regression guard against
+`availableModels` reappearing at policy level; each was confirmed to go **red**
+on a deliberately reintroduced defect.
+
+**Deploy precondition - do not skip.** `GATEWAY_MANAGED_B64` is consumed only by
+the stanza added to `docker/entrypoint.sh` in `1f856ad`. ECR tags are immutable
+and `deploy-gateway.sh` defaults the image to `:${CLAUDE_VERSION}`, so if the
+running gateway image predates that commit the env var is decoded by **nothing**
+- the deploy goes green and the symptom is unchanged, with no error anywhere.
+Confirm the deployed image contains the stanza, or rebuild with a bumped tag,
+*before* the `02` re-run. This now applies on every deploy, not only when
+`MANAGED_CLI_GROUPS` is non-empty.
+
+**Side effect of making the block unconditional:** with a `managed:` section now
+always present, the gateway warns `no managed policy carries a desktop: block -
+Claude Desktop clients will be rejected by /user/bootstrap until a policy opts
+in`. Moot for this deployment (Claude Code CLI only), but it would matter if
+Claude Desktop ever came into scope.
+
+**Needs live confirmation:** (a) that after the `02` re-run the picker actually
+shows only the two models end-to-end; (b) background/small-fast model behavior.
+On (b) the evidence is deliberately left **open**: subagent, plan-mode and
+explicit-selection paths all degrade to a permitted model (warn, not error), but
+`getSmallFastModel()` has a branch that returns the default Haiku model
+**without an allowlist check** when a dedicated small-fast model is configured.
+Since the gateway sets `auto_include_builtin_models: false` and serves only
+Opus+Sonnet, a request down that branch would fail at the gateway rather than
+degrade. Pinning `ANTHROPIC_SMALL_FAST_MODEL` to a served model via `cli.env` is
+the candidate mitigation, deliberately **not** applied blind - setting it may be
+what enables the unchecked branch in the first place. Resolve by observation on
+the test run.
+
 **CMK-encrypted AMP needs caller-side KMS on both the read and write paths
 (2026-07-23, LIVE-PROVEN).** First live use of the observability stack surfaced
 a hard bug: **Grafana** showed *"Unable to retrieve metric names / We are unable

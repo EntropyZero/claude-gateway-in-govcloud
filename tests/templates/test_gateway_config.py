@@ -136,7 +136,8 @@ def test_okta_issuer_pattern_rejects_trailing_slash_and_scheme_less():
 
 
 # ---------------------------------------------------------------------------
-# Managed CLI lockdown (ManagedCliGroups -> /managed/settings update lockdown)
+# Managed settings push (/managed/settings): model allowlist + optional
+# group-scoped update lockdown
 # ---------------------------------------------------------------------------
 
 def _template_text():
@@ -144,14 +145,42 @@ def _template_text():
 
 
 def _managed_b64_block():
-    """Return the GATEWAY_MANAGED_B64 env-var YAML (the !If entry) as text."""
+    """Return the GATEWAY_MANAGED_B64 env-var YAML entry as text."""
     text = _template_text()
-    i = text.index("GATEWAY_MANAGED_B64")
-    # backtrack to the `- !If` that opens this list entry
-    head = text.rindex("- !If", 0, i)
-    # cut at the next `- Name:`/`Secrets:` sibling for a bounded slice
-    tail = text.index("Secrets:", i)
-    return text[head:tail]
+    # anchor on the env-var DECLARATION, not the prose mentions of the name in
+    # the config-body comment above it
+    m = re.search(r"^\s*- Name: GATEWAY_MANAGED_B64$", text, re.M)
+    assert m, "GATEWAY_MANAGED_B64 env-var declaration not found"
+    tail = text.index("Secrets:", m.start())
+    return text[m.start():tail]
+
+
+def _managed_policies(groups=None):
+    """Parse one rendered variant of the managed: block into policy dicts.
+
+    groups=None models the default render (ManagedCliGroups unset -> the
+    else-branch !Sub); a list models the HaveManagedCli render. Both branches
+    are block scalars under `- !Sub |` inside the Fn::Base64 !If.
+    """
+    block = _managed_b64_block()
+    subs = [m.end() for m in re.finditer(r"- !Sub \|\n", block)]
+    assert len(subs) == 2, f"expected 2 !Sub branches in GATEWAY_MANAGED_B64, got {len(subs)}"
+    # branch 0 = HaveManagedCli (with groups), branch 1 = default (without)
+    start = subs[0] if groups else subs[1]
+    body_lines = block[start:].split("\n")
+    base_indent = len(body_lines[0]) - len(body_lines[0].lstrip())
+    yaml_lines = []
+    for l in body_lines:
+        if l.strip() == "":
+            continue
+        if len(l) - len(l.lstrip()) < base_indent:
+            break
+        yaml_lines.append(l[base_indent:])
+    raw = "\n".join(yaml_lines)
+    raw = raw.replace("${ManagedCliGroups}", ", ".join(groups or []))
+    raw = raw.replace("${OpusModelId}", "claude-opus-4-8")
+    raw = raw.replace("${SonnetModelId}", "claude-sonnet-4-5")
+    return yaml.safe_load(raw)["managed"]["policies"]
 
 
 def test_managed_cli_param_and_condition_exist():
@@ -166,33 +195,96 @@ def test_managed_cli_param_and_condition_exist():
     ), "HaveManagedCli condition missing or not keyed on ManagedCliGroups != ''"
 
 
-def test_managed_b64_is_conditional_on_have_managed_cli():
+def test_managed_b64_is_always_emitted():
+    """The model allowlist must reach EVERY client, so the env var is
+    unconditional - only its body varies on HaveManagedCli."""
     block = _managed_b64_block()
-    # the env var is gated by the HaveManagedCli !If, NoValue on the else branch
-    assert "HaveManagedCli" in block, "GATEWAY_MANAGED_B64 not gated by HaveManagedCli"
-    assert "AWS::NoValue" in block, "GATEWAY_MANAGED_B64 !If has no NoValue else branch"
-    assert "Fn::Base64:" in block, "GATEWAY_MANAGED_B64 value should be Fn::Base64"
+    assert "AWS::NoValue" not in block, (
+        "GATEWAY_MANAGED_B64 must not be dropped when ManagedCliGroups is unset - "
+        "the model allowlist has to be pushed regardless"
+    )
+    assert "Fn::Base64: !If" in block, "GATEWAY_MANAGED_B64 body should be an !If over two !Subs"
+    assert "HaveManagedCli" in block, "GATEWAY_MANAGED_B64 body not keyed on HaveManagedCli"
 
 
-def test_managed_b64_block_disables_updates_and_matches_groups():
-    """The rendered managed: block must lock updates and key on the group list."""
-    block = _managed_b64_block()
-    # pull out the Fn::Base64 !Sub | body and parse it as YAML
-    subi = block.index("Fn::Base64: !Sub |")
-    body_lines = block[subi:].split("\n")[1:]
-    base_indent = len(body_lines[0]) - len(body_lines[0].lstrip())
-    yaml_lines = []
-    for l in body_lines:
-        if l.strip() == "":
-            continue
-        if len(l) - len(l.lstrip()) < base_indent:
-            break
-        yaml_lines.append(l[base_indent:])
-    raw = "\n".join(yaml_lines).replace("${ManagedCliGroups}", "grp-a, grp-b")
-    doc = yaml.safe_load(raw)
-    policy = doc["managed"]["policies"][0]
-    assert policy["match"]["groups"] == ["grp-a", "grp-b"], policy["match"]
-    env = policy["cli"]["env"]
+@pytest.mark.parametrize("groups", [None, ["grp-a", "grp-b"]])
+def test_catch_all_policy_must_be_last(groups):
+    """A policy with no `match:` is a CATCH-ALL, and policy selection is
+    FIRST-MATCH-WINS over a single policy - so a catch-all anywhere but the end
+    shadows every policy after it.
+
+    RUNTIME-VERIFIED against the mirrored 2.1.211 gateway (2026-07-24): with the
+    catch-all first the gateway logs
+        warn managed.policies[0] is a catch-all (match: {}) but is not the last
+             entry - policies after it will never match. Move it to the end.
+    and the group-scoped update lockdown becomes unreachable for everyone. It
+    still BOOTS, so only this gate catches it.
+    """
+    policies = _managed_policies(groups)
+    catch_alls = [i for i, p in enumerate(policies) if "match" not in p]
+    assert catch_alls, "expected exactly one catch-all (model-allowlist) policy"
+    assert catch_alls == [len(policies) - 1], (
+        f"catch-all policy must be LAST; found at index(es) {catch_alls} of "
+        f"{len(policies)} policies - everything after it is dead config"
+    )
+
+
+@pytest.mark.parametrize("groups", [None, ["grp-a", "grp-b"]])
+def test_model_allowlist_is_pushed_to_every_user(groups):
+    """The model-allowlist policy has NO `match:`, so it applies to every
+    authenticated user - no Okta groups claim required.
+
+    Without this the client falls back to its own built-in model menu, none of
+    whose entries the gateway serves (live symptom: every model unauthorized).
+    Group members still receive it: the gateway merges the catch-all's `cli` as
+    a BASE into each earlier policy (runtime-verified - "after merge with
+    catch-all base - changed keys: availableModels, enforceAvailableModels").
+    """
+    policies = _managed_policies(groups)
+    allow = policies[-1]
+    assert "match" not in allow, (
+        "the model-allowlist policy must not be group-scoped - a `match:` here "
+        "silently drops the allowlist for users outside those Okta groups"
+    )
+    cli = allow["cli"]
+    # keys live INSIDE `cli` (the passthrough settings blob), not on the policy
+    assert cli["availableModels"] == ["claude-opus-4-8", "claude-sonnet-4-5"]
+    assert cli["enforceAvailableModels"] is True, (
+        "without enforceAvailableModels the Default selection can still resolve "
+        "to a model the gateway does not serve"
+    )
+
+
+def test_available_models_is_never_at_policy_level():
+    """`availableModels` is only valid inside `cli`. At the policy level the
+    gateway rejects it ("Unrecognized key(s) in object") and refuses to boot -
+    binary-verified against the mirrored 2.1.211 gateway, 2026-07-24.
+    """
+    for groups in (None, ["grp-a"]):
+        for policy in _managed_policies(groups):
+            assert "availableModels" not in policy, (
+                f"availableModels at policy level is a BOOT FAILURE: {policy!r}"
+            )
+            assert "enforceAvailableModels" not in policy, (
+                f"enforceAvailableModels at policy level is a BOOT FAILURE: {policy!r}"
+            )
+
+
+def test_update_lockdown_policy_matches_groups_only_when_configured():
+    """The update-lockdown policy is group-scoped and appears only when
+    ManagedCliGroups is set; the default render carries the allowlist alone.
+
+    It must come BEFORE the catch-all (see test_catch_all_policy_must_be_last),
+    otherwise it is never reached.
+    """
+    assert len(_managed_policies(None)) == 1, (
+        "default render should carry only the model-allowlist policy"
+    )
+    policies = _managed_policies(["grp-a", "grp-b"])
+    assert len(policies) == 2, "HaveManagedCli render should add the lockdown policy"
+    lockdown = policies[0]
+    assert lockdown["match"]["groups"] == ["grp-a", "grp-b"], lockdown["match"]
+    env = lockdown["cli"]["env"]
     assert env["DISABLE_UPDATES"] == "1"
     assert env["DISABLE_AUTOUPDATER"] == "1"
 
