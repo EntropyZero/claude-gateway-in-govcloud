@@ -126,6 +126,25 @@ throwaway Postgres). **Next step: confirm the deployed gateway image contains th
 an older image ignores the env var SILENTLY - rebuilding with a bumped tag if
 not; then re-run `deploy-gateway.sh` and confirm `/model` in a live session.**
 
+**Added 2026-07-24 (committed, NOT yet deployed): WebFetch deny + small-model
+override in the managed catch-all policy.** Two additions to the same
+`GATEWAY_MANAGED_B64` `cli:` block: `permissions: { deny: ["WebFetch"] }`
+(bare tool name = removed from the model's context entirely; managed scope, so
+not user-overridable) and `env.ANTHROPIC_DEFAULT_HAIKU_MODEL: <SonnetModelId>` —
+without it the client's background/small-model calls request a Haiku-family
+model that neither GovCloud nor this gateway has, so they fail
+(`ANTHROPIC_SMALL_FAST_MODEL` is the deprecated name for the same knob).
+Subagents (`Agent`) and `WebSearch` deliberately NOT denied (user decision
+2026-07-24). BINARY-VERIFIED against the mirrored 2.1.211 build: `permissions`
+and `env` are in the managed-`cli` schema (no fatal-unknown-key), the env-var
+path uses the value verbatim with no allowlist check — which **closes the
+small-fast-model question the review doc had left open** — and the small-model
+value must be the GATEWAY-facing ID, not the Bedrock profile ID. Caveat: the
+gateway image default is 2.1.207, so run the throwaway-Postgres boot check
+against the deployed version before the 02 re-run. Deploy steps as with the
+allowlist: re-run `deploy-gateway.sh`; clients pick it up on their next
+settings fetch. Full entry in `docs/security-review-2026-07.md`.
+
 **Fixed + LIVE-PROVEN 2026-07-23 (deployed): two AMP telemetry bugs.**
 (1) *CMK-encrypted AMP needs caller-side KMS.* Grafana ("Unable to retrieve
 metric names") and the sidecar (missing-telemetry ALARM) both got a server-side

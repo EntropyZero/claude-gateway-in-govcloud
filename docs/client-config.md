@@ -159,7 +159,7 @@ After a client authenticates, the **gateway pushes settings to it** via its
 clients their telemetry (OTLP) configuration [DOC-VERIFIED; NEEDS TEST-RUN
 CONFIRMATION].
 
-Two things are pushed:
+Four things are pushed:
 
 **a) The model allowlist — always, to every user.** The gateway pushes
 `availableModels: [<OPUS_MODEL_ID>, <SONNET_MODEL_ID>]` plus
@@ -200,6 +200,36 @@ the installer's `-DisableUpdates`. This **used to** be scoped to Okta groups via
 a `MANAGED_CLI_GROUPS` knob; that knob was **retired on 2026-07-24** when spend
 limits landed. Pushing the lockdown to everyone is strictly broader coverage and
 drops a groups-claim dependency, so nothing is lost by the removal.
+
+**c) A WebFetch tool deny — also to everyone.** The policy carries
+`permissions: { deny: ["WebFetch"] }` in `cli`. A bare tool name in `deny`
+removes the tool from the model's context entirely — stronger than a scoped
+`WebFetch(domain:*)` deny, which only blocks matching calls. Deny rules union
+across scopes and a deny at any scope cannot be re-allowed at another, so users
+cannot re-enable it locally. In this network posture (no NAT, Zscaler
+server-side egress only) WebFetch could only fail slowly anyway — the deny makes
+the posture explicit instead of incidental. Subagents (`Agent`) and `WebSearch`
+are deliberately **not** denied (decision 2026-07-24). [`permissions` confirmed
+present in the managed-`cli` settings schema of the mirrored 2.1.211 binary,
+2026-07-24 — the fatal-unknown-key trap does not fire for it.]
+
+**d) The small/fast model override — also to everyone.** The policy sets
+`env.ANTHROPIC_DEFAULT_HAIKU_MODEL` to the configured Sonnet model ID. Claude
+Code uses a Haiku-family model for lightweight background tasks by default —
+but no Haiku model exists in GovCloud and this gateway does not serve one, so
+without the override those background calls request an unserved model and fail.
+The value is the same `<SONNET_MODEL_ID>` as the allowlist — the **gateway-facing**
+model ID, *not* the Bedrock inference-profile ID (`SonnetBedrockModelId`): the
+client asks the gateway, and the gateway's `models:` block does the Bedrock
+mapping. [Verified against the mirrored 2.1.211 binary, 2026-07-24: the client
+uses the env var's value verbatim — no rewriting or region logic — and the
+env-var path performs no allowlist check, so `enforceAvailableModels` cannot
+block it; the value is allowlisted anyway.] Two caveats: `ANTHROPIC_SMALL_FAST_MODEL`
+is the deprecated name for the same knob and **takes precedence if set locally**
+on a user's machine (its `_AWS_REGION` companion is Bedrock-direct-only and
+irrelevant behind a gateway); and the live `/model` check should eyeball whether
+the picker grows a cosmetic "Custom Haiku model" entry for the override — it
+resolves to an allowlisted model either way.
 
 The Okta **groups claim is still required**, but now for a different reason:
 per-group spend caps (`scope_type` `rbac_group`) resolve against it, so the
