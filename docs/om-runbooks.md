@@ -986,6 +986,29 @@ and either way it says nothing about whether ingestion is working.
 > UnderscoreEscapingWithoutSuffixes` - the WithOUT variant; the WithSuffixes
 > variant would re-add unit/type suffixes and break the dashboard names.)
 
+> **Dashboard queries reworked for per-session series (2026-07-24).** Keeping
+> `session.id` split cost/usage into one series per session, which broke the
+> dashboard's `increase(...[window])` panels: `increase()` needs >=2 samples
+> per series and returns NOTHING for a short/sparse session, so panels read
+> ZERO while work is happening. The panels were reworked (validated against the
+> pinned ADOT v0.49.0 -> Prometheus, not live AMP):
+>   - cumulative TOTALS (cost/token stat tiles, top-users table):
+>     `sum(max_over_time(metric[$__range]))` - each session's counter peak is
+>     its total; exact, never zero on sparse sessions.
+>   - cumulative RATES (time-series "by team/model/..."):
+>     `sum by (X) (max_over_time(m[1h]) - min_over_time(m[1h]))` - each
+>     session's rise within the trailing hour; a single-sample session
+>     contributes 0 instead of emptying the whole panel.
+>   - COUNTS (Sessions, Active users): `count(group by (session_id|user_email)
+>     (count_over_time({__name__=~"claude_code_.+", ...}[window])))` - distinct
+>     ids seen in the window; robust to single-sample and already-ended
+>     (stale) sessions, unlike the old counter-`increase()` and instant counts.
+> The dashboard JSON is baked into the Grafana image, so **rebuild + push the
+> Grafana image (bump GRAFANA_IMAGE_TAG) and re-run 03** to pick up the change.
+> Caveat: sessions spanning the window's start edge slightly over-attribute
+> (their pre-window spend counts in the window). For exact accounting the
+> gateway's Postgres `spend` table remains authoritative.
+
 > **Session labels (2026-07-24).** `session.id` is KEPT as a metric label. It
 > was previously deleted for cardinality, but each session's counters start at
 > 0, so concurrent sessions from the same user+model interleaved onto one
