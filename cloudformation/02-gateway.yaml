@@ -1170,6 +1170,19 @@ Resources:
             #    -DisableUpdates. This USED to be scoped to `MANAGED_CLI_GROUPS`
             #    Okta groups; it now applies to everyone, which is strictly broader
             #    coverage AND drops the groups-claim dependency (2026-07-24).
+            #  * permissions.deny [WebFetch] - removes the WebFetch tool from
+            #    the model's context entirely (a bare tool name is STRONGER
+            #    than a scoped WebFetch(domain:*) deny, which only blocks
+            #    matching calls). In this no-NAT / Zscaler
+            #    posture the tool could only fail slowly anyway; denying it
+            #    centrally makes the posture explicit and user-unoverridable
+            #    (managed scope wins over user settings).
+            #  * ANTHROPIC_DEFAULT_HAIKU_MODEL - points the client's small/fast
+            #    background model at the configured Sonnet ID. Without it the
+            #    client asks for a Haiku-family model that does not exist in
+            #    GovCloud and that this gateway does not serve, so background
+            #    calls fail. (ANTHROPIC_SMALL_FAST_MODEL is the deprecated name
+            #    for the same knob; this one is current as of 2.1.x.)
             #  * OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative -
             #    REQUIRED for usage metrics to reach AMP. Clients export DELTA
             #    sums by default, and the sidecar's prometheusremotewrite exporter
@@ -1197,9 +1210,13 @@ Resources:
                       - cli:
                           availableModels: ['${OpusModelId}', '${SonnetModelId}']
                           enforceAvailableModels: true
+                          permissions:
+                            deny: ['WebFetch']
                           env:
                             DISABLE_UPDATES: "1"
                             DISABLE_AUTOUPDATER: "1"
+                            # no Haiku in GovCloud - see the comment above
+                            ANTHROPIC_DEFAULT_HAIKU_MODEL: '${SonnetModelId}'
                             # delta sums are silently dropped by the sidecar's
                             # prometheus translation - see the comment above
                             OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "cumulative"

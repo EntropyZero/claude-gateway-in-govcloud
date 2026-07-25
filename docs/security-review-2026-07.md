@@ -557,7 +557,58 @@ Opus+Sonnet, a request down that branch would fail at the gateway rather than
 degrade. Pinning `ANTHROPIC_SMALL_FAST_MODEL` to a served model via `cli.env` is
 the candidate mitigation, deliberately **not** applied blind - setting it may be
 what enables the unchecked branch in the first place. Resolve by observation on
-the test run.
+the test run. **Update 2026-07-24: resolved by construction — the mitigation is
+now applied (via the current var name `ANTHROPIC_DEFAULT_HAIKU_MODEL`) after
+binary verification showed the unchecked branch returns the configured value
+verbatim, so pinning it to the served Sonnet ID makes the branch harmless. See
+the "Managed policy additions" entry below.**
+
+**Managed policy additions: WebFetch deny + small/fast-model override
+(2026-07-24, BINARY-VERIFIED against the mirrored 2.1.211 build; needs live
+confirmation).** Two keys added to the same catch-all `cli:` policy in
+`GATEWAY_MANAGED_B64`:
+
+- `permissions: { deny: ["WebFetch"] }` — a bare tool name removes WebFetch
+  from the model's context entirely (stronger than a scoped
+  `WebFetch(domain:*)` deny). Deny rules union across scopes and a deny at any
+  scope cannot be re-allowed at another, so this is not user-overridable.
+  In this no-NAT/Zscaler posture the tool could only fail slowly anyway; the
+  deny makes the posture explicit. **`Agent` (subagents) and `WebSearch` are
+  deliberately NOT denied** (user decision, 2026-07-24) — a bare `Agent` deny
+  would block all subagents, built-in and custom alike, which was judged too
+  broad.
+- `env.ANTHROPIC_DEFAULT_HAIKU_MODEL: <SonnetModelId>` — **this closes the
+  question the model-allowlist entry above deliberately left open** (the
+  `getSmallFastModel()` unchecked branch). Binary verification against the
+  mirrored 2.1.211 build shows the env-var path returns the configured value
+  **verbatim** (identity function — no rewriting, no region logic, no
+  allowlist check), so the previously-feared failure mode — the unchecked
+  branch requesting an unserved Haiku model — is now harmless *by
+  construction*: the branch is indeed unchecked, but the value it returns is
+  the gateway-served Sonnet ID (the same `<SonnetModelId>` as
+  `availableModels`, NOT the Bedrock profile ID — the gateway's `models:`
+  block does the Bedrock mapping). Without the override, background calls
+  request a Haiku-family model that neither GovCloud nor this gateway has.
+  Caveats: `ANTHROPIC_SMALL_FAST_MODEL` (deprecated name) **takes precedence
+  if a user sets it locally**; and the `/model` picker may grow a cosmetic
+  "Custom Haiku model" entry — it resolves to an allowlisted model either way.
+
+Schema safety: `permissions` and `env` are both present in the managed-`cli`
+settings schema of the mirrored 2.1.211 binary (the fatal-unknown-key
+validation does not fire for them; the only gateway-side exclusion found is
+`mcpServers`). The full render pipeline (CFN `!Sub` → `Fn::Base64` →
+entrypoint append → YAML parse) was reproduced mechanically and parses to the
+intended structure. `tests/templates` gained a gate pinning the exact deny
+list and the small-model value (red-tested by mutating each).
+
+**Version-skew caveat:** the schema verification ran against the mirrored
+2.1.211 binary, but `deploy.env.example` defaults the gateway image to
+`CLAUDE_VERSION=2.1.207`. Both keys are long-standing settings.json keys so a
+2.1.207 rejection is very unlikely, but the throwaway-Postgres boot check
+should run against the actually-deployed gateway version before the `02`
+re-run. **Needs live confirmation:** WebFetch absent from a client's tool
+list after a settings fetch; background/small-model calls succeeding against
+the Sonnet ID; the picker's cosmetic haiku entry (or its absence).
 
 **CMK-encrypted AMP needs caller-side KMS on both the read and write paths
 (2026-07-23, LIVE-PROVEN).** First live use of the observability stack surfaced
