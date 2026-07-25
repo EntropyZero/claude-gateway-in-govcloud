@@ -29,9 +29,18 @@ hop on a call.
   be the *Web* type so it has a **client secret**. A Single-Page/Native/public
   app has no secret and will not work — both the gateway and Grafana are
   server-side confidential clients and require the secret).
-- **Grant type:** **Authorization Code**. (Our clients also send PKCE (S256) —
-  fine to leave PKCE allowed; it's used *in addition to* the secret, not
-  instead of it.)
+- **Grant types:** **Authorization Code AND Refresh Token** — please enable
+  **both**. The Refresh Token grant is REQUIRED: without it Okta silently
+  ignores the `offline_access` scope, issues no refresh token, and every
+  developer is bounced back through the browser login at the gateway's session
+  TTL (as short as 1 hour) instead of refreshing transparently. (Our clients
+  also send PKCE (S256) — fine to leave PKCE allowed; it's used *in addition
+  to* the secret, not instead of it.)
+- **Scopes / `offline_access`:** the gateway requests
+  `openid profile email offline_access groups`. **`offline_access` must be a
+  granted scope on the app** (it is what mints the refresh token; it only works
+  once the Refresh Token grant above is enabled). On the org authorization
+  server, also confirm the refresh-token policy actually issues them.
 - **Sign-in redirect URIs** — register **all three** on this one app:
   - `https://<FQDN>/oauth/callback`  (the gateway)
   - `https://<FQDN>/grafana/login/generic_oauth`  (the Grafana dashboard)

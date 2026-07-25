@@ -120,6 +120,13 @@ developer confirms it against the fingerprint IT published — which is why TLS
 inspection must not sit in front of the gateway FQDN
 ([`networking-request-email.md`](networking-request-email.md) §3).
 
+> **Hourly re-login?** If developers are bounced through the browser SSO at
+> the session TTL (default 1h) and `/login` then shows the default picker until
+> they restart Claude Code, the Okta app is missing the **Refresh Token** grant
+> type (so `offline_access` yields no refresh token and the session cannot
+> refresh). Fix it on the Okta app — see `okta-request-email.md` and
+> `om-runbooks.md`. It is not a gateway or client-config problem.
+
 So the managed setting is **not optional**: it is what makes the gateway login
 exist *and* makes it one-touch. The AD/GPO request for it is
 [`ad-request-email.md`](ad-request-email.md). [NEEDS TEST-RUN CONFIRMATION for

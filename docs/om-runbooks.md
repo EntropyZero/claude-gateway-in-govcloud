@@ -1000,6 +1000,40 @@ and either way it says nothing about whether ingestion is working.
 
 ---
 
+### Developers bounced back to browser login every ~1 hour
+
+*Symptom:* a developer is forced through the full browser SSO at a fixed
+interval matching `SESSION_TTL_HOURS` (default 1h). Often paired with: after
+the bounce, `/login` shows the **default account picker** instead of the
+gateway, and only closing and reopening Claude Code restores the forced-gateway
+login.
+
+*Cause:* the gateway refreshes its session JWT silently using an UPSTREAM Okta
+**refresh token** (`[gateway-refresh] refreshed gateway JWT` in the gateway
+logs on success). If Okta issued no refresh token, there is nothing to refresh,
+so the session simply dies at the TTL. Okta issues a refresh token only when
+BOTH are true on the app: the **Refresh Token grant type** is enabled, and
+**`offline_access`** is a granted scope. Our clients request `offline_access`,
+but if the Okta app was set up for Authorization Code only, Okta drops it
+silently. The `/login`-shows-the-picker follow-on is a consequence:
+`forceLoginMethod: "gateway"` is applied at process startup, and the
+mid-session re-login path does not re-assert it — restarting re-reads the
+managed setting. Fixing the refresh token removes the mid-session re-login
+entirely, so the picker problem disappears with it.
+
+*Fix (Okta admin, no redeploy):* on the gateway app, enable the **Refresh
+Token** grant type alongside Authorization Code; confirm **`offline_access`**
+is granted; on an org authorization server, confirm its refresh-token policy
+issues them. Then log in fresh once. See `docs/okta-request-email.md` (updated
+to request both grants). This is TTL-independent — lowering `SESSION_TTL_HOURS`
+only changes how fast revocation propagates, not whether refresh works.
+
+*Confirming:* success shows `[gateway-refresh] refreshed gateway JWT` in the
+gateway logs; failure shows `[gateway-refresh] IdP rejected refresh token;
+clearing it` or `OAuth session expired and could not be refreshed`.
+
+---
+
 ### Telemetry forward failing with `ECONNREFUSED_SSRF`
 
 *Symptom:* gateway logs `forward to http://localhost:4318 failed: Error:
