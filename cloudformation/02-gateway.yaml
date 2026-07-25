@@ -1170,13 +1170,17 @@ Resources:
             #    -DisableUpdates. This USED to be scoped to `MANAGED_CLI_GROUPS`
             #    Okta groups; it now applies to everyone, which is strictly broader
             #    coverage AND drops the groups-claim dependency (2026-07-24).
-            #  * permissions.deny [WebFetch] - removes the WebFetch tool from
-            #    the model's context entirely (a bare tool name is STRONGER
-            #    than a scoped WebFetch(domain:*) deny, which only blocks
-            #    matching calls). In this no-NAT / Zscaler
-            #    posture the tool could only fail slowly anyway; denying it
-            #    centrally makes the posture explicit and user-unoverridable
-            #    (managed scope wins over user settings).
+            #  * permissions.deny [WebFetch, WebSearch, mcp__*] - removes each
+            #    tool from the model's context entirely (a bare tool name is
+            #    STRONGER than a scoped WebFetch(domain:*) deny, which only
+            #    blocks matching calls; mcp__* covers every tool of every MCP
+            #    server). WebFetch fetches LOCALLY on the client and could only
+            #    fail slowly in this no-NAT / Zscaler posture; WebSearch is
+            #    server-side and Bedrock does not expose it at all, so its deny
+            #    is defense-in-depth tidiness; the MCP deny closes the
+            #    remaining tool-borne web path. Denies union across scopes and
+            #    cannot be re-allowed at another scope, so none of this is
+            #    user-overridable. Subagents (Agent) stay allowed by decision.
             #  * ANTHROPIC_DEFAULT_HAIKU_MODEL - points the client's small/fast
             #    background model at the configured Sonnet ID. Without it the
             #    client asks for a Haiku-family model that does not exist in
@@ -1211,7 +1215,7 @@ Resources:
                           availableModels: ['${OpusModelId}', '${SonnetModelId}']
                           enforceAvailableModels: true
                           permissions:
-                            deny: ['WebFetch']
+                            deny: ['WebFetch', 'WebSearch', 'mcp__*']
                           env:
                             DISABLE_UPDATES: "1"
                             DISABLE_AUTOUPDATER: "1"

@@ -563,20 +563,27 @@ binary verification showed the unchecked branch returns the configured value
 verbatim, so pinning it to the served Sonnet ID makes the branch harmless. See
 the "Managed policy additions" entry below.**
 
-**Managed policy additions: WebFetch deny + small/fast-model override
+**Managed policy additions: web/MCP tool denies + small/fast-model override
 (2026-07-24, BINARY-VERIFIED against the mirrored 2.1.211 build; needs live
 confirmation).** Two keys added to the same catch-all `cli:` policy in
 `GATEWAY_MANAGED_B64`:
 
-- `permissions: { deny: ["WebFetch"] }` — a bare tool name removes WebFetch
-  from the model's context entirely (stronger than a scoped
-  `WebFetch(domain:*)` deny). Deny rules union across scopes and a deny at any
-  scope cannot be re-allowed at another, so this is not user-overridable.
-  In this no-NAT/Zscaler posture the tool could only fail slowly anyway; the
-  deny makes the posture explicit. **`Agent` (subagents) and `WebSearch` are
-  deliberately NOT denied** (user decision, 2026-07-24) — a bare `Agent` deny
-  would block all subagents, built-in and custom alike, which was judged too
-  broad.
+- `permissions: { deny: ["WebFetch", "WebSearch", "mcp__*"] }` — a bare tool
+  name removes the tool from the model's context entirely (stronger than a
+  scoped `WebFetch(domain:*)` deny); `mcp__*` covers every tool of every MCP
+  server. Deny rules union across scopes and a deny at any scope cannot be
+  re-allowed at another, so none of this is user-overridable. Rationale:
+  WebFetch fetches *locally on the client* (hostname-only preflight to
+  `api.anthropic.com`, then a local HTTP request) and could only fail slowly
+  in this no-NAT/Zscaler posture; WebSearch executes server-side and **Bedrock
+  does not expose it at all**, so its deny is defense-in-depth tidiness; the
+  MCP deny closes the remaining tool-borne web path (WebSearch + `mcp__*`
+  added by user decision later the same day, after the initial WebFetch-only
+  commit). **`Agent` (subagents) is deliberately NOT denied** (user decision,
+  2026-07-24) — a bare `Agent` deny would block all subagents, built-in and
+  custom alike, which was judged too broad. Remaining web path: `Bash`
+  (`curl`/`wget`), bounded by the client-side Zscaler policy; a
+  `Bash(curl *)`-style deny was considered and not applied.
 - `env.ANTHROPIC_DEFAULT_HAIKU_MODEL: <SonnetModelId>` — **this closes the
   question the model-allowlist entry above deliberately left open** (the
   `getSmallFastModel()` unchecked branch). Binary verification against the
@@ -606,9 +613,10 @@ list and the small-model value (red-tested by mutating each).
 `CLAUDE_VERSION=2.1.207`. Both keys are long-standing settings.json keys so a
 2.1.207 rejection is very unlikely, but the throwaway-Postgres boot check
 should run against the actually-deployed gateway version before the `02`
-re-run. **Needs live confirmation:** WebFetch absent from a client's tool
-list after a settings fetch; background/small-model calls succeeding against
-the Sonnet ID; the picker's cosmetic haiku entry (or its absence).
+re-run. **Needs live confirmation:** WebFetch/WebSearch/MCP tools absent from
+a client's tool list after a settings fetch; background/small-model calls
+succeeding against the Sonnet ID; the picker's cosmetic haiku entry (or its
+absence).
 
 **CMK-encrypted AMP needs caller-side KMS on both the read and write paths
 (2026-07-23, LIVE-PROVEN).** First live use of the observability stack surfaced
