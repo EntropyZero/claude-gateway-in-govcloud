@@ -49,8 +49,8 @@ laptops without a public internet dependency on the AI provider.
   trust) and needs no elevation. The gateway **login** requires a managed
   setting (`forceLoginMethod: "gateway"` + `forceLoginGatewayUrl`) that Claude
   Code honors only from a managed source, delivered by a separate GPO/MDM
-  channel (`client/mirror-claude-release.sh`, `client/Install-ClaudeCode.ps1`;
-  [`client-config.md`](client-config.md), [`ad-request-email.md`](ad-request-email.md)).
+  channel (`scripts/mirror/mirror-claude-release.sh`, `client/Install-ClaudeCode.ps1`;
+  [`client-config.md`](../operations/client-config.md), [`ad-request-email.md`](../requests/ad-request-email.md)).
 - An **optional usage/cost observability stack**: Amazon Managed Prometheus
   (AMP) and a self-hosted Grafana behind the same ALB and IdP
   (`cloudformation/03-observability.yaml`). Usage metrics reach AMP through an
@@ -69,7 +69,7 @@ laptops without a public internet dependency on the AI provider.
   fleet never contacts Anthropic: binaries are mirrored and verified, and all
   auto-update paths are disabled by the user-settings `env` block the installer
   writes (`DISABLE_UPDATES`/`DISABLE_AUTOUPDATER`), backstopped by the
-  mirror-only network path (`client/mirror-claude-release.sh`,
+  mirror-only network path (`scripts/mirror/mirror-claude-release.sh`,
   `client/Install-ClaudeCode.ps1`).
 - **Not a Node/npm distribution.** By decision (2026-07-15), only the
   precompiled native `claude` binary is fielded (CLAUDE.md "User decisions").
@@ -134,7 +134,7 @@ holds the RDS master credential.
   (`forceLoginMethod: "gateway"` + `forceLoginGatewayUrl`) — Claude Code offers
   no user-selectable gateway option, so this setting must be delivered by
   GPO/MDM (or self-served with local admin) before the developer can sign in
-  ([`client-config.md`](client-config.md), [`ad-request-email.md`](ad-request-email.md)).
+  ([`client-config.md`](../operations/client-config.md), [`ad-request-email.md`](../requests/ad-request-email.md)).
   With it in place, `claude` auto-drives to the locked gateway login; the
   developer completes a **one-time Okta SSO** and receives a gateway session
   (`cloudformation/02-gateway.yaml` `oidc:` and `session:` blocks).
@@ -163,7 +163,7 @@ holds the RDS master credential.
 - Deploy and maintain the system with the `deploy.env`-driven scripts in
   `scripts/` (fixed order: cert → `01` → build four images → `02` →
   DNS/Zscaler → verify → `03` → Grafana secret → re-run `02`;
-  `docs/test-run-runbook.md`).
+  `docs/operations/test-run-runbook.md`).
 - Operate from a host with Docker, AWS credentials, and egress; an **in-VPC
   admin/build host** is admitted to the interface-endpoint security group when
   `ADMIN_CLIENT_SG_ID` is set, so its AWS API calls are not black-holed by the
@@ -198,7 +198,7 @@ own client and redirect URI (`/grafana/login/generic_oauth`) and **strict
 Okta-group → role mapping**: membership in `grafana-admins` (the
 `GRAFANA_ADMIN_GROUP` parameter, default `grafana-admins`) maps to Grafana
 Admin, and a user in no mapped group is **denied** (`architecture.md` §3;
-`cloudformation/03-observability.yaml`; `docs/okta-request-email.md`). The local
+`cloudformation/03-observability.yaml`; `docs/requests/okta-request-email.md`). The local
 login form is disabled; the bootstrap `admin` account is break-glass only,
 reachable only by redeploying with `GRAFANA_DISABLE_LOGIN_FORM=false`.
 
@@ -233,19 +233,19 @@ profile):
   through a ZPA application segment for the gateway FQDN (TCP 443), served by App
   Connectors that route to the workload VPC over the Transit Gateway. TLS
   inspection must **not** be enabled on that segment — the client pins the
-  gateway certificate fingerprint (`docs/networking-request-email.md` §3).
+  gateway certificate fingerprint (`docs/requests/networking-request-email.md` §3).
 - **Server-side egress prerequisite**: the gateway and Grafana containers dial
   the **Okta issuer** for OIDC discovery and token exchange. This traffic is
   server-originated (no Zscaler user identity), so the workload VPC's central
   egress path needs an explicit **ALLOW + SSL-inspection exemption** for the
-  Okta issuer FQDN (`docs/networking-request-email.md`, "Server-side egress").
+  Okta issuer FQDN (`docs/requests/networking-request-email.md`, "Server-side egress").
   This is the single open org prerequisite blocking the first end-to-end run
   (CLAUDE.md Status).
 - **Corporate DNS**: a single CNAME in the corporate zone points the gateway
   FQDN at the ALB's `internal-*.elb.amazonaws.com` name — a public record
   returning private IPs, so no split-horizon/private-hosted-zone is required;
   App Connectors must be able to resolve the corporate CNAME
-  (`docs/networking-request-email.md` §2; `security-review-2026-07.md` B1).
+  (`docs/requests/networking-request-email.md` §2; `security-review-2026-07.md` B1).
 
 Per-source-IP attribution is deliberately **not** relied upon: ZPA collapses all
 users to a handful of App Connector IPs, so identity is carried in the Okta →
@@ -264,7 +264,7 @@ flow through the fielded system and cites the file that implements it.
 1. **Offline install.** An operator has mirrored the pinned `claude` release
    into an internal share; the mirror **fails closed** on integrity — it refuses
    to proceed without GPG verification unless `ALLOW_UNVERIFIED_MANIFEST=1` is
-   set explicitly (`client/mirror-claude-release.sh`;
+   set explicitly (`scripts/mirror/mirror-claude-release.sh`;
    `.claude/rules/security.md`). The developer obtains the installer one of two
    ways:
    - **Self-service (portal, when stack `04` is deployed).** The developer
@@ -290,7 +290,7 @@ flow through the fielded system and cites the file that implements it.
    installer does **not** write — Claude Code honors those keys only from a
    managed source, so they are delivered by GPO/MDM (or self-served with local
    admin) before first login (`client/Install-ClaudeCode.ps1`;
-   [`client-config.md`](client-config.md), [`ad-request-email.md`](ad-request-email.md)).
+   [`client-config.md`](../operations/client-config.md), [`ad-request-email.md`](../requests/ad-request-email.md)).
    After login the gateway pushes central config via `/managed/settings`.
 2. **First login (Okta OIDC).** With the managed setting present the developer
    runs `claude`; the login screen is **locked to gateway** with the URL
@@ -307,8 +307,8 @@ flow through the fielded system and cites the file that implements it.
    (trust-on-first-use, per hostname). Operators publish the expected
    fingerprint (printed by `import-enterprise-cert.sh`) so the developer
    confirms it at first login. This is exactly why TLS inspection must not sit
-   in front of the gateway FQDN (`docs/networking-request-email.md` §3;
-   `docs/test-run-runbook.md` §1).
+   in front of the gateway FQDN (`docs/requests/networking-request-email.md` §3;
+   `docs/operations/test-run-runbook.md` §1).
 
 ### 5.2 Normal use — a request
 
@@ -382,7 +382,7 @@ Three independent audit surfaces, at increasing sensitivity (`architecture.md`
 - **Deploy / update flow.** The load-bearing order is cert → `01` database →
   build all four images → `02` gateway → DNS/Zscaler → `verify-gateway.sh` →
   `03` observability → set Grafana Okta secret → re-run `02`
-  (`docs/test-run-runbook.md`; CLAUDE.md "Deploy model"). Scripts persist their
+  (`docs/operations/test-run-runbook.md`; CLAUDE.md "Deploy model"). Scripts persist their
   outputs back into `deploy.env` (`set_env_var` in `scripts/common.sh`), so
   there are no copy-paste steps. Container image tags are immutable — an image
   change means a new tag and a service roll (`.claude/rules/scripts.md`).
@@ -407,8 +407,8 @@ Three independent audit surfaces, at increasing sensitivity (`architecture.md`
   pinned release to the artifacts bucket with
   `publish-portal-release.sh <version>` — which reuses the GPG-verified mirror
   output. Serving a **new client version** to developers is that one publish
-  command plus updating `PORTAL_RELEASE_VERSION` (`docs/om-runbooks.md` §5;
-  `docs/test-run-runbook.md`).
+  command plus updating `PORTAL_RELEASE_VERSION` (`docs/operations/om-runbooks.md` §5;
+  `docs/operations/test-run-runbook.md`).
 
 ---
 
@@ -473,7 +473,7 @@ from Bedrock, telemetry flows to Grafana, and audit surfaces are recording.
   **not** auto-renew; a `DaysToExpiry` alarm fires at 30 days, and re-import
   re-triggers a one-time client fingerprint-trust prompt, so operators
   coordinate a heads-up before each renewal (`architecture.md` §6;
-  `docs/networking-request-email.md` §1).
+  `docs/requests/networking-request-email.md` §1).
 - **Teardown / replacement discipline.** The ALB and RDS instance are protected
   three ways (deletion protection, fixed names, stack policy denying
   replace/delete); several encryption-at-rest choices (RDS CMK, AMP CMK) are
@@ -481,7 +481,7 @@ from Bedrock, telemetry flows to Grafana, and audit surfaces are recording.
   (`architecture.md` §8; `.claude/rules/cloudformation.md`).
 
 Detailed operations-and-maintenance procedures are collected in the O&M runbooks
-document, `docs/om-runbooks.md`.
+document, `docs/operations/om-runbooks.md`.
 
 ---
 
@@ -547,25 +547,25 @@ These must be provided by the operating organization before the system can
 operate; templates for the requests exist in the repo:
 
 - **Enterprise-CA TLS certificate** for the gateway FQDN (serverAuth EKU),
-  imported into ACM (`docs/networking-request-email.md` §1;
+  imported into ACM (`docs/requests/networking-request-email.md` §1;
   `scripts/import-enterprise-cert.sh`).
 - **Internal DNS CNAME** for the gateway FQDN at the ALB name
-  (`docs/networking-request-email.md` §2).
+  (`docs/requests/networking-request-email.md` §2).
 - **Zscaler policy**: a ZPA app segment (or ZIA bypass) for the gateway FQDN
   with no TLS inspection, **and** the server-side egress ALLOW +
   SSL-inspection exemption for the Okta issuer FQDN
-  (`docs/networking-request-email.md` §3).
+  (`docs/requests/networking-request-email.md` §3).
 - **Okta OIDC application** — a confidential Web app on the org authorization
   server, all redirect URIs registered (gateway, Grafana, and — if the portal
   is deployed — `/portal/oauth/callback`), groups returned, and the admin group
-  provisioned (`docs/okta-request-email.md`).
+  provisioned (`docs/requests/okta-request-email.md`).
 - **Okta groups claim configured — hard prerequisite for the portal.** The
   `groups` *scope* alone yields group membership in **neither** the ID token
   nor userinfo on an org authorization server; an Okta admin must configure a
   groups **claim**, or the portal denies every user. The gateway and Grafana
   tolerate this today (email-domain gating; Grafana needs groups too but is
-  optional); the portal does not (`docs/okta-request-email.md`;
-  `docs/om-runbooks.md`).
+  optional); the portal does not (`docs/requests/okta-request-email.md`;
+  `docs/operations/om-runbooks.md`).
 
 ### 8.3 Verification status — verified on paper vs. verified live
 
@@ -579,7 +579,7 @@ following is stated honestly for reviewers:
 - **Currently blocked** on one org prerequisite — the Zscaler ALLOW +
   SSL-inspection exemption for the Okta issuer FQDN on server-side egress —
   which the gateway needs for OIDC discovery at boot (CLAUDE.md Status;
-  `docs/networking-request-email.md`).
+  `docs/requests/networking-request-email.md`).
 - **Still unexercised** and therefore not yet claimed as fielded: gateway steady
   state and end-to-end developer login, Grafana Okta login, secret rotation, the
   activity archive, and the **download portal end-to-end** (live Okta
@@ -587,4 +587,4 @@ following is stated honestly for reviewers:
   the ALB, listener-rule and audit-log wiring) (CLAUDE.md Status;
   `security-review-2026-07.md` "What remains"). The system is not
   production-ready until the runbook's validation checklist
-  (`docs/test-run-runbook.md` §9) is green.
+  (`docs/operations/test-run-runbook.md` §9) is green.

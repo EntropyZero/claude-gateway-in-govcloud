@@ -152,8 +152,8 @@ managed settings. That is **false**. Verified against Anthropic's official docs
   normal devs.)
 
 Remediation applied: the installer's printed instructions and the client docs
-were corrected; a new AD/GPO request template `docs/ad-request-email.md` (create
-the GPO that delivers the managed setting) was added; `docs/client-config.md`
+were corrected; a new AD/GPO request template `docs/requests/ad-request-email.md` (create
+the GPO that delivers the managed setting) was added; `docs/operations/client-config.md`
 was rewritten; README, ConOps §3.1/§5.1, O&M runbooks 5–6, and the test-run
 runbook's login steps were aligned to "gateway login **requires** the managed
 setting." The live forced-login round-trip on a real laptop is **[NEEDS
@@ -787,7 +787,7 @@ arrives on three composable channels:
   **GPO/MDM admin channel** (GPP Registry `REG_SZ` at
   `HKLM\SOFTWARE\Policies\ClaudeCode` value `Settings`, or a GPP Files copy of
   `managed-settings.json` to `%ProgramFiles%\ClaudeCode\`). Full AD-admin steps
-  in the new `docs/client-config.md`.
+  in the new `docs/operations/client-config.md`.
 
 **CORRECTION (2026-07-22, see the top fix-log entry):** the claim that sign-in
 is a no-settings interactive flow (`claude` → `/login` → "Cloud gateway" → paste
@@ -895,7 +895,7 @@ each is fixed and committed:
 - **Server-side Zscaler inspection broke the Okta token exchange**: VPC
   egress to the Okta issuer passes TLS inspection, so the gateway and
   Grafana saw the inspector's derived cert and failed verification at token
-  exchange. Preferred fix (added to `docs/networking-request-email.md`): an
+  exchange. Preferred fix (added to `docs/requests/networking-request-email.md`): an
   SSL-inspection exemption for the issuer FQDN on the server-side egress
   path — the exchange carries the OIDC client secret, which should not
   transit inspection infrastructure. Interim/fallback implemented:
@@ -1106,7 +1106,7 @@ MDM push need reconciling (user-context deployment, or a two-phase install).
 **Resolved by the 2026-07-22 no-admin redesign** (fix-log entry above): the
 installer is user-scope only with no settings-push mode, so there is no
 SYSTEM-context settings push to contradict; forced login moved to the GPO/MDM
-admin channel (`docs/client-config.md`).
+admin channel (`docs/operations/client-config.md`).
 
 **B5. CLI TLS trust may need `NODE_EXTRA_CA_CERTS`.** The README's prerequisite
 is the enterprise root CA in the Windows cert store, but a Node-based

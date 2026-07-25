@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the gateway container from docker/ and push it to ECR.
 # Run on a machine with Docker and the verified claude binary staged at
-# docker/claude (linux-x64 glibc build — see client/mirror-claude-release.sh).
+# docker/claude (linux-x64 glibc build — see scripts/mirror/mirror-claude-release.sh).
 # Creates the ECR repository if it does not exist.
 source "$(dirname "$0")/common.sh"
 
@@ -11,7 +11,7 @@ BINARY="${REPO_ROOT}/docker/claude"
 if [ ! -f "$BINARY" ]; then
   echo "FATAL: ${BINARY} not found." >&2
   echo "       Stage the GPG/checksum-verified linux-x64 binary there first" >&2
-  echo "       (client/mirror-claude-release.sh downloads and verifies it)." >&2
+  echo "       (scripts/mirror/mirror-claude-release.sh downloads and verifies it)." >&2
   exit 1
 fi
 

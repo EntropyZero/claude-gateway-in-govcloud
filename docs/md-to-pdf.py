@@ -7,10 +7,10 @@ VECTORS - they zoom losslessly in the PDF, so keep referencing the .svg
 files, never pre-rasterized PNGs.
 
 Deps (not part of the test toolchain):  pip install weasyprint markdown
-Usage:  python3 scripts/md-to-pdf.py [doc.md ...]
-        default: docs/architecture.md docs/network-access-controls.md
-                 docs/om-runbooks.md docs/conops.md
-Output: <doc>.pdf next to each source. Committed alongside the sources -
+Usage:  python3 docs/md-to-pdf.py [doc.md ...]
+        default: docs/ato/architecture.md docs/ato/network-access-controls.md
+                 docs/operations/om-runbooks.md docs/ato/conops.md
+Output: docs/generated/<doc>.pdf. Committed alongside the sources -
         regenerate in the same change whenever a doc or diagram changes.
 """
 
@@ -21,10 +21,11 @@ import markdown
 import weasyprint
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-DEFAULT = [REPO / "docs" / "architecture.md",
-           REPO / "docs" / "network-access-controls.md",
-           REPO / "docs" / "om-runbooks.md",
-           REPO / "docs" / "conops.md"]
+OUT_DIR = REPO / "docs" / "generated"
+DEFAULT = [REPO / "docs" / "ato" / "architecture.md",
+           REPO / "docs" / "ato" / "network-access-controls.md",
+           REPO / "docs" / "operations" / "om-runbooks.md",
+           REPO / "docs" / "ato" / "conops.md"]
 
 CSS = """
 @page { size: letter landscape; margin: 14mm 12mm 16mm 12mm;
@@ -52,7 +53,8 @@ a { color: #2563EB; text-decoration: none; }
 
 
 def convert(src: pathlib.Path) -> pathlib.Path:
-    out = src.with_suffix(".pdf")
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = OUT_DIR / src.with_suffix(".pdf").name
     body = markdown.markdown(
         src.read_text(), extensions=["tables", "fenced_code", "toc"])
     doc = (f"<html><head><meta charset='utf-8'><style>{CSS}</style></head>"

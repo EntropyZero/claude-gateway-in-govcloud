@@ -23,7 +23,7 @@ log "Container image: ${IMAGE_URI}"
 # needed. COLLECTOR_IMAGE (from mirror-collector.sh) is the sidecar's image.
 if [ -n "${OBSERVABILITY_AMP_ENDPOINT:-}" ] && [ -z "${COLLECTOR_IMAGE:-}" ]; then
   echo "FATAL: OBSERVABILITY_AMP_ENDPOINT is set (telemetry on) but COLLECTOR_IMAGE is empty." >&2
-  echo "       Run scripts/mirror-collector.sh first, or unset the OBSERVABILITY_AMP_* vars" >&2
+  echo "       Run scripts/mirror/mirror-collector.sh first, or unset the OBSERVABILITY_AMP_* vars" >&2
   echo "       in deploy.env to deploy without the telemetry sidecar." >&2
   exit 1
 fi

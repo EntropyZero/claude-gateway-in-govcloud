@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Generate the architecture SVG diagrams for docs/architecture.md.
+"""Generate the architecture SVG diagrams for docs/ato/architecture.md.
 
 Hand-placed layouts (no auto-layout) so the diagrams stay readable.
-Run from anywhere:  python3 docs/diagrams/generate.py
+Run from anywhere:  python3 docs/ato/diagrams/generate.py
 Outputs *.svg next to this file.
 """
 

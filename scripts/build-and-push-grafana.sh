@@ -4,6 +4,13 @@
 # and pass GRAFANA_BASE_IMAGE pointing at it.
 source "$(dirname "$0")/common.sh"
 
+# SECURITY NOTE (2026-07-25 base-image audit): the 11.x branch left security
+# support 2026-06-15 and 11.5.1 predates the 11.5.3/11.5.5 CVE fixes; latest
+# OSS is 13.x. An upgrade is NOT a quiet pin bump: v12.3 moved provisioning to
+# a full-replace permissions model and v13 changes RBAC/datasource-UID
+# handling, both touching docker/grafana/provisioning/, and the Okta SSO login
+# is still unexercised live — verify the upgrade against a throwaway Grafana
+# (provisioned AMP datasource, usage dashboard, Okta login) before rolling.
 GRAFANA_VERSION="${GRAFANA_VERSION:-11.5.1}"
 GRAFANA_BASE_IMAGE="${GRAFANA_BASE_IMAGE:-grafana/grafana-oss:${GRAFANA_VERSION}}"
 REPO_NAME="${GRAFANA_ECR_REPO_NAME:-claude-gw-grafana}"

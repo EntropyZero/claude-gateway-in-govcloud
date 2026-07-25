@@ -56,7 +56,7 @@ Parameters:
     ConstraintDescription: A security group ID (sg-...) or empty.
     Description: >-
       Optional. SG of an in-VPC operator host that needs to QUERY AMP directly
-      (e.g. scripts/diagnose-telemetry.sh). Only relevant when
+      (e.g. scripts/diagnostics/diagnose-telemetry.sh). Only relevant when
       CreateAmpEndpoint is true: the endpoint's private DNS captures
       aps-workspaces calls from EVERY VPC client, but the endpoint SG admits
       only the gateway task and Grafana - so an operator host's SigV4 query

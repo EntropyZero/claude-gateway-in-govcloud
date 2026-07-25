@@ -28,7 +28,7 @@ endpoint-SG reachability model (workloads + in-VPC admin host).
 **Currently blocked on one org prerequisite: a Zscaler ALLOW +
 SSL-inspection exemption for the Okta issuer FQDN on the VPC's server-side
 egress** — gateway boot fails at OIDC discovery (403) until it lands. The
-running fix log is at the top of `docs/security-review-2026-07.md`. Still
+running fix log is at the top of `docs/ato/security-review-2026-07.md`. Still
 unexercised: gateway steady state + end-to-end login, Grafana Okta login,
 secret rotation, activity archive. Not production-ready until the runbook's
 validation checklist is green.
@@ -37,9 +37,9 @@ validation checklist is green.
 Code-complete with a full test suite (`tests/portal`) green; NOT deploy-verified
 — the Okta OIDC round-trip and the streamed download at real size need the live
 test run (and the same in-flight Zscaler/Okta egress exemption the gateway
-needs). Its new surface + controls are in `docs/security-review-2026-07.md` §E.
+needs). Its new surface + controls are in `docs/ato/security-review-2026-07.md` §E.
 
-The full security review (`docs/security-review-2026-07.md`) is implemented:
+The full security review (`docs/ato/security-review-2026-07.md`) is implemented:
 batches A (deploy-breakers), B (ZPA/landing-zone prerequisites), C (FedRAMP
 hardening C1–C11), D (correctness), and C12 (least-privilege app DB user +
 self-rolling rotation). **Deferred by decision:** C9 (S3 Object Lock).
@@ -175,7 +175,7 @@ value must be the GATEWAY-facing ID, not the Bedrock profile ID. Caveat: the
 gateway image default is 2.1.207, so run the throwaway-Postgres boot check
 against the deployed version before the 02 re-run. Deploy steps as with the
 allowlist: re-run `deploy-gateway.sh`; clients pick it up on their next
-settings fetch. Full entry in `docs/security-review-2026-07.md`.
+settings fetch. Full entry in `docs/ato/security-review-2026-07.md`.
 
 **Fixed + LIVE-PROVEN 2026-07-23 (deployed): two AMP telemetry bugs.**
 (1) *CMK-encrypted AMP needs caller-side KMS.* Grafana ("Unable to retrieve
@@ -195,7 +195,7 @@ exercises the full SigV4+KMS+AMP write path (genuine AU-5 liveness). **Proven:**
 AMP now holds 20 `otelcol_*` series; alarm is OK. Still pending: fail-closed
 stop-on-broken-config, shutdown flush, alarm OK→ALARM→OK cycle (now cheap to
 test — stop the sidecar). Full proof in the 2026-07-23 fix-log entries of
-`docs/security-review-2026-07.md`.
+`docs/ato/security-review-2026-07.md`.
 
 ## Repo map
 
@@ -206,18 +206,23 @@ test — stop the sidecar). Full proof in the 2026-07-23 fix-log entries of
 | `cloudformation/03-observability.yaml` | AMP, Grafana (Okta SSO), activity-archive chain; **outputs the AMP params the gateway sidecar consumes** (no standalone collector service — that moved into 02's task) |
 | `cloudformation/04-download-portal.yaml` | **optional** Okta-secured installer download portal (ECS Fargate at `/portal`, in-app OIDC + group auth, CMK S3 artifacts + audit log) |
 | `docker/` | gateway image + entrypoint; `db-admin/` (bootstrap+rotation Lambda); `grafana/`; `portal/` (download-portal app) |
-| `client/` | offline release mirror + `Install-ClaudeCode.ps1` (non-admin Windows) |
-| `scripts/` | `deploy.env`-driven runbook; `common.sh` holds the shared helpers |
-| `docs/architecture.md` | review package: 8 SVG diagrams + secrets/SG/encryption inventories |
-| `docs/conops.md` | ATO Concept of Operations: users/roles, operational scenarios, modes, accepted risks (references architecture, doesn't duplicate) |
-| `docs/diagrams/generate.py` | **source of the diagrams** — edit the script, re-run, commit both |
-| `docs/security-review-2026-07.md` | finding-by-finding status; the source of truth for what's done |
-| `docs/test-run-runbook.md` | the deploy runbook |
-| `docs/om-runbooks.md` | steady-state O&M runbooks (cert/secret rotation, CA refresh, updates, backup/restore, alarms, teardown) |
-| `docs/client-config.md` | **client config & enforcement model**: no-admin user-scope installer, one-time `/login` flow, gateway `/managed/settings` push (model allowlist + update lockdown), and the **GPO/MDM forced-login** path (ops how-to; not in the PDF set) |
-| `docs/networking-request-email.md` | cert/DNS/Zscaler request template |
-| `docs/okta-request-email.md` | Okta OIDC app request template (org server, Web app, groups) |
-| `docs/ad-request-email.md` | AD/GPO request template — the machine-policy managed setting that enables gateway login |
+| `client/` | `Install-ClaudeCode.ps1` (non-admin Windows install) |
+| `scripts/` | `deploy.env`-driven deploy/operate chain at the root (see `scripts/README.md`); `common.sh` holds the shared helpers |
+| `scripts/mirror/` | **all vendor mirroring**: Claude Code releases, ADOT collector image, Python wheel vendor dirs (`mirror-python-deps.sh` + the per-image `requirements.txt`) |
+| `scripts/diagnostics/` | telemetry/usage diagnostics (`diagnose-telemetry.sh`, `amp-query.py`, `dump-usage.sh`, …) |
+| `docs/README.md` | docs index: what lives where (`ato/`, `operations/`, `requests/`, `generated/`) |
+| `docs/ato/architecture.md` | review package: 8 SVG diagrams + secrets/SG/encryption inventories |
+| `docs/ato/conops.md` | ATO Concept of Operations: users/roles, operational scenarios, modes, accepted risks (references architecture, doesn't duplicate) |
+| `docs/ato/diagrams/generate.py` | **source of the diagrams** — edit the script, re-run, commit both |
+| `docs/ato/security-review-2026-07.md` | finding-by-finding status; the source of truth for what's done |
+| `docs/operations/greenfield-deployment.md` | **the reusable deploy runbook**: empty VPC → client authenticated, incl. the org-prerequisite request phase |
+| `docs/operations/test-run-runbook.md` | the dated first test-run log (2026-07) — historical checklist the greenfield runbook was distilled from |
+| `docs/operations/om-runbooks.md` | steady-state O&M runbooks (cert/secret rotation, CA refresh, updates, backup/restore, alarms, teardown) |
+| `docs/operations/cost-controls.md` | cost-control runbook: spend caps, dashboard walkthrough, fail-closed incident response |
+| `docs/operations/client-config.md` | **client config & enforcement model**: no-admin user-scope installer, one-time `/login` flow, gateway `/managed/settings` push (model allowlist + update lockdown), and the **GPO/MDM forced-login** path (ops how-to; not in the PDF set) |
+| `docs/requests/networking-request-email.md` | cert/DNS/Zscaler request template |
+| `docs/requests/okta-request-email.md` | Okta OIDC app request template (org server, Web app, groups) |
+| `docs/requests/ad-request-email.md` | AD/GPO request template — the machine-policy managed setting that enables gateway login |
 | `tests/` + `Makefile` | test suites (`make test`); CI in `.github/workflows/tests.yml` |
 
 ## Deploy model (details in the runbook)
@@ -269,10 +274,10 @@ FQDN / cert / Zscaler entry (path-based at `/portal`). Teardown is the reverse
   on `ubuntu-latest`.
 - Cheap extra checks outside the tested surface: `bash -n` each changed
   script, YAML-parse changed templates, `py_compile` the Lambda.
-- Diagrams are hand-laid-out SVGs from `docs/diagrams/generate.py`; **rasterize
+- Diagrams are hand-laid-out SVGs from `docs/ato/diagrams/generate.py`; **rasterize
   and look at them** (cairosvg) before committing. Never use Mermaid — its
   auto-layout produced unreadable, sometimes non-rendering output here.
-- Keep `docs/security-review-2026-07.md` in sync when a finding's status
+- Keep `docs/ato/security-review-2026-07.md` in sync when a finding's status
   changes; keep the Status section above honest.
 - Commit trailers: end messages with
   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.

@@ -1,0 +1,6 @@
+# Download-portal runtime deps — the single place the portal's Python pins
+# live. The committed wheels in vendor/ are generated FROM this file by
+# scripts/mirror/mirror-python-deps.sh (run it after editing, then rebuild
+# with a bumped PORTAL_VERSION). The Dockerfile installs with --no-index
+# from vendor/, so a pin edit without a re-mirror fails the build loudly.
+boto3==1.43.56
