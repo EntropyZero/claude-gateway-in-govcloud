@@ -131,6 +131,26 @@ Resources:
             Condition:
               ArnLike:
                 kms:EncryptionContext:aws:logs:arn: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'
+          # Bedrock model-invocation (prompt) log delivery into 03's SSE-KMS
+          # prompt-logs bucket. A service principal cannot use the key via IAM
+          # policies, so the grant must live here; the SourceAccount/SourceArn
+          # conditions scope it to THIS account's Bedrock log delivery, and it
+          # is inert until BEDROCK_PROMPT_LOGGING is enabled. Exactly the
+          # kms:GenerateDataKey grant the Bedrock invocation-logging docs
+          # prescribe for SSE-KMS destinations. BRING-YOUR-OWN-KEY deployments
+          # (KmsKeyArn set) must add this statement to their key policy before
+          # enabling prompt logging - this template never touches their key.
+          - Sid: BedrockInvocationLogsWrite
+            Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: kms:GenerateDataKey
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:*'
 
   KmsKeyAlias:
     Type: AWS::KMS::Alias

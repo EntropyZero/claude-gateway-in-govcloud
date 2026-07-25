@@ -147,7 +147,7 @@ the live Okta round-trip.]
 > `claude auth login` cannot rescue it either — the managed policy sends the
 > user back to interactive `/login`. `claude auth logout` keeps onboarding
 > intact and leaves `/login` reachable. Recovery for a developer already stuck
-> is O&M runbook 11. [BINARY-VERIFIED against the mirrored 2.1.211 build,
+> is O&M runbook 12. [BINARY-VERIFIED against the mirrored 2.1.211 build,
 > 2026-07-24; the recovery steps are NEEDS TEST-RUN CONFIRMATION.] The same
 > preflight sits in front of a **first-ever run** on a clean profile — verify a
 > fresh install before broad rollout.

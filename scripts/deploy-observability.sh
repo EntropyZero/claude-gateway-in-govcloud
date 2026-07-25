@@ -15,6 +15,43 @@ require_vars VPC_ID PRIVATE_SUBNET_IDS GATEWAY_FQDN GRAFANA_IMAGE \
 
 OBS_STACK_NAME="${OBS_STACK_NAME:-${NAME_PREFIX}-obs}"
 
+# Bedrock prompt logging is an ACCOUNT+REGION-level Bedrock setting, not a
+# stack resource (no native CloudFormation type exists). The DESTINATIONS
+# (CMK log group + CMK bucket + delivery role) are ALWAYS in the stack -
+# inert and near-free until the account configuration points at them - so
+# flipping this flag never creates/deletes them (a conditional, fixed-name,
+# Retain log group would collide on re-enable, and removing the delivery
+# role/bucket-grant while the account config still points at them would
+# silently stop delivery). Tri-state, driving ONLY the account setting:
+#   ""      (default) - never touch the account configuration
+#   "true"  - after the stack deploys, point Bedrock invocation logging at
+#             the stack's destinations (captures FULL prompts+responses of
+#             EVERY Bedrock call in this account+region)
+#   "false" - remove the account configuration (delivery stops; destinations
+#             and their data remain)
+BEDROCK_PROMPT_LOGGING="${BEDROCK_PROMPT_LOGGING:-}"
+case "$BEDROCK_PROMPT_LOGGING" in
+  ''|true|false) ;;
+  *) echo "FATAL: BEDROCK_PROMPT_LOGGING must be '', 'true' or 'false' (got '$BEDROCK_PROMPT_LOGGING')" >&2; exit 1 ;;
+esac
+
+if [ "$BEDROCK_PROMPT_LOGGING" = "false" ]; then
+  # get-then-delete: only touch the account config if one exists, so a
+  # standing "false" in deploy.env doesn't make every unrelated 03 re-run
+  # issue an account-wide delete (or fail for operators without the
+  # bedrock:Delete* permission). The get itself must SUCCEED (set -e, stderr
+  # visible): swallowing an AccessDenied here would report "already disabled"
+  # while account-wide prompt capture keeps running.
+  CURRENT_LOGGING="$(aws bedrock get-model-invocation-logging-configuration \
+    --region "$AWS_REGION" --query 'loggingConfig' --output text)"
+  if [ -n "$CURRENT_LOGGING" ] && [ "$CURRENT_LOGGING" != "None" ]; then
+    log "Disabling Bedrock model-invocation logging (ACCOUNT+REGION-wide)"
+    aws bedrock delete-model-invocation-logging-configuration --region "$AWS_REGION"
+  else
+    log "Bedrock model-invocation logging already disabled; nothing to do"
+  fi
+fi
+
 log "Deploying ${OBS_STACK_NAME} (AMP + collector + Grafana) in ${AWS_REGION}"
 ARTIFACTS_BUCKET="$(ensure_artifacts_bucket)"
 aws cloudformation deploy \
@@ -48,7 +85,9 @@ aws cloudformation deploy \
       "CreateSupportingEndpoints=${CREATE_SUPPORTING_ENDPOINTS:-false}" \
       "EncryptAmpWithCmk=${ENCRYPT_AMP_WITH_CMK:-true}" \
       "ActivityLogWindowDays=${ACTIVITY_LOG_WINDOW_DAYS:-14}" \
-      "ActivityArchiveRetentionDays=${ACTIVITY_ARCHIVE_RETENTION_DAYS:-731}"
+      "ActivityArchiveRetentionDays=${ACTIVITY_ARCHIVE_RETENTION_DAYS:-731}" \
+      "BedrockPromptLogWindowDays=${BEDROCK_PROMPT_LOG_WINDOW_DAYS:-14}" \
+      "BedrockPromptArchiveRetentionDays=${BEDROCK_PROMPT_ARCHIVE_RETENTION_DAYS:-731}"
 
 log "Stack outputs"
 aws cloudformation describe-stacks --region "$AWS_REGION" \
@@ -65,6 +104,54 @@ ACTIVITY_LOG_GROUP="$(stack_output "$OBS_STACK_NAME" ActivityLogGroupName)"
 [ -n "$AMP_ENDPOINT" ] && [ "$AMP_ENDPOINT" != "None" ] && set_env_var OBSERVABILITY_AMP_ENDPOINT "$AMP_ENDPOINT"
 [ -n "$AMP_ARN" ] && [ "$AMP_ARN" != "None" ] && set_env_var OBSERVABILITY_AMP_WORKSPACE_ARN "$AMP_ARN"
 [ -n "$ACTIVITY_LOG_GROUP" ] && [ "$ACTIVITY_LOG_GROUP" != "None" ] && set_env_var OBSERVABILITY_ACTIVITY_LOG_GROUP "$ACTIVITY_LOG_GROUP"
+
+# ---- Bedrock prompt logging: apply the account-level configuration --------
+# Runs AFTER the stack so the destinations exist. The caller needs
+# bedrock:PutModelInvocationLoggingConfiguration + iam:PassRole on the
+# delivery role. text+image are enabled (Claude Code sends both);
+# embeddings/video are not used by this deployment. Bodies >100 KB never
+# reach CloudWatch - they land only in the S3 bucket - hence both s3Config
+# and largeDataDeliveryS3Config point at the stack's bucket.
+if [ "$BEDROCK_PROMPT_LOGGING" = "true" ]; then
+  PROMPT_LOG_GROUP="$(stack_output "$OBS_STACK_NAME" BedrockPromptLogGroupName)"
+  PROMPT_BUCKET="$(stack_output "$OBS_STACK_NAME" BedrockPromptLogsBucketName)"
+  PROMPT_ROLE_ARN="$(stack_output "$OBS_STACK_NAME" BedrockPromptLoggingRoleArn)"
+  for v in PROMPT_LOG_GROUP PROMPT_BUCKET PROMPT_ROLE_ARN; do
+    if [ -z "${!v}" ] || [ "${!v}" = "None" ]; then
+      echo "FATAL: stack output for $v missing - is the deployed 03 template older than the prompt-logging change?" >&2
+      exit 1
+    fi
+  done
+  log "Enabling Bedrock model-invocation logging (ACCOUNT+REGION-wide: every"
+  log "Bedrock call in ${AWS_REGION} logs FULL prompts+responses to these destinations)"
+  LOGGING_CONFIG="$(mktemp)"
+  trap 'rm -f "$LOGGING_CONFIG"' EXIT
+  cat > "$LOGGING_CONFIG" <<JSON
+{
+  "cloudWatchConfig": {
+    "logGroupName": "${PROMPT_LOG_GROUP}",
+    "roleArn": "${PROMPT_ROLE_ARN}",
+    "largeDataDeliveryS3Config": {
+      "bucketName": "${PROMPT_BUCKET}"
+    }
+  },
+  "s3Config": {
+    "bucketName": "${PROMPT_BUCKET}"
+  },
+  "textDataDeliveryEnabled": true,
+  "imageDataDeliveryEnabled": true,
+  "embeddingDataDeliveryEnabled": false
+}
+JSON
+# videoDataDeliveryEnabled is deliberately OMITTED (its default is false):
+# older CLI service models reject the member client-side (boto3 #4381 class),
+# and this deployment doesn't use video either way.
+  aws bedrock put-model-invocation-logging-configuration \
+    --region "$AWS_REGION" \
+    --logging-config "file://${LOGGING_CONFIG}"
+  log "Applied. Current account configuration:"
+  aws bedrock get-model-invocation-logging-configuration --region "$AWS_REGION"
+fi
 
 cat <<EOF
 
@@ -84,4 +171,9 @@ Next steps:
      GRAFANA_DISABLE_LOGIN_FORM=false.
   4. Workstation grouping labels: re-run Install-ClaudeCode.ps1 with
      -CostCenter/-Team (or push OTEL_RESOURCE_ATTRIBUTES via MDM).
+  5. Bedrock prompt logging (BEDROCK_PROMPT_LOGGING): currently
+     '${BEDROCK_PROMPT_LOGGING:-<unset - account setting untouched>}'.
+     Enabling requires the 01 re-run first (CMK gains the Bedrock delivery
+     grant). Verify after a live session:
+       aws logs tail /claude/${NAME_PREFIX}/bedrock-prompts --region ${AWS_REGION}
 EOF
