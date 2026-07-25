@@ -126,16 +126,20 @@ throwaway Postgres). **Next step: confirm the deployed gateway image contains th
 an older image ignores the env var SILENTLY - rebuilding with a bumped tag if
 not; then re-run `deploy-gateway.sh` and confirm `/model` in a live session.**
 
-**Added 2026-07-24 (committed, NOT yet deployed): WebFetch deny + small-model
-override in the managed catch-all policy.** Two additions to the same
-`GATEWAY_MANAGED_B64` `cli:` block: `permissions: { deny: ["WebFetch"] }`
-(bare tool name = removed from the model's context entirely; managed scope, so
-not user-overridable) and `env.ANTHROPIC_DEFAULT_HAIKU_MODEL: <SonnetModelId>` —
+**Added 2026-07-24 (committed, NOT yet deployed): web/MCP tool denies +
+small-model override in the managed catch-all policy.** Two additions to the
+same `GATEWAY_MANAGED_B64` `cli:` block:
+`permissions: { deny: ["WebFetch", "WebSearch", "mcp__*"] }` (bare tool name =
+removed from the model's context entirely; `mcp__*` = every MCP tool; managed
+scope, so not user-overridable — WebFetch fetches locally on the client and
+would only fail slowly here; WebSearch is server-side and Bedrock doesn't
+expose it, so that deny is tidiness) and
+`env.ANTHROPIC_DEFAULT_HAIKU_MODEL: <SonnetModelId>` —
 without it the client's background/small-model calls request a Haiku-family
 model that neither GovCloud nor this gateway has, so they fail
 (`ANTHROPIC_SMALL_FAST_MODEL` is the deprecated name for the same knob).
-Subagents (`Agent`) and `WebSearch` deliberately NOT denied (user decision
-2026-07-24). BINARY-VERIFIED against the mirrored 2.1.211 build: `permissions`
+Subagents (`Agent`) deliberately NOT denied; `Bash` curl/wget remains the one
+web path, bounded by client-side Zscaler (user decisions 2026-07-24). BINARY-VERIFIED against the mirrored 2.1.211 build: `permissions`
 and `env` are in the managed-`cli` schema (no fatal-unknown-key), the env-var
 path uses the value verbatim with no allowlist check — which **closes the
 small-fast-model question the review doc had left open** — and the small-model

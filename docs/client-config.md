@@ -194,17 +194,32 @@ a `MANAGED_CLI_GROUPS` knob; that knob was **retired on 2026-07-24** when spend
 limits landed. Pushing the lockdown to everyone is strictly broader coverage and
 drops a groups-claim dependency, so nothing is lost by the removal.
 
-**c) A WebFetch tool deny — also to everyone.** The policy carries
-`permissions: { deny: ["WebFetch"] }` in `cli`. A bare tool name in `deny`
-removes the tool from the model's context entirely — stronger than a scoped
-`WebFetch(domain:*)` deny, which only blocks matching calls. Deny rules union
+**c) Web/MCP tool denies — also to everyone.** The policy carries
+`permissions: { deny: ["WebFetch", "WebSearch", "mcp__*"] }` in `cli`. A bare
+tool name in `deny` removes the tool from the model's context entirely —
+stronger than a scoped `WebFetch(domain:*)` deny, which only blocks matching
+calls — and `mcp__*` covers every tool of every MCP server. Deny rules union
 across scopes and a deny at any scope cannot be re-allowed at another, so users
-cannot re-enable it locally. In this network posture (no NAT, Zscaler
-server-side egress only) WebFetch could only fail slowly anyway — the deny makes
-the posture explicit instead of incidental. Subagents (`Agent`) and `WebSearch`
-are deliberately **not** denied (decision 2026-07-24). [`permissions` confirmed
-present in the managed-`cli` settings schema of the mirrored 2.1.211 binary,
-2026-07-24 — the fatal-unknown-key trap does not fire for it.]
+cannot re-enable any of them locally. Rationale per tool:
+
+- **WebFetch** fetches *locally on the client* (the CLI does the HTTP request,
+  after a hostname-only preflight to `api.anthropic.com`); in this network
+  posture (no NAT, Zscaler server-side egress only) it could only fail slowly —
+  the deny makes the posture explicit instead of incidental.
+- **WebSearch** executes *server-side* and **Amazon Bedrock does not expose the
+  server-side web search tool at all**, so it is non-functional on this gateway
+  regardless — the deny is defense-in-depth tidiness (decision 2026-07-24).
+- **`mcp__*`** closes the remaining tool-borne web path (an MCP server can
+  expose fetch-like tools). The offline installer also controls what MCP config
+  users receive, so this is belt-and-braces (decision 2026-07-24).
+
+Subagents (`Agent`) are deliberately **not** denied (decision 2026-07-24) — a
+bare `Agent` deny would block all subagents, built-in and custom alike. The
+model can still reach the web through `Bash` (`curl`/`wget`), which is bounded
+by the same Zscaler client-side policy as everything else on the laptop; a
+`Bash(curl *)`-style deny was considered and not applied. [`permissions`
+confirmed present in the managed-`cli` settings schema of the mirrored 2.1.211
+binary, 2026-07-24 — the fatal-unknown-key trap does not fire for it.]
 
 **d) The small/fast model override — also to everyone.** The policy sets
 `env.ANTHROPIC_DEFAULT_HAIKU_MODEL` to the configured Sonnet model ID. Claude

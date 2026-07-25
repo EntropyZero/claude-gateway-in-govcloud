@@ -257,15 +257,17 @@ def test_model_allowlist_and_lockdown_reach_every_user():
 
 
 def test_webfetch_deny_and_small_model_override_reach_every_user():
-    """The catch-all also carries the WebFetch deny and the small/fast-model
-    override (added 2026-07-24).
+    """The catch-all also carries the web/MCP tool denies and the
+    small/fast-model override (added 2026-07-24).
 
     - A BARE tool name in `permissions.deny` removes the tool from the model's
       context entirely - stronger than a scoped `WebFetch(domain:*)` deny,
-      which only blocks matching calls. Managed scope wins over user settings,
-      so it is not user-overridable. `Agent` and `WebSearch` are deliberately
-      NOT denied (decision 2026-07-24); this gate pins the exact deny list so
-      a silent widening or narrowing fails loudly.
+      which only blocks matching calls - and `mcp__*` covers every tool of
+      every MCP server. Managed-scope denies union across scopes and cannot be
+      re-allowed, so none of this is user-overridable. WebSearch is server-side
+      and Bedrock does not expose it anyway (defense-in-depth). `Agent`
+      (subagents) is deliberately NOT denied (decision 2026-07-24); this gate
+      pins the exact deny list so a silent widening or narrowing fails loudly.
     - ANTHROPIC_DEFAULT_HAIKU_MODEL must be the GATEWAY-facing Sonnet ID (the
       same value as the availableModels entry), NOT the Bedrock inference
       profile ID - the client asks the gateway, and the gateway's `models:`
@@ -274,9 +276,9 @@ def test_webfetch_deny_and_small_model_override_reach_every_user():
       nor this gateway serves.
     """
     cli = _managed_policies()[-1]["cli"]
-    assert cli["permissions"]["deny"] == ["WebFetch"], (
-        "the managed deny list must be exactly ['WebFetch'] - Agent and "
-        "WebSearch stay allowed by decision (2026-07-24)"
+    assert cli["permissions"]["deny"] == ["WebFetch", "WebSearch", "mcp__*"], (
+        "the managed deny list must be exactly ['WebFetch', 'WebSearch', "
+        "'mcp__*'] - Agent (subagents) stays allowed by decision (2026-07-24)"
     )
     assert cli["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "claude-sonnet-4-5", (
         "small/fast model must be the gateway-served Sonnet ID (same as "
