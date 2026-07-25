@@ -2,9 +2,12 @@
 
 Everything here is driven by `deploy.env` (copy `deploy.env.example`, fill it
 in; scripts persist their outputs back into it via `set_env_var`, so there are
-no copy-paste steps between them). All `.sh` scripts source `common.sh` for
-the shared helpers (`require_vars`, `stack_output`, `put_secret_and_roll`,
-`ensure_ecr_repo`, …) — see `.claude/rules/scripts.md` for the house rules.
+no copy-paste steps between them). The deploy/operate scripts source
+`common.sh` for the shared helpers (`require_vars`, `stack_output`,
+`put_secret_and_roll`, `ensure_ecr_repo`, …); the standalone egress-host
+mirror tools (`mirror/mirror-claude-release.sh`,
+`mirror/mirror-python-deps.sh`) deliberately don't, so they run without a
+filled-in `deploy.env`. See `.claude/rules/scripts.md` for the house rules.
 
 Layout: the **deploy/operate chain lives flat at this level** (these names
 appear throughout the runbooks — they are the repo's operator API);
@@ -81,9 +84,9 @@ online, or mirror them offline with `mirror/mirror-python-deps.sh --tools`.
 
 ## Files
 
-- `common.sh` — shared helpers; sourced by every `.sh` here. `deploy.env`
-  must stay a sibling of `common.sh` (helpers resolve it relative to
-  themselves).
+- `common.sh` — shared helpers; sourced by the deploy/operate scripts.
+  `deploy.env` must stay a sibling of `common.sh` (helpers resolve it
+  relative to themselves).
 - `deploy.env.example` — the committed template; `deploy.env` itself is
   gitignored. Every new parameter goes into the example with a comment.
 - `requirements-tools.txt` — operator-tooling Python deps (see above).

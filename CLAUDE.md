@@ -94,7 +94,7 @@ caps; `MANAGED_CLI_GROUPS` retired.** 02 now configures the gateway's `admin:`
 block (the master switch for spend enforcement) + two CMK-encrypted generated
 admin keys, and sets `enforcement.fail_closed_on_error: true` — **an availability
 trade: a spend-store outage halts all inference fleet-wide** (recovery path in
-`om-runbooks.md` §10). Caps are **data, not config**: rows in `spend_limits` set
+`docs/operations/cost-controls.md` §5). Caps are **data, not config**: rows in `spend_limits` set
 by `scripts/set-spend-limit.sh` (per user / per `rbac_group` / org-wide), so no
 cap rows = no enforcement. `MANAGED_CLI_GROUPS` is gone — its update lockdown now
 reaches every user via the catch-all policy — but the `groups` scope is now

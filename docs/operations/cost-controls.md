@@ -89,7 +89,7 @@ re-checks group membership on each call and `admin_audit` records the
 individual actor (`oidc:<sub>`) — **no admin key is stored anywhere in the
 portal**.
 
-Drift symptom: the page reports *"the gateway refused: not in its
+Drift symptom: the page reports *"The gateway refused: your account is not in its
 spend-admin groups"* → `SPEND_ADMIN_GROUPS` and `PORTAL_ADMIN_GROUP` have
 diverged; re-align them and re-run the affected deploy script. An empty
 `SPEND_ADMIN_GROUPS` disables bearer-token admin entirely (only the
@@ -342,9 +342,13 @@ The portal admin page shows this trail read-only and additionally writes
 audit log group. Inspect the table directly with
 `scripts/diagnostics/dump-usage.sh` (§3.3).
 
-**Key rotation:** both admin keys are `GenerateSecretString` secrets. Rotate
-by writing a new value with the file-based no-argv pattern and re-running
-`scripts/deploy-gateway.sh` (the task reads them at start) — the same
+**Key rotation:** both admin keys are `GenerateSecretString` secrets,
+injected as ECS `Secrets` and read only at container start. Rotate by
+writing a new value with the file-based no-argv pattern and then **forcing
+a new deployment** (`aws ecs update-service --cluster <cluster>
+--service ${NAME_PREFIX}-gateway --force-new-deployment`) — the same
 procedure as the gateway JWT secret in [`om-runbooks.md`](om-runbooks.md)
-§7. Rotating the write key invalidates any operator's cached copy but not
-portal admins, who never use it.
+§7. A plain `deploy-gateway.sh` re-run is NOT enough: the secret write
+happens outside CloudFormation, so the stack update is an empty changeset
+and running tasks keep the old keys. Rotating the write key invalidates any
+operator's cached copy but not portal admins, who never use it.

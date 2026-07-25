@@ -8,6 +8,7 @@
 | [`generated/`](generated/) | The PDF renderings of the review package (architecture, network-access-controls, om-runbooks, conops). Regenerate with `make docs-pdf` ([`md-to-pdf.py`](md-to-pdf.py), needs `weasyprint`+`markdown` from `scripts/requirements-tools.txt`) in the same change that edits a source doc or diagram. | Reviewers who want files, not markdown |
 
 The PDF set is exactly `architecture.md`, `network-access-controls.md`,
-`conops.md`, and `om-runbooks.md`. The security review (a living log),
-`client-config.md`, the other runbooks, and the request templates are
-deliberately not in it.
+`conops.md`, `om-runbooks.md`, and `cost-controls.md` (om-runbooks §10
+defers to it, so PDF-only reviewers need both). The security review (a
+living log), `client-config.md`, the other runbooks, and the request
+templates are deliberately not in it.

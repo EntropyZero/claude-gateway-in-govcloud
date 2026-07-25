@@ -9,7 +9,8 @@ files, never pre-rasterized PNGs.
 Deps (not part of the test toolchain):  pip install weasyprint markdown
 Usage:  python3 docs/md-to-pdf.py [doc.md ...]
         default: docs/ato/architecture.md docs/ato/network-access-controls.md
-                 docs/operations/om-runbooks.md docs/ato/conops.md
+                 docs/operations/om-runbooks.md docs/operations/cost-controls.md
+                 docs/ato/conops.md
 Output: docs/generated/<doc>.pdf. Committed alongside the sources -
         regenerate in the same change whenever a doc or diagram changes.
 """
@@ -25,6 +26,7 @@ OUT_DIR = REPO / "docs" / "generated"
 DEFAULT = [REPO / "docs" / "ato" / "architecture.md",
            REPO / "docs" / "ato" / "network-access-controls.md",
            REPO / "docs" / "operations" / "om-runbooks.md",
+           REPO / "docs" / "operations" / "cost-controls.md",
            REPO / "docs" / "ato" / "conops.md"]
 
 CSS = """

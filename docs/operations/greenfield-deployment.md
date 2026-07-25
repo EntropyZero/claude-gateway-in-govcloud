@@ -20,6 +20,11 @@ separate egress host, copy the persisted `KMS_KEY_ARN`, `IMAGE_URI`,
 lines into the deploy host's `scripts/deploy.env` — the scripts persist them
 automatically, but only locally).
 
+Shell convention: command examples expand variables like `$GATEWAY_FQDN` and
+`$CLAUDE_VERSION` in **your** shell — the scripts source `deploy.env`
+internally, but argument expansion does not, so load it first:
+`set -a; . scripts/deploy.env; set +a`.
+
 Legend: ☐ = do it · 🔎 = checkpoint, confirm before moving on ·
 **[NEEDS TEST-RUN CONFIRMATION]** = per the repo honesty rule, a step whose
 behavior is script/doc-verified but has never been exercised live (the
@@ -237,9 +242,9 @@ ADOT_VERSION=v0.49.0 ./scripts/mirror/mirror-collector.sh     # persists digest-
 `mirror/$CLAUDE_VERSION/` on the internal file share now. Pin the ADOT
 version currently proven with this repo (v0.49.0 at time of writing —
 check `CLAUDE.md` Status). In a controlled network, mirror the base images
-first (`GATEWAY_BASE_IMAGE`, `GRAFANA_BASE_IMAGE`, `LAMBDA_BASE_IMAGE`) —
-the builds need no package-repo access at all (README, "Controlled-network
-image builds").
+first (`GATEWAY_BASE_IMAGE`, `GRAFANA_BASE_IMAGE`, `LAMBDA_BASE_IMAGE`,
+`PORTAL_BASE_IMAGE` if deploying 04) — the builds need no package-repo
+access at all (README, "Controlled-network image builds").
 
 ---
 
@@ -333,7 +338,10 @@ gateway task — there is no standalone collector service.
 ```bash
 ./scripts/deploy-observability.sh          # AMP + Grafana; persists OBSERVABILITY_AMP_ENDPOINT / _WORKSPACE_ARN / _ACTIVITY_LOG_GROUP
 ./scripts/set-grafana-oidc-secret.sh       # paste the (same or dedicated) client secret; rolls Grafana
-TELEMETRY_FAIL_CLOSED=false ./scripts/deploy-gateway.sh    # re-run: attaches the sidecar — fail-OPEN first (see below)
+# set TELEMETRY_FAIL_CLOSED="false" in scripts/deploy.env (fail-OPEN first — see below),
+# then re-run to attach the sidecar. An env prefix on the command does NOT work:
+# common.sh sources deploy.env after it and the file's value wins.
+./scripts/deploy-gateway.sh
 ```
 🔎 03 `CREATE_COMPLETE`; the `GrafanaOidcRedirectUri` output matches the
 URI registered in Okta; the three `OBSERVABILITY_*` vars persisted.
@@ -344,17 +352,19 @@ gateway plus `otel-collector`), and collector log streams appear under the
 `otel` prefix.
 
 - ☐ **First-boot posture, then fail closed.** Deploy the first
-  telemetry-enabled re-run with `TELEMETRY_FAIL_CLOSED=false` as above: with
-  fail-closed on, a misconfigured collector health check hangs the rollout
-  indefinitely at `services-stable` with only a generic "task not healthy"
-  (the single highest-risk item on this path — details in
-  [`test-run-runbook.md`](test-run-runbook.md) §8). Once the
-  `otel-collector` container reports HEALTHY, flip
-  `TELEMETRY_FAIL_CLOSED=true` in `deploy.env` and re-run
+  telemetry-enabled re-run with `TELEMETRY_FAIL_CLOSED="false"` set **in
+  `scripts/deploy.env`** (the example ships it `"true"`; edit the file — a
+  `VAR=... ./scripts/...` command prefix is silently overridden when
+  `common.sh` sources the file): with fail-closed on, a misconfigured
+  collector health check hangs the rollout indefinitely at `services-stable`
+  with only a generic "task not healthy" (the single highest-risk item on
+  this path — details in [`test-run-runbook.md`](test-run-runbook.md) §8).
+  Once the `otel-collector` container reports HEALTHY, flip
+  `TELEMETRY_FAIL_CLOSED="true"` in `deploy.env` and re-run
   `./scripts/deploy-gateway.sh` — the default, SSP-recorded AU-5 posture
   (a failed collector then stops the task rather than serving unmonitored
-  traffic; the `${NAME_PREFIX}-missing-telemetry` alarm is the end-to-end
-  backstop).
+  traffic — stop-on-broken-config **[NEEDS TEST-RUN CONFIRMATION]**; the
+  `${NAME_PREFIX}-missing-telemetry` alarm is the end-to-end backstop).
 - ☐ The `missing-telemetry` alarm legitimately fires between the 03 deploy
   and the telemetry-enabled re-run — expect it to settle to OK once the
   sidecar's self-metrics heartbeat lands (proven live 2026-07-23).
@@ -533,8 +543,9 @@ ADOT_VERSION=v0.49.0 ./scripts/mirror/mirror-collector.sh
 ./scripts/set-okta-secret.sh
 ./scripts/deploy-observability.sh
 ./scripts/set-grafana-oidc-secret.sh
-TELEMETRY_FAIL_CLOSED=false ./scripts/deploy-gateway.sh   # attach sidecar fail-open
-#   ... collector HEALTHY? flip TELEMETRY_FAIL_CLOSED=true in deploy.env ...
+#   ... set TELEMETRY_FAIL_CLOSED="false" in deploy.env (env prefix won't stick) ...
+./scripts/deploy-gateway.sh                      # attach sidecar fail-open
+#   ... collector HEALTHY? flip TELEMETRY_FAIL_CLOSED="true" in deploy.env ...
 ./scripts/deploy-gateway.sh
 #   ... optional portal ...
 ./scripts/build-and-push-portal.sh

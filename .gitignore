@@ -7,7 +7,7 @@ docker/claude.exe
 
 # Local release mirrors
 client/mirror/
-mirror/
+/mirror/
 
 # Key material and CSRs from import-enterprise-cert.sh
 *.key.pem
@@ -38,7 +38,7 @@ docker/portal/tls/
 
 # Agent worktree isolation checkouts (never commit)
 .claude/worktrees/
-scripts/.rds-ca-bundle.pem
+scripts/diagnostics/.rds-ca-bundle.pem
 
 # Ephemeral operator-tooling wheel staging (scripts/mirror/mirror-python-deps.sh --tools)
 /vendor/

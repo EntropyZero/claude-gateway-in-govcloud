@@ -524,7 +524,7 @@ using. Enabled it in `02-gateway.yaml`:
 - **`enforcement.fail_closed_on_error: true`** — operator decision. A spend-store
   error blocks with 429 rather than allowing an uncapped request. **This is an
   availability trade: a store outage halts all inference fleet-wide**, and is
-  called out with a recovery path in `om-runbooks.md` §10.
+  called out with a recovery path in `operations/cost-controls.md` §5.
 - **Caps are data, not config** — rows in `spend_limits`, set via
   `POST /v1/organizations/spend_limits` by the new `scripts/set-spend-limit.sh`.
   No cap rows = no enforcement, so the stack is safe to deploy before any limits
