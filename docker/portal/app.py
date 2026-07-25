@@ -38,6 +38,7 @@ import socket
 import ssl
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -77,6 +78,12 @@ class Config:
         self.access_groups = _split_list(env["ACCESS_GROUP"])
         if not self.access_groups:
             raise ValueError("ACCESS_GROUP must name at least one Okta group")
+        # Okta group(s) whose members get the spend-cap admin page. Empty
+        # (the default) disables the page entirely - unlike ACCESS_GROUP this
+        # is an optional feature, not a lockout misconfiguration. The gateway
+        # independently re-checks membership (its admin_groups) on every call,
+        # so this gate is UX + defense in depth, not the security boundary.
+        self.admin_groups = _split_list(env.get("PORTAL_ADMIN_GROUP", ""))
         # Session TTL is configured in hours (CFN parameter); transaction cookie
         # lifetime stays in seconds (short, internal).
         self.session_ttl_seconds = int(env.get("SESSION_TTL_HOURS", "8")) * 3600
@@ -428,6 +435,254 @@ def validate_selection(team, cost_center, config):
     return team, cost_center
 
 
+# ---------------------------------------------------------------- money
+
+# The gateway's spend API takes whole CENTS as a decimal STRING (^\d{1,18}$).
+# EXACT integer arithmetic, mirroring common.sh's dollars_to_cents - float
+# round-trips put 0.05 on 6 cents, a money bug this repo has already had once.
+
+
+class AmountError(Exception):
+    pass
+
+
+def dollars_to_cents(amount):
+    """'50', '50.5', '50.05' -> '5000'/'5050'/'5005'. Raises AmountError on
+    anything that is not a plain non-negative dollar figure with at most two
+    decimal places (never rounds money)."""
+    amount = (amount or "").strip()
+    if not amount or amount.strip(".") == "" or amount.count(".") > 1 \
+            or any(c not in "0123456789." for c in amount):
+        raise AmountError("amount must be a plain dollar figure, e.g. 50 or 50.00")
+    dollars, _, frac = amount.partition(".")
+    if len(frac) > 2:
+        raise AmountError("amount has more than 2 decimal places")
+    cents = int(dollars or "0") * 100 + int((frac + "00")[:2])
+    if cents <= 0:
+        raise AmountError("amount must be greater than zero")
+    if len(str(cents)) > 18:
+        raise AmountError("amount is too large")
+    return str(cents)
+
+
+def cents_to_dollars(cents):
+    """'5005' -> '$50.05' for display. Anything non-numeric renders verbatim
+    (defensive: the value comes from the gateway API)."""
+    s = str(cents)
+    if not s.isdigit():
+        return s
+    return "$%d.%02d" % (int(s) // 100, int(s) % 100)
+
+
+_SPEND_SCOPES = ("user", "rbac_group", "organization")
+_SPEND_PERIODS = ("daily", "weekly", "monthly")
+
+
+def build_spend_limit_body(scope_type, scope_id, amount, period):
+    """The POST body for the gateway's spend-limits API (the same shape
+    scripts/set-spend-limit.sh sends). amount None clears the cap; otherwise
+    it is a DOLLAR string, converted to the API's cents-as-string. Raises
+    SelectionError / AmountError with a user-renderable message."""
+    if scope_type not in _SPEND_SCOPES:
+        raise SelectionError("scope must be one of: %s" % ", ".join(_SPEND_SCOPES))
+    if period not in _SPEND_PERIODS:
+        raise SelectionError("period must be one of: %s" % ", ".join(_SPEND_PERIODS))
+    if scope_type == "organization":
+        if scope_id:
+            raise SelectionError("the organization scope takes no user/group id")
+        scope = {"type": "organization"}
+    else:
+        if not scope_id or len(scope_id) > 320 or any(ord(c) < 32 for c in scope_id):
+            raise SelectionError("a %s cap needs a plain user/group id" % scope_type)
+        key = "user_id" if scope_type == "user" else "rbac_group_id"
+        scope = {"type": scope_type, key: scope_id}
+    cents = None if amount is None else dollars_to_cents(amount)
+    return {"scope": scope, "amount": cents, "period": period, "currency": "USD"}
+
+
+# ---------------------------------------------------------------- gateway client
+# Spend-cap admin against the gateway, acting AS the signed-in admin. The
+# portal deliberately holds NO gateway admin API key: each admin obtains their
+# own gateway session token through the gateway's OAuth 2.0 device flow
+# (RFC 8628 - the same endpoints Claude Code itself signs in with), and the
+# gateway authorizes each call by the token's Okta groups claim against its
+# admin_groups config, recording the individual (oidc:<sub>) in admin_audit.
+
+
+class GatewayError(Exception):
+    """A gateway call failed in a way the UI should surface."""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow redirects: urllib's default handler forwards ALL
+    request headers - including Authorization: Bearer - to the Location
+    target with no same-host check, so a redirect (e.g. a later ALB
+    listener-rule change) would replay the admin's gateway token to an
+    arbitrary host. A 3xx from the gateway is returned as its status and
+    treated as an unexpected response instead."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+class GatewayClient:
+    """Device flow + spend-limits API. Network methods are thin so tests can
+    override them, mirroring OidcClient."""
+
+    def __init__(self, config):
+        self.config = config
+        self.base = config.gateway_url
+
+    # -- network primitive (overridable in tests) --
+    def _http(self, method, url, headers=None, body=None):  # pragma: no cover - network
+        """Return (status, parsed-json-or-None). 4xx/5xx do not raise: device
+        flow and admin errors arrive as JSON bodies on 4xx responses."""
+        req = urllib.request.Request(url, data=body, method=method)
+        req.add_header("Accept", "application/json")
+        for k, v in (headers or {}).items():
+            req.add_header(k, v)
+        ctx = ssl.create_default_context()
+        opener = urllib.request.build_opener(
+            _NoRedirect, urllib.request.HTTPSHandler(context=ctx))
+        try:
+            with opener.open(req, timeout=15) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            try:
+                return exc.code, json.loads(raw.decode("utf-8"))
+            except Exception:
+                return exc.code, None
+        except urllib.error.URLError as exc:
+            # Network / TLS failure, not an HTTP status. Surfaced as a
+            # GatewayError so the UI shows a diagnosable message instead of a
+            # bare 500. A TLS verify error here means the container trust
+            # store lacks the gateway ALB cert's chain - build-and-push-portal
+            # stages GATEWAY_CA_BUNDLE/EXTRA_CA_CERT_PATH into the image.
+            raise GatewayError("gateway unreachable: %s" % getattr(exc, "reason", exc))
+
+    def _post_form(self, url, data):
+        body = urllib.parse.urlencode(data).encode("ascii")
+        return self._http("POST", url, headers={"Content-Type": "application/x-www-form-urlencoded"}, body=body)
+
+    # -- device flow --
+    def device_authorize(self):
+        """Start the device flow. Returns the RFC 8628 authorization response
+        (device_code, user_code, verification_uri[_complete], expires_in,
+        interval). The empty body (no client_id) is gateway-specific behavior,
+        runtime-verified on 2.1.220 - RFC 8628 nominally REQUIRES client_id
+        for public clients, so revisit if a gateway upgrade starts rejecting
+        this call."""
+        status, doc = self._post_form(self.base + "/oauth/device_authorization", {})
+        if status != 200 or not isinstance(doc, dict) or "device_code" not in doc:
+            raise GatewayError("device authorization failed (HTTP %s)" % status)
+        return doc
+
+    def poll_token(self, device_code):
+        """One token poll. Returns the token response dict on success,
+        'pending' while authorization is outstanding, 'slow_down' when the
+        gateway asks for backoff (RFC 8628: add 5s to the interval), or raises
+        GatewayError when the grant is dead (expired/denied)."""
+        status, doc = self._post_form(self.base + "/oauth/token", {
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            "device_code": device_code,
+        })
+        if status == 200 and isinstance(doc, dict) and doc.get("access_token"):
+            return doc
+        err = (doc or {}).get("error", "")
+        if err == "authorization_pending":
+            return "pending"
+        if err == "slow_down":
+            return "slow_down"
+        raise GatewayError("gateway sign-in %s" % (err or "failed (HTTP %s)" % status))
+
+    def refresh(self, refresh_token):
+        """Exchange a refresh token; returns the new token response or None
+        (callers fall back to a fresh device-flow connect - including on a
+        network failure, so a gateway blip degrades to a reconnect button)."""
+        try:
+            status, doc = self._post_form(self.base + "/oauth/token", {
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            })
+        except GatewayError:
+            return None
+        if status == 200 and isinstance(doc, dict) and doc.get("access_token"):
+            return doc
+        return None
+
+    # -- spend-limits admin API (bearer = the admin's own gateway token) --
+    def spend_api(self, method, token, path="", body=None):
+        headers = {"Authorization": "Bearer " + token}
+        data = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        url = self.base + "/v1/organizations/spend_limits" + path
+        return self._http(method, url, headers=headers, body=data)
+
+
+def csrf_token(session, secret):
+    """Deterministic per-session CSRF token for the admin POST forms.
+
+    SameSite=Lax blocks cross-SITE posts, but "site" is the registrable
+    domain: every sibling app under the corporate domain is SAME-site, so Lax
+    alone does not protect admin mutations from a compromised internal page.
+    This synchronizer token closes that: it is embedded as a hidden form
+    field and required by every admin POST. A same-site attacker can SEND
+    requests with the victim's cookies but cannot READ responses (same-origin
+    policy), so it cannot learn the token; without the secret it cannot
+    forge one."""
+    msg = "csrf|%s|%s" % (session.get("email", ""), session.get("exp", 0))
+    return hmac.new(secret.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+
+
+# Signed-cookie budget for the gateway token. Browsers enforce ~4096 bytes
+# per cookie (RFC 6265 minimum) and DROP an oversized Set-Cookie silently -
+# which would loop the admin back to the connect page with no error after a
+# SUCCESSFUL device grant. Gateway session JWTs embed the Okta groups claim,
+# so users with very many groups can genuinely hit this.
+_GW_COOKIE_BUDGET = 3800
+
+
+def build_gw_cookie(token_response, session, secret, now=None):
+    """The signed portal_gw cookie value for a token response, honoring the
+    browser cookie cap: past the budget the refresh token is dropped first
+    (re-connect on expiry is fine), then None is returned so the caller can
+    render an explicit error instead of letting the browser discard the
+    cookie silently. Returns (cookie, ttl_seconds) or (None, 0)."""
+    now = int(time.time()) if now is None else now
+    exp = min(gateway_token_exp(token_response, now=now), session["exp"])
+    for rt in (token_response.get("refresh_token", ""), ""):
+        cookie = sign_cookie(
+            {"tok": token_response["access_token"], "rt": rt, "exp": exp}, secret)
+        if len(cookie) <= _GW_COOKIE_BUDGET:
+            return cookie, max(exp - now, 1)
+    return None, 0
+
+
+def gateway_token_exp(token_response, now=None):
+    """Cookie expiry for a device-flow token: the JWT's own exp claim when it
+    parses (the gateway session token is a JWS), else now+expires_in, else a
+    conservative 15 minutes. The payload is NOT verified - the portal cannot
+    (HS256, gateway-held key) and need not: the gateway re-verifies on every
+    call; this only sizes the cookie lifetime."""
+    now = int(time.time()) if now is None else now
+    tok = token_response.get("access_token", "")
+    parts = tok.split(".")
+    if len(parts) == 3:
+        try:
+            exp = json.loads(b64url_decode(parts[1])).get("exp")
+            if isinstance(exp, int):
+                return exp
+        except Exception:
+            pass
+    expires_in = token_response.get("expires_in")
+    if isinstance(expires_in, int) and expires_in > 0:
+        return now + expires_in
+    return now + 900
+
+
 # ---------------------------------------------------------------- artifacts
 
 
@@ -577,10 +832,11 @@ def stream_zip(out, exe_chunks, installer_bytes, install_cmd, readme, extra_ca_b
 
 
 def build_audit_record(outcome, user_email, user_groups, team, cost_center,
-                       version, sha256, source_ip, user_agent, reason=None):
+                       version, sha256, source_ip, user_agent, reason=None,
+                       event="portal_download"):
     rec = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "event": "portal_download",
+        "event": event,
         "outcome": outcome,
         "user_email": user_email,
         "user_groups": user_groups,
@@ -668,7 +924,7 @@ _PAGE = """<!doctype html>
  .err{{background:#fee;border:1px solid #e99;padding:.75rem;border-radius:.35rem}}
 </style></head><body>
 <h1>Claude Code installer</h1>
-<p class="who">Signed in as {email}. Version {version}.</p>
+<p class="who">Signed in as {email}. Version {version}.{admin_link}</p>
 {error}
 <form method="GET" action="/portal/download">
  <label for="team">Team</label>
@@ -684,7 +940,7 @@ def _options(values):
     return "".join('<option value="%s">%s</option>' % (html.escape(v), html.escape(v)) for v in values)
 
 
-def render_page(config, email, error=None):
+def render_page(config, email, error=None, is_admin=False):
     err_html = '<p class="err">%s</p>' % html.escape(error) if error else ""
     return _PAGE.format(
         email=html.escape(email),
@@ -692,7 +948,185 @@ def render_page(config, email, error=None):
         error=err_html,
         teams=_options(config.teams),
         cost_centers=_options(config.cost_centers),
+        admin_link=' <a href="/portal/admin">Spend-cap admin</a>' if is_admin else "",
     )
+
+
+# -- spend-cap admin pages. Server-rendered, zero JavaScript (the portal's
+# CSP has no script-src and that stays true): the device-flow wait uses a
+# meta refresh that re-polls once per page load, and every action is a plain
+# form POST. SameSite=Lax cookies are the CSRF control for those POSTs.
+
+_ADMIN_STYLE = """
+ body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:60rem;margin:3rem auto;padding:0 1rem;color:#1a1a1a}
+ h1{font-size:1.4rem} h2{font-size:1.1rem;margin-top:2rem}
+ .who{color:#555;font-size:.85rem;margin-bottom:1.5rem}
+ .err{background:#fee;border:1px solid #e99;padding:.75rem;border-radius:.35rem}
+ .ok{background:#efe;border:1px solid #9e9;padding:.75rem;border-radius:.35rem}
+ table{border-collapse:collapse;width:100%;font-size:.9rem}
+ th,td{border:1px solid #ddd;padding:.4rem .6rem;text-align:left}
+ th{background:#f5f5f5}
+ form.inline{display:inline;margin:0}
+ label{display:block;margin:.75rem 0 .25rem;font-weight:600}
+ input,select{font-size:1rem;padding:.4rem;box-sizing:border-box}
+ button{font-size:.95rem;padding:.45rem .9rem;background:#0b5;color:#fff;border:0;border-radius:.35rem;cursor:pointer}
+ button.warn{background:#c33}
+ .grid{display:grid;grid-template-columns:repeat(4,minmax(8rem,1fr));gap:.75rem;align-items:end}
+ .nav{font-size:.85rem;margin-bottom:1rem}
+"""
+
+
+def _flash_html(flash):
+    if not flash:
+        return ""
+    cls = "ok" if flash.get("ok") else "err"
+    return '<p class="%s">%s</p>' % (cls, html.escape(flash.get("msg", "")))
+
+
+def _csrf_field(csrf):
+    return "<input type='hidden' name='csrf' value='%s'>" % html.escape(csrf or "", quote=True)
+
+
+def render_admin_connect(email, flash=None, csrf=""):
+    """No gateway session yet: explain + one button to start the device flow."""
+    return (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>Spend caps - connect</title><style>%s</style></head><body>"
+        "<h1>Spend-cap administration</h1>"
+        "<p class='who'>Signed in as %s.</p>%s"
+        "<p>Managing spend caps acts on the gateway <strong>as you</strong>: "
+        "the gateway checks your Okta group membership and records your "
+        "identity in its admin audit trail. Connect a gateway session to "
+        "continue (one browser sign-in; your Okta session usually makes it "
+        "a single click).</p>"
+        "<form method='POST' action='/portal/admin/connect'>%s"
+        "<button type='submit'>Connect gateway session</button></form>"
+        "</body></html>"
+    ) % (_ADMIN_STYLE, html.escape(email), _flash_html(flash), _csrf_field(csrf))
+
+
+def render_admin_pending(verify_url, user_code, refresh_seconds, csrf=""):
+    """Device flow started: link to the gateway's verification page and
+    re-poll (server-side) on every meta refresh until approved."""
+    return (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta http-equiv='refresh' content='%d'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>Spend caps - approve sign-in</title><style>%s</style></head><body>"
+        "<h1>Approve the gateway sign-in</h1>"
+        "<p>Open <a href='%s' target='_blank' rel='noopener'>the gateway "
+        "sign-in page</a> in a new tab and approve code <strong>%s</strong>. "
+        "This page checks again every few seconds; leave it open.</p>"
+        "<p class='who'>Waiting for approval&hellip;</p>"
+        "<form method='POST' action='/portal/admin/disconnect' class='inline'>%s"
+        "<button type='submit' class='warn'>Cancel</button></form>"
+        "</body></html>"
+    ) % (refresh_seconds, _ADMIN_STYLE, html.escape(verify_url, quote=True),
+         html.escape(user_code), _csrf_field(csrf))
+
+
+def _limit_rows(limits, csrf=""):
+    # Runtime-verified item shape (gateway 2.1.220): scope is a NESTED object
+    # ({"scope": {"type": "user", "user_id": ...}}); there is no created_by
+    # (attribution lives in the audit trail); a cleared cap REMAINS as a row
+    # with amount null.
+    rows = []
+    for item in limits:
+        scope = item.get("scope") or {}
+        scope_type = str(scope.get("type", item.get("scope_type", "")))
+        scope_id = scope.get("user_id") or scope.get("rbac_group_id") \
+            or item.get("scope_id") or ""
+        period = str(item.get("period", "monthly"))
+        amount = item.get("amount")
+        amount_html = "<em>(cleared)</em>" if amount is None \
+            else html.escape(cents_to_dollars(amount))
+        clear = (
+            "<form method='POST' action='/portal/admin/clear' class='inline'>%s"
+            "<input type='hidden' name='scope_type' value='%s'>"
+            "<input type='hidden' name='scope_id' value='%s'>"
+            "<input type='hidden' name='period' value='%s'>"
+            "<button type='submit' class='warn'>Clear</button></form>"
+        ) % (_csrf_field(csrf),
+             html.escape(scope_type, quote=True), html.escape(str(scope_id), quote=True),
+             html.escape(period, quote=True))
+        rows.append(
+            "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+            % (html.escape(scope_type), html.escape(str(scope_id)),
+               amount_html,
+               html.escape(period), html.escape(str(item.get("updated_at", ""))),
+               "" if amount is None else clear)
+        )
+    if not rows:
+        rows.append("<tr><td colspan='6'>No spend caps are set - spend is UNLIMITED for everyone.</td></tr>")
+    return "".join(rows)
+
+
+def render_admin_page(email, limits, flash=None, csrf=""):
+    """The connected admin UI: current caps + set/clear forms."""
+    return (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>Spend caps</title><style>%s</style></head><body>"
+        "<h1>Spend-cap administration</h1>"
+        "<p class='who'>Signed in as %s - gateway session connected (actions are "
+        "recorded under your identity). <a href='/portal'>Downloads</a> | "
+        "<a href='/portal/admin/audit'>Audit trail</a></p>%s"
+        "<h2>Current caps</h2>"
+        "<table><tr><th>Scope</th><th>Id</th><th>Cap</th><th>Period</th>"
+        "<th>Updated</th><th></th></tr>%s</table>"
+        "<p class='who'>Precedence: a per-user cap beats group caps; several "
+        "group caps combine per the gateway's group_limit_mode. No rows = no "
+        "enforcement.</p>"
+        "<h2>Set / update a cap</h2>"
+        "<form method='POST' action='/portal/admin/set'>%s<div class='grid'>"
+        "<span><label for='scope_type'>Scope</label>"
+        "<select id='scope_type' name='scope_type'>"
+        "<option value='user'>user</option>"
+        "<option value='rbac_group'>rbac_group (Okta group)</option>"
+        "<option value='organization'>organization</option></select></span>"
+        "<span><label for='scope_id'>User sub/email or group</label>"
+        "<input id='scope_id' name='scope_id' placeholder='empty for organization'></span>"
+        "<span><label for='amount'>Amount (US dollars)</label>"
+        "<input id='amount' name='amount' placeholder='50.00' required></span>"
+        "<span><label for='period'>Period</label>"
+        "<select id='period' name='period'>%s</select></span>"
+        "</div><p><button type='submit'>Set cap</button></p></form>"
+        "<form method='POST' action='/portal/admin/disconnect' class='inline'>%s"
+        "<button type='submit' class='warn'>Disconnect gateway session</button></form>"
+        "</body></html>"
+    ) % (
+        _ADMIN_STYLE, html.escape(email), _flash_html(flash), _limit_rows(limits, csrf),
+        _csrf_field(csrf),
+        "".join("<option value='%s'%s>%s</option>"
+                % (p, " selected" if p == "monthly" else "", p) for p in _SPEND_PERIODS),
+        _csrf_field(csrf),
+    )
+
+
+def render_admin_audit(email, events):
+    rows = []
+    for ev in events:
+        rows.append(
+            "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+            % tuple(html.escape(str(ev.get(k, ""))) for k in
+                    ("created_at", "actor", "action", "target_id", "reason"))
+        )
+    if not rows:
+        rows.append("<tr><td colspan='5'>No admin actions recorded yet.</td></tr>")
+    return (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>Spend caps - audit</title><style>%s</style></head><body>"
+        "<h1>Spend-cap admin audit trail</h1>"
+        "<p class='who'>Signed in as %s. <a href='/portal/admin'>Back to caps</a></p>"
+        "<p class='who'>Recorded by the gateway (admin_audit table): every cap "
+        "create/update/clear, with the acting identity - oidc:&lt;sub&gt; for "
+        "portal admins, admin-key:&lt;id&gt; for the break-glass CLI keys.</p>"
+        "<table><tr><th>At</th><th>Actor</th><th>Action</th><th>Target</th>"
+        "<th>Reason</th></tr>%s</table>"
+        "</body></html>"
+    ) % (_ADMIN_STYLE, html.escape(email), "".join(rows))
 
 
 def denied_page(email):
@@ -716,6 +1150,7 @@ class PortalHandler(BaseHTTPRequestHandler):
     config = None
     oidc = None
     audit = None
+    gateway = None
 
     def log_message(self, fmt, *args):  # route through logging, not stderr
         log.info("%s - %s", self.client_address[0], fmt % args)
@@ -800,6 +1235,10 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return self._handle_callback(urllib.parse.parse_qs(parsed.query))
             if path == "/portal/download":
                 return self._handle_download(urllib.parse.parse_qs(parsed.query))
+            if path == "/portal/admin":
+                return self._handle_admin()
+            if path == "/portal/admin/audit":
+                return self._handle_admin_audit()
             if path == "/portal":
                 return self._handle_index()
             self._send_html(404, "<h1>Not found</h1>")
@@ -813,6 +1252,24 @@ class PortalHandler(BaseHTTPRequestHandler):
             else:
                 self._send_html(500, "<h1>Internal error</h1>")
 
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path.rstrip("/")
+        self._response_started = False
+        try:
+            if path == "/portal/admin/connect":
+                return self._handle_admin_connect()
+            if path == "/portal/admin/set":
+                return self._handle_admin_set(clear=False)
+            if path == "/portal/admin/clear":
+                return self._handle_admin_set(clear=True)
+            if path == "/portal/admin/disconnect":
+                return self._handle_admin_disconnect()
+            self._send_html(404, "<h1>Not found</h1>")
+        except Exception:
+            log.exception("unhandled error on %s", self.path)
+            self._send_html(500, "<h1>Internal error</h1>")
+
     def _send_health(self):
         body = b"ok"
         self.send_response(200)
@@ -825,7 +1282,9 @@ class PortalHandler(BaseHTTPRequestHandler):
         session = self._session()
         if not session:
             return self._redirect("/portal/login")
-        self._send_html(200, render_page(self.config, session.get("email", "")))
+        is_admin = bool(self.config.admin_groups) and is_authorized(
+            session.get("groups", []), self.config.admin_groups)
+        self._send_html(200, render_page(self.config, session.get("email", ""), is_admin=is_admin))
 
     def _handle_login(self):
         state = secrets.token_urlsafe(24)
@@ -909,7 +1368,10 @@ class PortalHandler(BaseHTTPRequestHandler):
         except SelectionError as exc:
             self._audit_denied(email, groups, "invalid selection: %s" % exc,
                                team=team, cost_center=cost_center)
-            return self._send_html(400, render_page(self.config, email, error=str(exc)))
+            is_admin = bool(self.config.admin_groups) and is_authorized(
+                groups, self.config.admin_groups)
+            return self._send_html(400, render_page(self.config, email, error=str(exc),
+                                                    is_admin=is_admin))
 
         sha256 = release_sha256(self.config)
         install_cmd = build_install_cmd(
@@ -953,6 +1415,278 @@ class PortalHandler(BaseHTTPRequestHandler):
         )
         chunked.close()
 
+    # -- spend-cap admin --
+    # The portal group gate here is UX + defense in depth; the SECURITY
+    # boundary is the gateway, which verifies the bearer token and re-checks
+    # the token's groups claim against its own admin_groups on every call.
+
+    def _admin_session(self):
+        """The portal session, if it may use the admin section; sends the
+        response (redirect/404/403) and returns None otherwise."""
+        session = self._session()
+        if not session:
+            self._redirect("/portal/login")
+            return None
+        if not self.config.admin_groups:
+            # Feature disabled: indistinguishable from any other unknown path.
+            self._send_html(404, "<h1>Not found</h1>")
+            return None
+        if not is_authorized(session.get("groups", []), self.config.admin_groups):
+            self._audit_admin(session, "denied", "not in an admin group (%s)"
+                              % ", ".join(self.config.admin_groups))
+            self._send_html(403, denied_page(session.get("email", "")))
+            return None
+        return session
+
+    # Gateway-token / device-flow / flash cookies. All signed with the same
+    # session secret, all HttpOnly+Secure+SameSite=Lax via _set_cookie.
+    def _gw_cookie(self):
+        raw = self._cookies().get("portal_gw")
+        return verify_cookie(raw, self.config.session_secret) if raw else None
+
+    def _set_flash(self, ok, msg):
+        cookie = sign_cookie({"ok": ok, "msg": msg, "exp": int(time.time()) + 60},
+                             self.config.session_secret)
+        return lambda: self._set_cookie("portal_flash", cookie, 60)
+
+    def _pop_flash(self):
+        raw = self._cookies().get("portal_flash")
+        flash = verify_cookie(raw, self.config.session_secret) if raw else None
+        return flash, (lambda: self._clear_cookie("portal_flash")) if raw else None
+
+    def _form(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            length = 0
+        if length <= 0 or length > 65536:
+            return {}
+        raw = self.rfile.read(length).decode("utf-8", "replace")
+        return {k: v[0] for k, v in urllib.parse.parse_qs(raw, keep_blank_values=True).items()}
+
+    def _csrf(self, session):
+        return csrf_token(session, self.config.session_secret)
+
+    def _csrf_ok(self, session, form):
+        """Synchronizer-token check for the admin POSTs (see csrf_token: Lax
+        does not protect against same-SITE sibling apps)."""
+        return hmac.compare_digest(form.get("csrf", ""), self._csrf(session))
+
+    def _handle_admin(self):
+        session = self._admin_session()
+        if not session:
+            return
+        email = session.get("email", "")
+        flash, clear_flash = self._pop_flash()
+        extra = [clear_flash] if clear_flash else []
+
+        gw = self._gw_cookie()
+        if gw:
+            return self._render_admin_connected(session, gw, flash, extra)
+
+        txn = verify_cookie(self._cookies().get("portal_gwdev", ""), self.config.session_secret)
+        if txn:
+            return self._poll_device_flow(session, txn, extra)
+        self._send_html(200, render_admin_connect(email, flash, csrf=self._csrf(session)),
+                        extra=extra)
+
+    def _render_admin_connected(self, session, gw, flash, extra):
+        email = session.get("email", "")
+        csrf = self._csrf(session)
+        try:
+            status, doc = self.gateway.spend_api("GET", gw["tok"], path="?limit=200")
+        except GatewayError as exc:
+            return self._send_html(
+                200, render_admin_connect(email, {"ok": False, "msg": str(exc)}, csrf=csrf),
+                extra=extra)
+        if status == 401:
+            # Gateway session expired: try the refresh token once, then fall
+            # back to a fresh connect.
+            refreshed = self.gateway.refresh(gw.get("rt", "")) if gw.get("rt") else None
+            if refreshed:
+                cookie, ttl = build_gw_cookie(refreshed, session, self.config.session_secret)
+                if cookie:
+                    return self._redirect("/portal/admin", extra=[
+                        lambda: self._set_cookie("portal_gw", cookie, ttl)])
+            return self._send_html(
+                200, render_admin_connect(
+                    email, {"ok": False, "msg": "Your gateway session expired - connect again."},
+                    csrf=csrf),
+                extra=[lambda: self._clear_cookie("portal_gw")] + extra)
+        if status == 403:
+            # The PORTAL let them in but the GATEWAY refused: PORTAL_ADMIN_GROUP
+            # and the gateway's SpendAdminGroups disagree. Surface it precisely.
+            self._audit_admin(session, "denied", "gateway refused the admin call (403): "
+                              "user is not in the gateway's SpendAdminGroups")
+            return self._send_html(
+                403, render_admin_connect(
+                    email, {"ok": False, "msg":
+                            "The gateway refused: your account is not in its spend-admin "
+                            "groups (SpendAdminGroups). Ask the platform team to align it "
+                            "with the portal's PORTAL_ADMIN_GROUP."},
+                    csrf=csrf),
+                extra=extra)
+        if status != 200 or not isinstance(doc, dict):
+            return self._send_html(
+                200, render_admin_connect(
+                    email, {"ok": False, "msg": "Gateway error listing caps (HTTP %s)." % status},
+                    csrf=csrf),
+                extra=extra)
+        self._send_html(200, render_admin_page(email, doc.get("data", []), flash, csrf=csrf),
+                        extra=extra)
+
+    def _poll_device_flow(self, session, txn, extra):
+        email = session.get("email", "")
+        csrf = self._csrf(session)
+        try:
+            result = self.gateway.poll_token(txn["dc"])
+        except GatewayError as exc:
+            return self._send_html(
+                200, render_admin_connect(email, {"ok": False, "msg": str(exc)}, csrf=csrf),
+                extra=[lambda: self._clear_cookie("portal_gwdev")] + extra)
+        if result in ("pending", "slow_down"):
+            interval = txn.get("int", 5)
+            if result == "slow_down":
+                # RFC 8628 3.5: slow_down means add 5 seconds to the polling
+                # interval for this and all subsequent requests. The interval
+                # lives in the signed txn cookie, so re-sign it bumped.
+                interval += 5
+                bumped = dict(txn, int=interval)
+                cookie = sign_cookie(bumped, self.config.session_secret)
+                ttl = max(txn["exp"] - int(time.time()), 1)
+                extra = [lambda: self._set_cookie("portal_gwdev", cookie, ttl)] + extra
+            return self._send_html(
+                200, render_admin_pending(txn["vu"], txn.get("uc", ""), interval + 1, csrf=csrf),
+                extra=extra)
+        # Granted. The cookie outlives neither the gateway token nor the
+        # portal session (least privilege on both axes) - and respects the
+        # browser's ~4KB per-cookie cap rather than being dropped silently.
+        cookie, ttl = build_gw_cookie(result, session, self.config.session_secret)
+        if not cookie:
+            return self._send_html(
+                200, render_admin_connect(
+                    email, {"ok": False, "msg":
+                            "Sign-in succeeded but the gateway session token is too large "
+                            "to store in a browser cookie (very large Okta groups claim). "
+                            "Use scripts/set-spend-limit.sh, or reduce the groups pushed "
+                            "into the token."},
+                    csrf=csrf),
+                extra=[lambda: self._clear_cookie("portal_gwdev")] + extra)
+        self._audit_admin(session, "success", "gateway admin session connected")
+
+        def _cookies():
+            self._set_cookie("portal_gw", cookie, ttl)
+            self._clear_cookie("portal_gwdev")
+        self._redirect("/portal/admin", extra=[_cookies])
+
+    def _handle_admin_connect(self):
+        session = self._admin_session()
+        if not session:
+            return
+        if not self._csrf_ok(session, self._form()):
+            return self._send_html(403, "<h1>Invalid request token</h1>")
+        try:
+            doc = self.gateway.device_authorize()
+        except GatewayError as exc:
+            return self._send_html(
+                200, render_admin_connect(session.get("email", ""),
+                                          {"ok": False, "msg": str(exc)},
+                                          csrf=self._csrf(session)))
+        try:
+            interval = max(2, min(int(doc.get("interval", 5)), 60))
+        except (TypeError, ValueError):
+            interval = 5
+        try:
+            expires_in = max(60, min(int(doc.get("expires_in", 600)), 1800))
+        except (TypeError, ValueError):
+            expires_in = 600
+        txn = {
+            "dc": doc["device_code"],
+            "uc": str(doc.get("user_code", "")),
+            "vu": str(doc.get("verification_uri_complete")
+                      or doc.get("verification_uri") or self.config.gateway_url),
+            "int": interval,
+            "exp": int(time.time()) + expires_in,
+        }
+        cookie = sign_cookie(txn, self.config.session_secret)
+        self._redirect("/portal/admin", extra=[
+            lambda: self._set_cookie("portal_gwdev", cookie, expires_in)])
+
+    def _handle_admin_disconnect(self):
+        session = self._admin_session()
+        if not session:
+            return
+        if not self._csrf_ok(session, self._form()):
+            return self._send_html(403, "<h1>Invalid request token</h1>")
+
+        def _cookies():
+            self._clear_cookie("portal_gw")
+            self._clear_cookie("portal_gwdev")
+        self._redirect("/portal/admin", extra=[_cookies])
+
+    def _handle_admin_set(self, clear):
+        session = self._admin_session()
+        if not session:
+            return
+        form = self._form()
+        if not self._csrf_ok(session, form):
+            return self._send_html(403, "<h1>Invalid request token</h1>")
+        gw = self._gw_cookie()
+        if not gw:
+            return self._redirect("/portal/admin")
+        scope_type = form.get("scope_type", "")
+        scope_id = form.get("scope_id", "").strip()
+        period = form.get("period", "monthly")
+        try:
+            body = build_spend_limit_body(
+                scope_type, scope_id, None if clear else form.get("amount", ""), period)
+        except (SelectionError, AmountError) as exc:
+            return self._redirect("/portal/admin", extra=[self._set_flash(False, str(exc))])
+
+        action = "%s %s cap for %s (%s)" % (
+            "clear" if clear else "set", scope_type, scope_id or "organization", period)
+        try:
+            status, doc = self.gateway.spend_api("POST", gw["tok"], body=body)
+        except GatewayError as exc:
+            return self._redirect("/portal/admin", extra=[self._set_flash(False, str(exc))])
+        if status in (200, 201):
+            self._audit_admin(session, "success", action)
+            return self._redirect("/portal/admin", extra=[
+                self._set_flash(True, "Done: %s." % action)])
+        self._audit_admin(session, "denied", "%s -> gateway HTTP %s" % (action, status))
+        detail = ""
+        if isinstance(doc, dict):
+            err = doc.get("error")
+            if isinstance(err, dict):
+                detail = str(err.get("message", ""))
+            elif err:
+                detail = str(err)
+        # 401 falls through to the reconnect path on the next GET.
+        return self._redirect("/portal/admin", extra=[
+            self._set_flash(False, "Gateway refused (%s HTTP %s). %s" % (action, status, detail))])
+
+    def _handle_admin_audit(self):
+        session = self._admin_session()
+        if not session:
+            return
+        gw = self._gw_cookie()
+        if not gw:
+            return self._redirect("/portal/admin")
+        try:
+            status, doc = self.gateway.spend_api("GET", gw["tok"], path="/audit?limit=200")
+        except GatewayError as exc:
+            return self._redirect("/portal/admin", extra=[self._set_flash(False, str(exc))])
+        if status != 200 or not isinstance(doc, dict):
+            return self._redirect("/portal/admin", extra=[
+                self._set_flash(False, "Gateway error fetching the audit trail (HTTP %s)." % status)])
+        self._send_html(200, render_admin_audit(session.get("email", ""), doc.get("data", [])))
+
+    def _audit_admin(self, session, outcome, reason):
+        self.audit.write(build_audit_record(
+            outcome, session.get("email", ""), session.get("groups", []),
+            None, None, None, None, self._client_ip(),
+            self.headers.get("User-Agent", ""), reason=reason, event="portal_admin"))
+
     # -- audit wrappers --
     def _audit_success(self, email, groups, team, cost_center, sha256):
         self.audit.write(build_audit_record(
@@ -972,12 +1706,13 @@ class PortalHandler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------- main
 
 
-def make_server(config, oidc, audit, handler_cls=PortalHandler):
+def make_server(config, oidc, audit, handler_cls=PortalHandler, gateway=None):
     httpd = ThreadingHTTPServer(("0.0.0.0", config.listen_port), handler_cls)
     httpd.daemon_threads = True
     handler_cls.config = config
     handler_cls.oidc = oidc
     handler_cls.audit = audit
+    handler_cls.gateway = gateway if gateway is not None else GatewayClient(config)
     return httpd
 
 

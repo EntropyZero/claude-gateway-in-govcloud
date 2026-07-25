@@ -187,13 +187,15 @@ def audit():
 # ------------------------------------------------------------- handler harness
 
 
-def make_handler(app, config, oidc, audit, *, cookies=None, headers=None, client_ip="10.0.0.9"):
+def make_handler(app, config, oidc, audit, *, cookies=None, headers=None, client_ip="10.0.0.9",
+                 gateway=None):
     """Build a PortalHandler without a socket; response goes to an in-memory
     BytesIO we can parse."""
     h = app.PortalHandler.__new__(app.PortalHandler)
     h.config = config
     h.oidc = oidc
     h.audit = audit
+    h.gateway = gateway
     h.client_address = (client_ip, 5555)
     h.request_version = "HTTP/1.1"
     h.requestline = "GET /portal HTTP/1.1"

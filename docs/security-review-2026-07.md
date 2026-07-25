@@ -306,6 +306,104 @@ alarm OK → ALARM when the sidecar is stopped and back to OK when it resumes
 (now cheap to test end-to-end with the always-on heartbeat: stop the sidecar →
 ingestion stops → ALARM; restart → OK).
 
+**Spend-cap admin page on the download portal; admins act with their own
+Okta identity, not the stored keys (2026-07-25, RUNTIME-VERIFIED end to end
+offline; needs deploy confirmation).** Two user asks: `set-spend-limit.sh`
+still failed TLS verification, and cap management needed a UI keyed to an
+Okta group instead of the shared admin keys.
+
+- **`set-spend-limit.sh` TLS root cause: `--cacert` REPLACES curl's trust
+  store, it does not extend it.** The script handed curl exactly one extra CA
+  (`GATEWAY_CA_BUNDLE`, falling back to `EXTRA_CA_CERT_PATH` — the Zscaler
+  inspection root), so whenever the chain curl actually saw terminated in the
+  *other* root (internal-PKI ALB cert behind an inspected path, or vice
+  versa), verification failed regardless of configuration. Fix: new
+  `system_ca_bundle` / `combined_ca_bundle` helpers in `common.sh` build a
+  mode-600 temp bundle of system store + BOTH extra CAs (newline-joined so
+  adjacent PEM markers can't fuse), and the script verifies against that.
+  Never `-k`. The failure hint now distinguishes "no bundle configured" from
+  "bundle configured but the chain still didn't verify" (with the openssl
+  one-liner to compare the served issuer against the bundle). Bats-covered.
+- **The gateway natively supports group-based admin — `admin_groups`.** Schema
+  probing plus code inspection of the local 2.1.220 binary: the `admin:` block
+  takes `admin_groups: [<idp-group>...]`; admin endpoints then accept
+  `Authorization: Bearer <gateway session token>` and grant **write** when the
+  token's `groups` claim intersects it, recording `oidc:<sub>` (the
+  individual) in `admin_audit` instead of a shared key id. An `x-api-key`
+  header always takes precedence; empty `admin_groups` (the default) keeps
+  bearer admin off entirely. 02 renders it from the new `SpendAdminGroups`
+  parameter (comma-separated, same flow-list pattern as
+  `allowed_email_domains`) via a `SpendAdminGroupsLine` Sub var —
+  `admin_groups: []` when unset, never a dangling line. Schema-fatal risk on
+  older deployed images excluded: the key validates clean back to 2.1.204.
+- **Portal admin page (`/portal/admin`), zero new secrets.** Gated by the new
+  `PortalAdminGroup` Okta group (04 param → `PORTAL_ADMIN_GROUP`; empty =
+  page absent, 404). The page obtains each admin's OWN gateway session token
+  through the gateway's **OAuth device flow** (RFC 8628 — the same public
+  endpoints Claude Code signs in with, advertised in
+  `/.well-known/oauth-authorization-server`), so the portal holds **no**
+  gateway admin key and no gateway signing secret; the gateway independently
+  re-checks group membership on every call. Server-rendered, still zero
+  JavaScript (CSP unchanged, no script-src): the "waiting for approval" page
+  re-polls once per meta-refresh at the gateway's advertised interval, and
+  actions are plain form POSTs (SameSite=Lax cookies = CSRF control). The
+  token (+ refresh token, used once on 401 then falling back to reconnect)
+  lives in a signed HttpOnly `portal_gw` cookie whose expiry never outlives
+  the token or the portal session. UI: list caps, set/update, clear, and the
+  gateway `admin_audit` trail. Portal-side denials/actions are audited to the
+  portal log group as `event: portal_admin`. Networking: 04 adds
+  ALB-ingress-443-from-portal-SG (gated on the feature) since the portal task
+  becomes an ALB *client*; `NO_PROXY` gains `GatewayFqdn` so those calls
+  never chase the egress proxy. Trust: the portal verifies the gateway ALB
+  cert against its container store, so `build-and-push-portal.sh` now stages
+  **GATEWAY_CA_BUNDLE alongside EXTRA_CA_CERT_PATH** into the image trust
+  store (self-review catch: the exact `--cacert`-class gap this change fixes
+  in the CLI would otherwise recur here), and a network/TLS failure reaching
+  the gateway renders a diagnosable "gateway unreachable" message, never a
+  bare 500. `managed` settings, models, and download behavior untouched.
+- **RUNTIME-VERIFIED (2.1.220 + throwaway postgres:16 + a local fake-Okta
+  minting RS256 id_tokens, 2026-07-25):** full device flow driven exactly as
+  the portal drives it — `POST /oauth/device_authorization` (no body) →
+  verification page → user-code POST (the gateway CSRF-blocks it without
+  browser same-origin headers — fine: the USER'S browser performs this leg,
+  same-origin on the shared FQDN) → Okta round trip → token poll
+  (`authorization_pending` on 400 while unapproved, then
+  `access_token`+`refresh_token`). Bearer of an in-group user: list 200,
+  create 200 (cents-string amounts), clear-by-null 200, audit shows
+  `actor: oidc:00uAdmin` / `spend_limit.upsert`. **Negative proven:** a valid
+  token WITHOUT the admin group → 401 on read AND write
+  (`admin.denied reason=bearer_rejected`). Refresh grant returns a fresh
+  token. List items carry a NESTED `scope` object, no `created_by`, and
+  cleared caps remain as `amount: null` rows — the UI renders all three
+  verified shapes (pinned by tests). **Needs deploy confirmation:** the same
+  flow through the real ALB/Okta (incl. in-VPC resolution of `GatewayFqdn`
+  from the portal task), and a boot check against the actually-deployed
+  gateway image version before the 02 re-run, per house rule.
+- **Hardenings from the pre-commit multi-agent review** (3 finder/adversarial
+  agents over the staged diff; the adversarial pass web-checked curl/CSP/
+  SameSite/RFC 8628/CFN semantics — the design fundamentals all held):
+  (a) admin POSTs additionally carry a **synchronizer CSRF token** — Lax's
+  boundary is the registrable domain, so sibling corporate apps are
+  *same-site* and Lax alone would not protect admin mutations; (b) the token
+  cookie honors the **~4 KB browser per-cookie cap** (drops the refresh token
+  first, then renders an explicit error — an oversized Set-Cookie is
+  otherwise DISCARDED silently and loops the admin back to "connect" after a
+  successful grant; large Okta groups claims make this real); (c) RFC 8628
+  `slow_down` now **adds 5 s to the poll interval** persistently (re-signed
+  txn cookie); (d) the gateway HTTP client **refuses redirects** — urllib's
+  default handler forwards `Authorization: Bearer` to any `Location` host;
+  (e) `SpendAdminGroups` gets a **strict charset** AllowedPattern (the value
+  renders verbatim into a YAML flow list; a stray comma/quote = gateway boot
+  loop; group names with spaces are unsupported — rename or use keys);
+  (f) an EXIT-trap bug in `set-spend-limit.sh` that turned every successful
+  no-extra-CA run into **exit 1** (`[ -n ] &&` as the last trap statement)
+  was caught by the line-by-line pass and fixed. All pinned by tests
+  (161 portal/template cases).
+- Deploy: rebuild + push the portal image (bump tag), re-run
+  `deploy-gateway.sh` (SpendAdminGroups) and `deploy-download-portal.sh`
+  (PortalAdminGroup). `set-spend-limit.sh` + the two generated keys remain
+  the break-glass path; rotate/retire is unchanged.
+
 **Spend dashboards inflated by concurrent sessions — session.id label
 restored (2026-07-24, observed live after metrics began flowing).** With
 metrics finally landing, dashboard cost lines showed sawtooth ups-and-downs

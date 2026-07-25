@@ -28,16 +28,28 @@ mkdir -p "$TLS_DIR"
     -keyout "$TLS_DIR/server.key" -out "$TLS_DIR/server.crt" \
     -days 3650 -subj "/CN=claude-gw-portal" 2>/dev/null )
 
-# Optional enterprise/TLS-inspection root CA (e.g. Zscaler): trusted by the
-# image so the portal's outbound Okta OIDC calls verify behind inspected
-# egress. Staged as an empty file when unset - the Dockerfile skips the empty
-# file.
-if [ -n "${EXTRA_CA_CERT_PATH:-}" ]; then
-  log "Staging extra root CA from ${EXTRA_CA_CERT_PATH}"
-  cp "$EXTRA_CA_CERT_PATH" "${REPO_ROOT}/docker/portal/extra-ca.pem"
-else
-  : > "${REPO_ROOT}/docker/portal/extra-ca.pem"
+# Optional extra trust anchors, staged into the image's system store (the
+# Dockerfile skips an empty file):
+#   EXTRA_CA_CERT_PATH  - enterprise/TLS-inspection root (Zscaler etc.) for the
+#                         outbound Okta OIDC calls behind inspected egress.
+#   GATEWAY_CA_BUNDLE   - the internal-PKI chain of the gateway ALB cert. The
+#                         spend-cap admin page calls the gateway at
+#                         https://<GatewayFqdn> server-side (device flow +
+#                         spend API); Python verifies against the system store,
+#                         which does not carry an internal PKI. Same
+#                         add-both-roots reasoning as set-spend-limit.sh.
+# Files are newline-joined so adjacent PEM markers can never fuse.
+: > "${REPO_ROOT}/docker/portal/extra-ca.pem"
+CA_SOURCES=()
+[ -n "${EXTRA_CA_CERT_PATH:-}" ] && CA_SOURCES+=("$EXTRA_CA_CERT_PATH")
+if [ -n "${GATEWAY_CA_BUNDLE:-}" ] && [ "${GATEWAY_CA_BUNDLE}" != "${EXTRA_CA_CERT_PATH:-}" ]; then
+  CA_SOURCES+=("$GATEWAY_CA_BUNDLE")
 fi
+for ca in ${CA_SOURCES[@]+"${CA_SOURCES[@]}"}; do
+  log "Staging trust anchor from ${ca}"
+  cat "$ca" >> "${REPO_ROOT}/docker/portal/extra-ca.pem"
+  printf '\n' >> "${REPO_ROOT}/docker/portal/extra-ca.pem"
+done
 
 ensure_ecr_repo "$REPO_NAME"
 REGISTRY="$(ecr_login)"

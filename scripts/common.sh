@@ -96,6 +96,51 @@ proxy_port() {
   [ "$port" = "443" ] || printf '%s' "$port"
 }
 
+# system_ca_bundle - print the path of the host's default CA bundle (the
+# store curl uses when no --cacert is given). Honors SSL_CERT_FILE /
+# CURL_CA_BUNDLE overrides first, then the usual distro locations. Returns 1
+# (prints nothing) when no file-based store exists (e.g. macOS Keychain).
+system_ca_bundle() {
+  local p
+  for p in "${SSL_CERT_FILE:-}" "${CURL_CA_BUNDLE:-}" \
+           /etc/ssl/certs/ca-certificates.crt \
+           /etc/pki/tls/certs/ca-bundle.crt \
+           /etc/ssl/ca-bundle.pem \
+           /etc/ssl/cert.pem; do
+    if [ -n "$p" ] && [ -r "$p" ]; then printf '%s' "$p"; return 0; fi
+  done
+  return 1
+}
+
+# combined_ca_bundle OUT-FILE EXTRA-PEM... - write system store + the given
+# extra CA PEM file(s) into OUT-FILE. curl's --cacert (and python's
+# SSL_CERT_FILE) REPLACE the default trust store rather than adding to it, so
+# pointing a tool at a single extra CA breaks verification whenever the
+# observed chain terminates in a DIFFERENT trusted root - e.g. the internal
+# PKI bundle is configured but a TLS inspector re-signs the connection with
+# its own root, or vice versa. Combining keeps everything that was trusted
+# before AND adds the extras, so the same bundle verifies either chain.
+# Caveat: on a host with no file-based store (macOS Keychain), the bundle
+# degenerates to extras-only - put the FULL chain in the extras there.
+# A newline is inserted between files: concatenating a PEM with no trailing
+# newline would otherwise fuse `-----END/BEGIN CERTIFICATE-----` markers.
+combined_ca_bundle() {
+  local out="$1"; shift
+  local sys pem
+  : > "$out"
+  chmod 600 "$out"
+  if sys="$(system_ca_bundle)"; then
+    cat "$sys" >> "$out"; printf '\n' >> "$out"
+  fi
+  for pem in "$@"; do
+    if [ ! -r "$pem" ]; then
+      echo "combined_ca_bundle: CA file not readable: $pem" >&2
+      return 1
+    fi
+    cat "$pem" >> "$out"; printf '\n' >> "$out"
+  done
+}
+
 # put_secret_and_roll SECRET-ARN CLUSTER SERVICE PROMPT-LABEL
 # Prompt (hidden) for a secret value, write it to Secrets Manager via a
 # mode-600 temp file (never argv - visible via ps//proc otherwise), then

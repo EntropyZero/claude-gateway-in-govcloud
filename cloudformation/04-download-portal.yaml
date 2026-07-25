@@ -78,6 +78,17 @@ Parameters:
       so the gateway can share it when group filtering is enabled there later -
       one deploy.env value, not a portal-only name.
 
+  PortalAdminGroup:
+    Type: String
+    Default: ''
+    Description: >-
+      Okta group(s) (comma-separated) whose members see the portal's spend-cap
+      admin page (/portal/admin). MUST match (or be a subset of) the gateway
+      stack's SpendAdminGroups: the page acts with the signed-in admin's OWN
+      gateway session token (obtained via the gateway's OAuth device flow), so
+      the gateway independently re-checks membership on every call - the portal
+      holds no admin API key. Empty (default) disables the admin page entirely.
+
   PortalTeams:
     Type: String
     Default: 'platform,data,security'
@@ -177,6 +188,7 @@ Parameters:
       'false' on a NAT/TGW profile.
 
 Conditions:
+  HavePortalAdminGroup: !Not [!Equals [!Ref PortalAdminGroup, '']]
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
   HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
   WantSharedEndpoints: !Equals [!Ref CreateSupportingEndpoints, 'true']
@@ -336,6 +348,23 @@ Resources:
       DestinationSecurityGroupId: !Ref PortalSecurityGroup
       Description: Forward/health-check to the download portal
 
+  # The admin page calls the gateway (device flow + spend-limit API) through
+  # the shared internal ALB at https://<GatewayFqdn> - the portal task is then
+  # an ALB CLIENT, not just a target, so the ALB must accept 443 from the
+  # portal SG. Gated on the admin page being enabled; the plain download
+  # portal never talks to the gateway.
+  PortalToAlbIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HavePortalAdminGroup
+    Properties:
+      GroupId:
+        Fn::ImportValue: !Sub '${NamePrefix}-alb-sg'
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref PortalSecurityGroup
+      Description: Spend-cap admin page calls the gateway via the ALB
+
   # Let the portal task reach 02's shared interface endpoints (ecr/logs/
   # secretsmanager) for image pull, awslogs, and secret injection. Same
   # cross-stack pattern 03 uses for its tasks; only when 02 created those
@@ -461,7 +490,10 @@ Resources:
             - !If
               - HaveProxy
               - Name: NO_PROXY
-                Value: 'localhost,127.0.0.1,169.254.169.254,169.254.170.2,.amazonaws.com'
+                # GatewayFqdn is here so the admin page's server-side calls to
+                # the gateway (device flow + spend-limit API) go straight to
+                # the internal ALB - the egress proxy cannot reach it.
+                Value: !Sub 'localhost,127.0.0.1,169.254.169.254,169.254.170.2,.amazonaws.com,${GatewayFqdn}'
               - !Ref 'AWS::NoValue'
             - Name: OIDC_ISSUER
               Value: !Ref OktaIssuer
@@ -491,6 +523,8 @@ Resources:
               Value: !Ref AuditLogGroup
             - Name: PORTAL_PORT
               Value: '8080'
+            - Name: PORTAL_ADMIN_GROUP
+              Value: !Ref PortalAdminGroup
           Secrets:
             - Name: OIDC_CLIENT_SECRET
               ValueFrom: !Ref PortalOidcClientSecret

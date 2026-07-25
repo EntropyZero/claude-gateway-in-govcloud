@@ -126,6 +126,34 @@ throwaway Postgres). **Next step: confirm the deployed gateway image contains th
 an older image ignores the env var SILENTLY - rebuilding with a bumped tag if
 not; then re-run `deploy-gateway.sh` and confirm `/model` in a live session.**
 
+**Added 2026-07-25 (committed, NOT yet deployed): portal spend-cap admin page
++ set-spend-limit.sh TLS fix.** (1) `set-spend-limit.sh` failed TLS because
+`--cacert` REPLACES curl's trust store — one extra CA can't verify a chain
+that terminates in the *other* trusted root (internal PKI vs Zscaler
+inspection). New `combined_ca_bundle` helper (common.sh, bats-covered) builds
+system store + GATEWAY_CA_BUNDLE + EXTRA_CA_CERT_PATH into one bundle.
+(2) Spend caps are now manageable from the download portal at
+`/portal/admin`, gated by TWO aligned Okta-group settings:
+`SPEND_ADMIN_GROUPS` (02 → the gateway `admin:` block's `admin_groups`, a
+schema key present back to at least 2.1.204) and `PORTAL_ADMIN_GROUP` (04 →
+the page's visibility). Admins act AS THEMSELVES: the page runs the gateway's
+OAuth device flow (RFC 8628) to get the signed-in admin's own gateway session
+token, every admin call is Bearer-authenticated with it, the gateway
+re-checks the token's groups claim per call, and `admin_audit` records
+`oidc:<sub>` instead of a shared key id. The portal stores NO admin key or
+signing secret; tokens live in a signed HttpOnly cookie; pages stay
+JavaScript-free (meta-refresh device-flow polling; SameSite=Lax is the CSRF
+control). 04 adds ALB-443-ingress-from-portal-SG (the portal task is now an
+ALB client) + GatewayFqdn in NO_PROXY. RUNTIME-VERIFIED offline end to end
+(local 2.1.220 gateway + throwaway Postgres + fake RS256 Okta): device flow
+exactly as the portal drives it, in-group bearer = write + per-user audit
+actor, out-of-group bearer = 401 read AND write, refresh grant, and the three
+response-shape gotchas the UI now pins (nested `scope`, no `created_by`,
+cleared caps linger as `amount: null` rows). `set-spend-limit.sh` + keys stay
+as break-glass. Deploy: bump+push portal image, re-run `deploy-gateway.sh`
+and `deploy-download-portal.sh`; then confirm the flow through the real
+ALB/Okta.
+
 **Added 2026-07-24 (committed, NOT yet deployed): web/MCP tool denies +
 small-model override in the managed catch-all policy.** Two additions to the
 same `GATEWAY_MANAGED_B64` `cli:` block:

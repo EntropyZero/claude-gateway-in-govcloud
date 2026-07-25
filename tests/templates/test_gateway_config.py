@@ -45,15 +45,20 @@ def _extract_config_block():
     return "\n".join(block)
 
 
-def _load_gateway_config(scopes_line=False):
-    """Parse the config body, simulating the OidcScopesLine substitution.
+def _load_gateway_config(scopes_line=False, admin_groups=False):
+    """Parse the config body, simulating the Sub-var substitutions.
 
-    scopes_line=False models the default (ManagedCliGroups unset) render - no
-    `scopes:` line; scopes_line=True models the HaveManagedCli render.
+    scopes_line toggles whether the (now-unconditional) OidcScopesLine content
+    is included in the parse; admin_groups toggles the SpendAdminGroupsLine
+    render: False is the default empty `admin_groups: []`, True the
+    HaveSpendAdminGroups branch.
     """
     raw = _extract_config_block()
     repl = "scopes: [openid, profile, email, offline_access, groups]" if scopes_line else ""
     raw = raw.replace("${OidcScopesLine}", repl)
+    admin_repl = ("admin_groups: [claude-spend-admins]" if admin_groups
+                  else "admin_groups: []")
+    raw = raw.replace("${SpendAdminGroupsLine}", admin_repl)
     # Neutralise CFN substitutions: ${!VAR} is runtime env expansion, ${VAR}
     # / ${AWS::X} is deploy-time substitution - both become opaque scalars.
     raw = re.sub(r"\$\{![^}]+\}", "RUNTIME_PLACEHOLDER", raw)
@@ -416,3 +421,39 @@ def test_telemetry_forward_target_is_loopback():
     revisited rather than left enabled."""
     text = _template_text()
     assert "url: http://localhost:4318" in text
+
+
+# ---------------------------------------------------------------------------
+# admin_groups (bearer-token spend admin - the portal admin page's credential)
+
+
+def test_admin_groups_renders_both_ways_and_validates():
+    """SpendAdminGroupsLine must render an explicit empty list when the
+    parameter is unset (never a dangling placeholder line) and a populated
+    flow list when set. RUNTIME-VERIFIED (gateway 2.1.220, live store,
+    2026-07-25): admin_groups members get WRITE via their own session token
+    (Authorization: Bearer), admin_audit records oidc:<sub>, and a valid
+    token WITHOUT the group is refused 401."""
+    doc = _load_gateway_config()
+    assert doc["admin"]["admin_groups"] == [], (
+        "default render must be an explicit empty list - bearer admin off"
+    )
+    doc = _load_gateway_config(admin_groups=True)
+    assert doc["admin"]["admin_groups"] == ["claude-spend-admins"]
+
+
+def test_admin_groups_line_is_conditional_on_parameter():
+    """The Sub var must be the HaveSpendAdminGroups !If (empty param = feature
+    off), and the marker must sit INSIDE the admin: block in the body."""
+    text = _template_text()
+    assert re.search(r"SpendAdminGroupsLine:\s*!If", text), (
+        "SpendAdminGroupsLine should be conditional on HaveSpendAdminGroups"
+    )
+    assert "HaveSpendAdminGroups" in text
+    body = _extract_config_block()
+    admin_ix = body.index("\nadmin:")
+    marker_ix = body.index("${SpendAdminGroupsLine}")
+    enforcement_ix = body.index("\nenforcement:")
+    assert admin_ix < marker_ix < enforcement_ix, (
+        "admin_groups must render inside the admin: block"
+    )
