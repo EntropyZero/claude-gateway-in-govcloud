@@ -219,6 +219,7 @@ test — stop the sidecar). Full proof in the 2026-07-23 fix-log entries of
 | `docs/operations/test-run-runbook.md` | the dated first test-run log (2026-07) — historical checklist the greenfield runbook was distilled from |
 | `docs/operations/om-runbooks.md` | steady-state O&M runbooks (cert/secret rotation, CA refresh, updates, backup/restore, alarms, teardown) |
 | `docs/operations/cost-controls.md` | cost-control runbook: spend caps, dashboard walkthrough, fail-closed incident response |
+| `docs/operations/monitoring-and-retention.md` | product-owner summary: alarms, SNS contract, log/metric destinations + retention |
 | `docs/operations/client-config.md` | **client config & enforcement model**: no-admin user-scope installer, one-time `/login` flow, gateway `/managed/settings` push (model allowlist + update lockdown), and the **GPO/MDM forced-login** path (ops how-to; not in the PDF set) |
 | `docs/requests/networking-request-email.md` | cert/DNS/Zscaler request template |
 | `docs/requests/okta-request-email.md` | Okta OIDC app request template (org server, Web app, groups) |
