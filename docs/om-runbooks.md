@@ -1102,7 +1102,19 @@ themselves are data**, rows in the gateway's `spend_limits` table, set through
 `POST /v1/organizations/spend_limits`. **No cap rows = no enforcement**, so the
 stack is safe to deploy before any limits exist.
 
-*Setting a cap:*
+*Setting a cap — preferred path: the portal admin page.* With the download
+portal deployed (04) and `PORTAL_ADMIN_GROUP` + `SPEND_ADMIN_GROUPS` set to
+the same Okta group, members manage caps at
+`https://<GATEWAY_FQDN>/portal/admin` **as themselves**: the page walks the
+gateway's device-flow sign-in once per session (one click when the Okta
+session is warm), and every list/set/clear rides the admin's own gateway
+token — the gateway re-checks their group membership on each call and its
+audit trail records the individual (`oidc:<sub>`). No admin key is stored
+anywhere in the portal. If the page shows "the gateway refused: not in its
+spend-admin groups", the two group settings have drifted apart — re-align
+`SPEND_ADMIN_GROUPS` (02) and `PORTAL_ADMIN_GROUP` (04).
+
+*Setting a cap — break-glass CLI (shared keys):*
 ```bash
 scripts/set-spend-limit.sh --scope user       --id alice@example.com --amount 50
 scripts/set-spend-limit.sh --scope rbac_group --id claude-developers --amount 2500
@@ -1112,7 +1124,11 @@ scripts/set-spend-limit.sh --list                                        # revie
 ```
 `--amount` is **dollars**; the API takes whole **cents as a string** and the
 script converts exactly (no float rounding). `--period` is `daily`, `weekly` or
-`monthly` (default monthly).
+`monthly` (default monthly). TLS trust: the script verifies against the system
+store **plus** `GATEWAY_CA_BUNDLE` and `EXTRA_CA_CERT_PATH` combined, so it
+works both on a direct path (internal-PKI ALB cert) and behind TLS inspection;
+on a persistent failure check the bundle carries the ALB cert's full issuing
+chain (the failure hint prints the exact openssl command).
 
 *Precedence:* a **per-user** cap wins over group caps. When a user matches
 several **group** caps they combine per `SPEND_GROUP_LIMIT_MODE` — `min`
@@ -1139,9 +1155,13 @@ transient error and the client will not retry around it.
 > gateway logs — and if you need to restore service before the store is fixed,
 > flip `fail_closed_on_error` to `false` and re-run `deploy-gateway.sh`.
 
-*Audit:* every mutation is attributed to the key `id` (`deploy-write` /
-`deploy-read`) in the gateway's `admin_audit` table, retained 365 days. Spend
-history is retained 13 months, identity records 90 days.
+*Audit:* every mutation lands in the gateway's `admin_audit` table (365-day
+retention), attributed to the acting identity: `oidc:<sub>` for portal admins,
+the key `id` (`deploy-write` / `deploy-read`) for the break-glass CLI. The
+portal admin page shows this trail read-only, and additionally writes
+`event: portal_admin` lines (connects, actions, denials) to the portal's own
+audit log group. Spend history is retained 13 months, identity records 90
+days.
 
 *Key rotation:* both keys are `GenerateSecretString` secrets. Rotate by updating
 the secret and re-running `deploy-gateway.sh` (the task reads them at start), the

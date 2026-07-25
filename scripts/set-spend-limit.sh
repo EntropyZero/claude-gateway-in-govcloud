@@ -24,9 +24,12 @@
 # per the stack's SpendGroupLimitMode (`min` = most restrictive wins).
 #
 # TLS: the gateway ALB cert is issued by your internal PKI. If curl fails with
-# "unable to get local issuer certificate", point the script at the issuing CA:
+# "unable to get local issuer certificate", point the script at the issuing CA
+# CHAIN (issuing CA + root):
 #   export GATEWAY_CA_BUNDLE=/path/to/org-ca-chain.pem
-# (falls back to EXTRA_CA_CERT_PATH). Never use -k.
+# GATEWAY_CA_BUNDLE and EXTRA_CA_CERT_PATH are ADDED to the system trust store
+# (not swapped in for it), so verification still works when a TLS inspector
+# re-signs the connection with a different trusted root. Never use -k.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,7 +46,7 @@ while [ $# -gt 0 ]; do
     --period) PERIOD="${2:?--period needs a value}"; shift 2 ;;
     --clear)  CLEAR=1; shift ;;
     --list)   LIST=1; shift ;;
-    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -56,15 +59,28 @@ esac
 # CA trust for the gateway ALB cert. The ALB presents a cert for GATEWAY_FQDN
 # issued by the org's internal PKI, which the system trust store does not carry,
 # so curl fails "unable to get local issuer certificate". We NEVER pass -k (the
-# repo rule is verification-fails-closed); instead point curl at the issuing CA
-# bundle. Priority: GATEWAY_CA_BUNDLE (explicit) -> EXTRA_CA_CERT_PATH (the
-# enterprise root CA already in deploy.env). curl also natively honors
-# CURL_CA_BUNDLE / SSL_CERT_FILE from the environment.
-CA_BUNDLE="${GATEWAY_CA_BUNDLE:-${EXTRA_CA_CERT_PATH:-}}"
+# repo rule is verification-fails-closed). --cacert REPLACES curl's default
+# store, so handing it just one extra CA breaks whenever the chain curl
+# actually sees terminates elsewhere (internal-PKI bundle configured but a
+# Zscaler-inspected path presents the inspector's root, or vice versa).
+# Instead, build a COMBINED bundle: system store + GATEWAY_CA_BUNDLE +
+# EXTRA_CA_CERT_PATH - everything previously trusted stays trusted.
+CA_EXTRAS=()
+[ -n "${GATEWAY_CA_BUNDLE:-}" ] && CA_EXTRAS+=("$GATEWAY_CA_BUNDLE")
+if [ -n "${EXTRA_CA_CERT_PATH:-}" ] && [ "${EXTRA_CA_CERT_PATH}" != "${GATEWAY_CA_BUNDLE:-}" ]; then
+  CA_EXTRAS+=("$EXTRA_CA_CERT_PATH")
+fi
 CURL_CA=()
-if [ -n "$CA_BUNDLE" ]; then
-  [ -r "$CA_BUNDLE" ] || { echo "CA bundle not readable: $CA_BUNDLE" >&2; exit 1; }
-  CURL_CA=(--cacert "$CA_BUNDLE")
+COMBINED_CA=""
+# [ -z ... ] || : the && form would make cleanup return 1 when COMBINED_CA is
+# empty, and an EXIT trap's status REPLACES the script's own exit code under
+# set -e - turning every successful run without CA extras into exit 1.
+cleanup() { [ -z "$COMBINED_CA" ] || rm -f "$COMBINED_CA"; }
+trap cleanup EXIT
+if [ "${#CA_EXTRAS[@]}" -gt 0 ]; then
+  COMBINED_CA="$(mktemp)"
+  combined_ca_bundle "$COMBINED_CA" ${CA_EXTRAS[@]+"${CA_EXTRAS[@]}"}
+  CURL_CA=(--cacert "$COMBINED_CA")
 fi
 
 # The admin key never goes on a command line (ps/-/proc leak): pull it into a
@@ -103,11 +119,21 @@ api() { # $1=method $2=key-name; body on stdin (empty for GET)
   rm -f "$hdr"
   cat "$body"; echo
   rm -f "$body"
-  if [ "$rc" -ne 0 ] && [ -z "$CA_BUNDLE" ]; then
-    echo "[hint] TLS verification failed and no CA bundle is set. The gateway ALB" >&2
-    echo "       cert is issued by your internal PKI. Point this script at that CA:" >&2
-    echo "         export GATEWAY_CA_BUNDLE=/path/to/org-ca-chain.pem   (or set" >&2
-    echo "         EXTRA_CA_CERT_PATH in deploy.env). Do NOT work around it with -k." >&2
+  if [ "$rc" -ne 0 ]; then
+    if [ "${#CA_EXTRAS[@]}" -eq 0 ]; then
+      echo "[hint] if this was a TLS verification failure: the gateway ALB cert is" >&2
+      echo "       issued by your internal PKI. Point this script at that CA chain:" >&2
+      echo "         export GATEWAY_CA_BUNDLE=/path/to/org-ca-chain.pem   (or set" >&2
+      echo "         EXTRA_CA_CERT_PATH in deploy.env). Do NOT work around it with -k." >&2
+    else
+      echo "[hint] if this was a TLS verification failure: it persisted with the" >&2
+      echo "       combined CA bundle (system store + ${CA_EXTRAS[*]})." >&2
+      echo "       Check that the file carries the FULL issuing chain for the ALB" >&2
+      echo "       cert (issuing CA + root, PEM):" >&2
+      echo "         openssl s_client -connect ${GATEWAY_FQDN}:443 -servername ${GATEWAY_FQDN} \\" >&2
+      echo "           -showcerts </dev/null | openssl x509 -noout -issuer" >&2
+      echo "       and compare that issuer against the CAs in the bundle." >&2
+    fi
   fi
   return $rc
 }
@@ -149,7 +175,9 @@ esac
 
 require_vars GATEWAY_FQDN NAME_PREFIX
 
-echo "[spend-limit] ${SCOPE}${SCOPE_ID:+ ($SCOPE_ID)} -> ${CLEAR:+(cleared)}${AMOUNT:+\$$AMOUNT} per ${PERIOD}"
+# $CLEAR is "0" or "1" (never empty), so ${CLEAR:+...} would ALWAYS expand.
+CLEAR_TXT=""; [ "$CLEAR" = "1" ] && CLEAR_TXT="(cleared)"
+echo "[spend-limit] ${SCOPE}${SCOPE_ID:+ ($SCOPE_ID)} -> ${CLEAR_TXT}${AMOUNT:+\$$AMOUNT} per ${PERIOD}"
 printf '{"scope":%s,"amount":%s,"period":"%s","currency":"USD"}' \
   "$SCOPE_JSON" "$AMOUNT_JSON" "$PERIOD" \
   | api POST spend-admin-write-key

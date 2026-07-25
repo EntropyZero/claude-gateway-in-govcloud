@@ -96,7 +96,8 @@ aws cloudformation deploy \
       "SonnetModelId=${SONNET_MODEL_ID:-claude-sonnet-4-5}" \
       "SonnetBedrockModelId=${SONNET_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0}" \
       "SpendGroupLimitMode=${SPEND_GROUP_LIMIT_MODE:-min}" \
-      "SpendBlockedMessage=${SPEND_BLOCKED_MESSAGE:-Contact the Claude Code platform team to request an increase.}"
+      "SpendBlockedMessage=${SPEND_BLOCKED_MESSAGE:-Contact the Claude Code platform team to request an increase.}" \
+      "SpendAdminGroups=${SPEND_ADMIN_GROUPS:-}"
 
 # Stack policy: refuse any future update that would REPLACE or DELETE the
 # ALB. Its default DNS name is the corporate CNAME target - recreation

@@ -166,3 +166,42 @@ srcf() { run bash -c "DEPLOY_ENV_FILE='$ENVFILE' COMMON_SH_OPTIONAL_ENV=1 source
   src 'dollars_to_cents ""'
   [ "$status" -eq 2 ]
 }
+
+# ---- system_ca_bundle / combined_ca_bundle -------------------------------
+# SSL_CERT_FILE is honored first, so the tests control the "system store"
+# without depending on the host distro's CA layout.
+
+@test "system_ca_bundle: honors SSL_CERT_FILE override" {
+  printf 'SYSTEM-STORE\n' > "$BATS_TEST_TMPDIR/sys.pem"
+  src "SSL_CERT_FILE='$BATS_TEST_TMPDIR/sys.pem' system_ca_bundle"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$BATS_TEST_TMPDIR/sys.pem" ]
+}
+
+@test "combined_ca_bundle: system store comes first, extras appended in order" {
+  printf 'SYSTEM-STORE' > "$BATS_TEST_TMPDIR/sys.pem"    # note: no trailing newline
+  printf 'EXTRA-ONE' > "$BATS_TEST_TMPDIR/one.pem"
+  printf 'EXTRA-TWO\n' > "$BATS_TEST_TMPDIR/two.pem"
+  src "SSL_CERT_FILE='$BATS_TEST_TMPDIR/sys.pem' combined_ca_bundle '$BATS_TEST_TMPDIR/out.pem' '$BATS_TEST_TMPDIR/one.pem' '$BATS_TEST_TMPDIR/two.pem'"
+  [ "$status" -eq 0 ]
+  # newline-separated even when inputs lack trailing newlines (PEM markers
+  # from adjacent files must never fuse into one line)
+  run cat "$BATS_TEST_TMPDIR/out.pem"
+  [ "${lines[0]}" = "SYSTEM-STORE" ]
+  [ "${lines[1]}" = "EXTRA-ONE" ]
+  [ "${lines[2]}" = "EXTRA-TWO" ]
+}
+
+@test "combined_ca_bundle: output file is mode 600" {
+  printf 'S\n' > "$BATS_TEST_TMPDIR/sys.pem"
+  printf 'E\n' > "$BATS_TEST_TMPDIR/e.pem"
+  src "umask 022; SSL_CERT_FILE='$BATS_TEST_TMPDIR/sys.pem' combined_ca_bundle '$BATS_TEST_TMPDIR/out.pem' '$BATS_TEST_TMPDIR/e.pem'"
+  [ "$status" -eq 0 ]
+  [ "$(stat -c %a "$BATS_TEST_TMPDIR/out.pem")" = "600" ]
+}
+
+@test "combined_ca_bundle: unreadable extra CA fails closed" {
+  printf 'S\n' > "$BATS_TEST_TMPDIR/sys.pem"
+  src "SSL_CERT_FILE='$BATS_TEST_TMPDIR/sys.pem' combined_ca_bundle '$BATS_TEST_TMPDIR/out.pem' '$BATS_TEST_TMPDIR/missing.pem'"
+  [ "$status" -eq 1 ]
+}

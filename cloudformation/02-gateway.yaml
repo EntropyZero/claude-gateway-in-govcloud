@@ -141,6 +141,27 @@ Parameters:
       hit ("spend limit reached - <this>"). Single quotes are not allowed (the
       value is rendered into a single-quoted YAML scalar).
 
+  SpendAdminGroups:
+    Type: String
+    Default: ''
+    # Strict charset ON PURPOSE: the value is rendered verbatim into a YAML
+    # flow list (`admin_groups: [a,b]`), so YAML-special characters or a
+    # leading/dangling comma would render an unparseable config - a gateway
+    # BOOT LOOP, not a validation error. Group names with spaces are not
+    # supported here; rename the Okta group or use the admin keys.
+    AllowedPattern: '([A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*)?'
+    ConstraintDescription: >-
+      Comma-separated group names of letters, digits, dot, underscore, dash -
+      no spaces, no leading/trailing comma.
+    Description: >-
+      Comma-separated Okta group name(s) whose members may administer spend
+      caps WITH THEIR OWN IDENTITY: the gateway's admin endpoints accept the
+      member's gateway session token (Authorization Bearer) as a WRITE
+      credential, and admin_audit records the individual actor (oidc:<sub>)
+      instead of the shared key id. This is what the download portal's admin
+      page uses. Empty (default) disables bearer-token admin entirely - the
+      generated write/read keys remain the only credentials.
+
   SessionTtlHours:
     Type: Number
     Default: 1
@@ -463,6 +484,7 @@ Conditions:
   WantEcsEndpoint: !And [!Condition WantSupportingEndpoints, !Equals [!Ref CreateEcsEndpoint, 'true']]
   WantAnyInterfaceEndpoint: !Or [!Condition WantBedrockEndpoint, !Condition WantSupportingEndpoints]
   HaveAdminClientSg: !Not [!Equals [!Ref AdminClientSecurityGroupId, '']]
+  HaveSpendAdminGroups: !Not [!Equals [!Ref SpendAdminGroups, '']]
   WantAdminEndpointIngress: !And [!Condition WantAnyInterfaceEndpoint, !Condition HaveAdminClientSg]
   WantS3Endpoint: !Not [!Equals [!Join ['', !Ref PrivateRouteTableIds], '']]
   HaveAlarmTopic: !Not [!Equals [!Ref AlarmSnsTopicArn, '']]
@@ -1053,6 +1075,15 @@ Resources:
                     # enforcement, so this block is safe to ship before any
                     # limits are set.
                     # `id:` is audit attribution, recorded in admin_audit.
+                    # `admin_groups` (rendered from the SpendAdminGroupsLine Sub
+                    # var; `admin_groups: []` when SpendAdminGroups is empty)
+                    # additionally lets members of those Okta groups call the
+                    # admin endpoints with their own gateway session token
+                    # (Authorization: Bearer) as a WRITE credential - the
+                    # download portal's admin page relies on this. admin_audit
+                    # then records the individual (`oidc:<sub>`), not a shared
+                    # key id. An x-api-key header, when present, takes
+                    # precedence over a bearer token.
                     admin:
                       write_keys:
                         - id: deploy-write
@@ -1060,6 +1091,7 @@ Resources:
                       read_keys:
                         - id: deploy-read
                           key: ${!SPEND_ADMIN_READ_KEY}
+                      ${SpendAdminGroupsLine}
                       group_limit_mode: ${SpendGroupLimitMode}
                       blocked_message: '${SpendBlockedMessage}'
                       # Retention for the audit / spend / identity tables.
@@ -1109,6 +1141,13 @@ Resources:
                   # groups claim, so it is a hard prerequisite rather than an
                   # opt-in. Kept as a Sub var to avoid reindenting the body.
                   - OidcScopesLine: 'scopes: [openid, profile, email, offline_access, groups]'
+                    # Comma-separated param -> YAML flow list, same pattern as
+                    # allowed_email_domains. Rendered as an explicit empty list
+                    # when unset so the config line is never dangling.
+                    SpendAdminGroupsLine: !If
+                      - HaveSpendAdminGroups
+                      - !Sub 'admin_groups: [${SpendAdminGroups}]'
+                      - 'admin_groups: []'
             # SSRF guard override - REQUIRED for the loopback sidecar.
             # The gateway installs a custom DNS lookup that refuses any address
             # resolving into a blocked range, and LOOPBACK IS BLOCKED BY DEFAULT:

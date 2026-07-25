@@ -34,6 +34,7 @@ aws cloudformation deploy \
       "OktaIssuer=${OKTA_ISSUER}" \
       "PortalOktaClientId=${PORTAL_OKTA_CLIENT_ID}" \
       "AccessGroup=${ACCESS_GROUP}" \
+      "PortalAdminGroup=${PORTAL_ADMIN_GROUP:-}" \
       "PortalTeams=${PORTAL_TEAMS}" \
       "PortalCostCenters=${PORTAL_COST_CENTERS}" \
       "ReleaseVersion=${PORTAL_RELEASE_VERSION:-${CLAUDE_VERSION}}" \
