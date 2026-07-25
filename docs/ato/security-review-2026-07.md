@@ -115,6 +115,31 @@ own Lambda, with the service roll built into the rotation itself; the
 master secret became break-glass and its rotation affects no running
 task. See the C-batch header below for the item-by-item mapping.
 
+**Grafana 11.5.1 → 13.1.1 (2026-07-25, committed NOT yet deployed).** 11.x
+left security support 2026-06-15 (11.5.1 also predates the 11.5.3/11.5.5 CVE
+fixes), so the pin moved to the latest stable. Three upstream changes
+absorbed: (1) the OSS image is now `grafana/grafana` — the
+`grafana/grafana-oss` Docker Hub repo froze at 12.4; (2) **Grafana ≥13.1
+removed SigV4 auth from the core prometheus datasource** — AMP auth moved to
+the Grafana-signed `grafana-amazonprometheus-datasource` plugin, which is
+NOT bundled and cannot be fetched by the egress-less task, so
+`build-and-push-grafana.sh` now stages it into the image (pinned version +
+sha256 fail-closed verify) and `amp.yaml` provisions that type explicitly
+(dashboards reference uid `amp`, unaffected); (3) Grafana ≥12's background
+plugin preinstaller dials grafana.com at every boot — the same startup-egress
+class that crash-looped 11.x behind inspected egress (#92707) — now disabled
+via `GF_PLUGINS_PREINSTALL_DISABLED=true` in 03. **Verified against a
+throwaway 13.1.1 container with `--network none`**: boots clean with the full
+03 env (zero deprecations — all `GF_*` keys diff-checked 11.5→13.1 against
+the upstream config reference), HTTPS/sub-path serving, datasource + dashboard
+provision, plugin signature `valid` with `GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED=true`,
+and a uid-routed query reaches the plugin backend and attempts SigV4 credential
+resolution. **[NEEDS TEST-RUN CONFIRMATION]:** the Okta login round-trip on
+13.1 (expect a one-time re-login for all users — external-session re-link,
+default-on since 12.1) and the Fargate task-role credential path from the
+plugin subprocess (12.4.0 briefly broke `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`
+forwarding to plugins; fixed 12.4.2, present in 13.1.1 — confirm live).
+
 **Client gateway-login model corrected (2026-07-22).** The earlier "no-admin
 client redesign" (fix-log entry below) carried a **wrong assumption**: that a
 developer could run `claude` → `/login` → pick **Cloud gateway** with **no**

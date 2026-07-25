@@ -732,7 +732,16 @@ Resources:
               Value: 'false'
             # Verify bundled-plugin signatures with the key EMBEDDED in the
             # binary instead of downloading manifest keys from grafana.com.
+            # (Also covers the AMP datasource plugin baked into the image —
+            # Grafana-signed; verified to pass with retrieval disabled.)
             - Name: GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED
+              Value: 'true'
+            # Grafana >=12 ships a background installer that pulls a set of
+            # preinstalled app plugins from grafana.com at every boot — the
+            # same class of startup egress that crash-looped 11.x behind
+            # inspected egress (grafana/grafana#92707). Everything this
+            # deployment needs is baked into the image.
+            - Name: GF_PLUGINS_PREINSTALL_DISABLED
               Value: 'true'
             # No Grafana-side alerting (CloudWatch owns alerting in this
             # deployment); also sidesteps the Alertmanager-init retry that

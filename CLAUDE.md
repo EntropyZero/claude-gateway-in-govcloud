@@ -126,6 +126,22 @@ throwaway Postgres). **Next step: confirm the deployed gateway image contains th
 an older image ignores the env var SILENTLY - rebuilding with a bumped tag if
 not; then re-run `deploy-gateway.sh` and confirm `/model` in a live session.**
 
+**Upgraded 2026-07-25 (committed, NOT yet deployed): Grafana 11.5.1 → 13.1.1**
+(11.x left security support 2026-06-15). Three coupled changes: the OSS image
+is now `grafana/grafana` (the `grafana-oss` Docker Hub repo froze at 12.4);
+Grafana ≥13.1 **removed SigV4 from the core prometheus datasource**, so
+`build-and-push-grafana.sh` now bakes the Grafana-signed
+`grafana-amazonprometheus-datasource` plugin into the image (pinned +
+sha256-verified; the egress-less task can't fetch it at boot) and `amp.yaml`
+provisions that type (uid `amp` unchanged — dashboards unaffected); and 03
+sets `GF_PLUGINS_PREINSTALL_DISABLED=true` (the ≥12 background preinstaller
+dials grafana.com every boot — the #92707 crash-loop class). Runtime-verified
+against a throwaway 13.1.1 with `--network none` (boot, provisioning, plugin
+signature with key-retrieval disabled, uid-routed SigV4 query path); still
+needs live: Okta login on 13.1 (expect one-time re-login for all users) and
+the Fargate task-role credential path from the plugin subprocess. Full entry
+in the security-review fix log.
+
 **Added 2026-07-25 (committed, NOT yet deployed): portal spend-cap admin page
 + set-spend-limit.sh TLS fix.** (1) `set-spend-limit.sh` failed TLS because
 `--cacert` REPLACES curl's trust store — one extra CA can't verify a chain

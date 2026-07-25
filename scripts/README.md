@@ -26,7 +26,7 @@ for the full runbook.
 | `mirror/mirror-claude-release.sh` | Download + GPG/checksum-verify a pinned Claude Code release (egress host) |
 | `build-and-push-image.sh` | Gateway image (expects the mirrored `claude` binary staged at `docker/claude`) |
 | `build-and-push-dbadmin.sh` | DB bootstrap/rotation Lambda image (no PyPI egress — vendored wheels) |
-| `build-and-push-grafana.sh` | Provisioned Grafana image (dashboard + AMP datasource baked in) |
+| `build-and-push-grafana.sh` | Provisioned Grafana image (dashboard, AMP datasource + SigV4 plugin baked in — sha256-pinned download at build) |
 | `mirror/mirror-collector.sh` | Mirror the pinned ADOT collector image into ECR, digest-pinned |
 | `build-and-push-portal.sh` | Optional download-portal image |
 | `deploy-gateway.sh` | Stack 02: ALB + ECS gateway (+ telemetry sidecar on the 02 re-run) |

@@ -589,7 +589,16 @@ expects it** (`.claude/rules/scripts.md`).
 - **Gateway:** `IMAGE_TAG=<new> ./scripts/build-and-push-image.sh` →
   `./scripts/deploy-gateway.sh`.
 - **Grafana:** `GRAFANA_IMAGE_TAG=<new> ./scripts/build-and-push-grafana.sh` →
-  `./scripts/deploy-observability.sh`.
+  `./scripts/deploy-observability.sh`. Notes for version bumps (learned on
+  the 11.5.1 → 13.1.1 upgrade, 2026-07-25): the OSS image is
+  `grafana/grafana` (the `grafana/grafana-oss` Docker Hub repo froze at
+  12.4); the build script also stages the `grafana-amazonprometheus-datasource`
+  plugin into the image (SigV4 left the core prometheus datasource in 13.1
+  and the task has no egress to install plugins at boot) — bump
+  `AMP_PLUGIN_VERSION` + `AMP_PLUGIN_SHA256` together in the script when
+  updating it; and expect a **one-time re-login for all Grafana users** on
+  the first post-upgrade start (external OAuth sessions are re-linked —
+  `improvedExternalSessionHandling`, default-on since 12.1).
 - **ADOT collector (sidecar):** `ADOT_VERSION=<vX.Y.Z> ./scripts/mirror/mirror-collector.sh`
   (mirrors + pins `COLLECTOR_IMAGE` by digest) → `./scripts/deploy-gateway.sh`
   (the sidecar lives in the gateway task, so the collector rolls with a new

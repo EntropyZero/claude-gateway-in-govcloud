@@ -4,12 +4,20 @@
 # container is fully provisioned at boot (no clicking, no persistent volume
 # needed for the provisioned content). Mirror the base image into your
 # internal registry for controlled networks, and pin by digest there
-# (GRAFANA_BASE_IMAGE=<registry>/grafana-oss@sha256:<digest> - a floating
-# tag is mutable upstream):
-#   docker pull grafana/grafana-oss:11.5.1
-#   docker build -t claude-gw-grafana:11.5.1 docker/grafana/
-ARG GRAFANA_BASE_IMAGE=grafana/grafana-oss:11.5.1
+# (GRAFANA_BASE_IMAGE=<registry>/grafana@sha256:<digest> - a floating
+# tag is mutable upstream). NOTE: grafana/grafana IS the OSS image — the
+# grafana/grafana-oss Docker Hub repo is frozen as of 12.4:
+#   docker pull grafana/grafana:13.1.1
+#   docker build -t claude-gw-grafana:13.1.1 docker/grafana/
+ARG GRAFANA_BASE_IMAGE=grafana/grafana:13.1.1
 FROM ${GRAFANA_BASE_IMAGE}
+
+# Amazon Managed Prometheus datasource plugin (SigV4 auth), staged into
+# plugins/ by build-and-push-grafana.sh (downloaded from grafana.com with a
+# pinned version + sha256 verify). Grafana >=13.1 removed SigV4 from the
+# core prometheus datasource and does NOT bundle this plugin; the task has
+# no egress to install it at boot, so it must ship in the image.
+COPY --chown=472:472 plugins/ /var/lib/grafana/plugins/
 
 # Datasource + dashboard provisioning. The datasource reads AMP_QUERY_URL /
 # AMP_REGION from the environment (set by the ECS task definition).
