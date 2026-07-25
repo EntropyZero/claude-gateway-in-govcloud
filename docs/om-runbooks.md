@@ -986,6 +986,18 @@ and either way it says nothing about whether ingestion is working.
 > UnderscoreEscapingWithoutSuffixes` - the WithOUT variant; the WithSuffixes
 > variant would re-add unit/type suffixes and break the dashboard names.)
 
+> **Session labels (2026-07-24).** `session.id` is KEPT as a metric label. It
+> was previously deleted for cardinality, but each session's counters start at
+> 0, so concurrent sessions from the same user+model interleaved onto one
+> series as a sawtooth - `increase()` read every alternation as a counter
+> reset and inflated spend drastically (observed live on the dashboard). With
+> the label kept, each session is its own monotonic series and the
+> sum-by-team/user panels are exact with no query changes. Cardinality is
+> bounded by CONCURRENT sessions (stale series age out of AMP's active-series
+> count within minutes). If a fleet ever grows to where that matters, resize
+> deliberately - do not silently re-add the delete, or the sawtooth inflation
+> returns.
+
 ---
 
 ### Telemetry forward failing with `ECONNREFUSED_SSRF`

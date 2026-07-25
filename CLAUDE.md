@@ -70,6 +70,12 @@ client; a sidecar `deltatocumulative` processor was rejected (two sidecars
 behind the ALB would rebuild conflicting cumulative sums for the same series).
 Re-run `deploy-gateway.sh`; clients pick the env up on their next settings
 fetch; confirm `claude_code_*` appears and `failed_translations` goes flat.
+**DEPLOY-CONFIRMED metrics flowing.** Follow-up fix in the same area:
+`session.id` is now KEPT as a metric label (the sidecar previously deleted it
+for cardinality) - concurrent sessions from one user interleaved onto one
+series as a sawtooth and `increase()` inflated spend drastically (observed
+live). Each session is now its own monotonic series; dashboards unchanged;
+cardinality bounded by concurrent sessions.
 
 **Fixed 2026-07-24 (committed, NOT yet deployed): the loopback telemetry
 sidecar could never work.** Live symptom: `forward to http://localhost:4318

@@ -1288,7 +1288,17 @@ Resources:
                 awslogs-stream-prefix: otel
             Environment:
               # ADOT reads its full config from this env var. session.id is
-              # dropped from metrics (unbounded cardinality); resource
+              # KEPT as a metric label (2026-07-24 reversal - it was previously
+              # deleted for cardinality): each Claude Code session's counters
+              # start at 0, and with session.id stripped, CONCURRENT sessions
+              # from the same user+model interleave onto ONE series as a
+              # sawtooth - increase() reads every alternation as a counter
+              # reset and inflates spend drastically (observed live). With the
+              # label kept, each session is its own monotonic series and
+              # sum-by-team/user dashboards are exact. Cardinality cost is
+              # bounded by CONCURRENT sessions (stale series age out of AMP's
+              # active-series count in minutes): ~tens of series per live
+              # session vs AMP's default 2M active-series limit. Resource
               # attributes (team, cost_center, ...) are converted to metric
               # labels so Prometheus can group by them. The logs pipeline sits
               # idle until the gateway stack sets ForwardActivityLogs=true.
@@ -1337,10 +1347,6 @@ Resources:
                             static_configs:
                               - targets: ['127.0.0.1:8888']
                   processors:
-                    attributes/cardinality:
-                      actions:
-                        - key: session.id
-                          action: delete
                     batch:
                       timeout: 30s
                   exporters:
@@ -1379,7 +1385,7 @@ Resources:
                         # active use); prometheus = collector self-metrics
                         # (continuous heartbeat, see the receiver comment).
                         receivers: [otlp, prometheus]
-                        processors: [attributes/cardinality, batch]
+                        processors: [batch]
                         exporters: [prometheusremotewrite]
                       logs:
                         receivers: [otlp]

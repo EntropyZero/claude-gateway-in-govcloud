@@ -200,7 +200,7 @@ def collector_pipeline_report():
         print("  [verdict] OTLP metrics accepted AND remote_write succeeding, yet no")
         print("            claude_code_* by name. The points are dropped BETWEEN accept")
         print("            and export - query otelcol_processor_dropped_metric_points")
-        print("            and inspect the attributes/cardinality + batch processors,")
+        print("            and inspect the batch processor / any metric-name rewrite,")
         print("            or a metric-name rewrite. Otherwise re-check the name filter.")
 
 

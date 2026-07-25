@@ -306,6 +306,26 @@ alarm OK → ALARM when the sidecar is stopped and back to OK when it resumes
 (now cheap to test end-to-end with the always-on heartbeat: stop the sidecar →
 ingestion stops → ALARM; restart → OK).
 
+**Spend dashboards inflated by concurrent sessions — session.id label
+restored (2026-07-24, observed live after metrics began flowing).** With
+metrics finally landing, dashboard cost lines showed sawtooth ups-and-downs
+and drastically climbing counters when developers ran multiple sessions. Root
+cause: each Claude Code session's counters start at 0, and the sidecar's
+`attributes/cardinality` processor deleted `session.id` — so concurrent
+sessions from the same user+model merged onto ONE series, interleaving as a
+sawtooth. `increase()` treats every downward alternation as a counter reset
+and re-adds the following value, inflating spend. Fix: the processor is
+removed and `session.id` is kept as a label; each session is its own
+monotonic series, and the existing `sum by (team/user)` panels become exact
+with no query changes. RUNTIME-VERIFIED on the deployed ADOT v0.49.0 pin: two
+interleaved synthetic sessions land as two distinct monotonic series; the
+full rendered config passes v0.49.0 validation. Cardinality trade accepted
+deliberately: active series are bounded by CONCURRENT sessions (stale series
+age out of AMP's active-series window in minutes), tens of series per live
+session against AMP's 2M default. The Grafana numbers remain observability —
+authoritative spend is the gateway's Postgres `spend` table, which meters
+inference server-side and was never affected by this.
+
 **Client usage metrics silently dropped at prometheus translation — delta
 temporality (2026-07-24, ROOT-CAUSED LIVE + REPRODUCED ON THE PINNED IMAGE).**
 After the loopback fix, activity logs flowed and `otelcol_*` reached AMP, but
