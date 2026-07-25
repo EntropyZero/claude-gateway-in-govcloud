@@ -39,6 +39,20 @@
   SVG preferred; PNG acceptable) and eyeball the rendered result before
   committing.
 
+- **Never invent information in documentation.** Every factual claim in a
+  doc — parameter and variable names, defaults, retention periods, ARNs,
+  service behaviors, who receives a notification — must be verified against
+  the code, the template, or an authoritative source *before* it is written
+  down. If the answer isn't known or can't be verified, **say that in the
+  doc** ("not configured here", "template default, not exposed in
+  deploy.env", "needs live confirmation") instead of writing a plausible
+  answer. A wrong-but-plausible name or number in documentation is worse
+  than a gap: readers act on it and the failure surfaces far from the doc.
+  Standing example: a retention summary nearly cited `PGAUDIT_LOG_RETENTION_DAYS`
+  as a deploy.env variable — plausible, matching the naming convention, and
+  nonexistent (`PgauditLogRetentionDays` is a stack-01 template parameter
+  only). Grep for the exact name before citing it.
+
 - **Keep the review doc honest.** `docs/ato/security-review-2026-07.md` is the
   source of truth for finding status and accepted risks; update it in the same
   change that alters a finding. Keep the Status block in `CLAUDE.md` current.
