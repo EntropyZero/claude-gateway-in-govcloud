@@ -13,8 +13,9 @@ ARG GRAFANA_BASE_IMAGE=grafana/grafana:13.1.1
 FROM ${GRAFANA_BASE_IMAGE}
 
 # Amazon Managed Prometheus datasource plugin (SigV4 auth), staged into
-# plugins/ by build-and-push-grafana.sh (downloaded from grafana.com with a
-# pinned version + sha256 verify). Grafana >=13.1 removed SigV4 from the
+# plugins/ by build-and-push-grafana.sh via the central mirror script
+# (scripts/mirror/mirror-grafana-plugin.sh: pinned version + sha256 verify,
+# cached in mirror/grafana-plugins/). Grafana >=13.1 removed SigV4 from the
 # core prometheus datasource and does NOT bundle this plugin; the task has
 # no egress to install it at boot, so it must ship in the image.
 COPY --chown=472:472 plugins/ /var/lib/grafana/plugins/

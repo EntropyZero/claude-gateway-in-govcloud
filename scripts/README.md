@@ -62,6 +62,7 @@ egress-capable host; everything downstream is offline.
 |---|---|
 | `mirror/mirror-claude-release.sh` | Claude Code native binaries (GPG-verified manifest, SHA-256 per platform) → `mirror/<version>/` (gitignored staging) |
 | `mirror/mirror-collector.sh` | ADOT collector image → your ECR, digest-pinned into `deploy.env` (`COLLECTOR_IMAGE`) |
+| `mirror/mirror-grafana-plugin.sh` | Grafana AMP datasource plugin (SigV4 auth; not bundled upstream) → `mirror/grafana-plugins/` (gitignored staging), version+sha256 pinned here; `build-and-push-grafana.sh` invokes it and bakes the artifact into the image |
 | `mirror/mirror-python-deps.sh` | Python wheels: regenerates the **committed** `docker/portal/vendor/` and `docker/db-admin/vendor/` sets from each image's `requirements.txt`, and (`--tools`) stages operator-tooling wheels into `vendor/tools/` (gitignored) |
 
 Dependency-update flow: edit the pin in `docker/<image>/requirements.txt` →

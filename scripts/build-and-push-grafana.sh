@@ -25,23 +25,18 @@ REPO_NAME="${GRAFANA_ECR_REPO_NAME:-claude-gw-grafana}"
 GRAFANA_IMAGE_TAG="${GRAFANA_IMAGE_TAG:-${GRAFANA_VERSION}}"
 
 # Amazon Managed Prometheus datasource plugin, baked into the image (the
-# task has no egress to install it at boot). Grafana-signed; the pinned
-# sha256 comes from grafana.com's version API — update BOTH together:
-#   curl -s https://grafana.com/api/plugins/grafana-amazonprometheus-datasource/versions/<ver> \
-#     | jq -r '.packages["linux-amd64"].sha256'
-AMP_PLUGIN_ID="grafana-amazonprometheus-datasource"
-AMP_PLUGIN_VERSION="${AMP_PLUGIN_VERSION:-3.1.0}"
-AMP_PLUGIN_SHA256="${AMP_PLUGIN_SHA256:-0374c5d7680ed86b904709a86f78a07f41fb263a9098df5c42d2371b6ea5a829}"
+# task has no egress to install it at boot). The pin (version + sha256) and
+# the verified download live in scripts/mirror/mirror-grafana-plugin.sh —
+# invoked here idempotently: it reuses an already-staged, checksum-clean
+# mirror/grafana-plugins/ artifact and only reaches grafana.com when one is
+# missing, so a pre-staged mirror (transferred like a release mirror) makes
+# this build's plugin input fully offline.
 command -v unzip >/dev/null || { echo "FATAL: unzip is required (extracts the AMP datasource plugin preserving the backend binary's exec bit)." >&2; exit 1; }
+log "Staging the AMP datasource plugin (scripts/mirror/mirror-grafana-plugin.sh)"
+PLUGIN_ZIP="$(MIRROR_DIR="${MIRROR_DIR:-${REPO_ROOT}/mirror}" "${SCRIPT_DIR}/mirror/mirror-grafana-plugin.sh")"
 PLUGIN_DIR="${REPO_ROOT}/docker/grafana/plugins"
-PLUGIN_ZIP="$(mktemp)"
-log "Fetching ${AMP_PLUGIN_ID} ${AMP_PLUGIN_VERSION} (linux-amd64)"
-curl -fsSL "https://grafana.com/api/plugins/${AMP_PLUGIN_ID}/versions/${AMP_PLUGIN_VERSION}/download?os=linux&arch=amd64" -o "$PLUGIN_ZIP"
-echo "${AMP_PLUGIN_SHA256}  ${PLUGIN_ZIP}" | sha256sum -c - >/dev/null \
-  || { echo "FATAL: ${AMP_PLUGIN_ID} ${AMP_PLUGIN_VERSION} sha256 mismatch — refusing to bake an unverified plugin." >&2; rm -f "$PLUGIN_ZIP"; exit 1; }
 rm -rf "$PLUGIN_DIR"; mkdir -p "$PLUGIN_DIR"
 unzip -q "$PLUGIN_ZIP" -d "$PLUGIN_DIR"
-rm -f "$PLUGIN_ZIP"
 
 # Generate the Grafana TLS leaf on the build host (openssl here, not in the
 # Alpine image - keeps the image build free of any package-repo access). The

@@ -132,7 +132,8 @@ is now `grafana/grafana` (the `grafana-oss` Docker Hub repo froze at 12.4);
 Grafana ≥13.1 **removed SigV4 from the core prometheus datasource**, so
 `build-and-push-grafana.sh` now bakes the Grafana-signed
 `grafana-amazonprometheus-datasource` plugin into the image (pinned +
-sha256-verified; the egress-less task can't fetch it at boot) and `amp.yaml`
+sha256-verified via `scripts/mirror/mirror-grafana-plugin.sh`, part of the
+central mirroring layer; the egress-less task can't fetch it at boot) and `amp.yaml`
 provisions that type (uid `amp` unchanged — dashboards unaffected); and 03
 sets `GF_PLUGINS_PREINSTALL_DISABLED=true` (the ≥12 background preinstaller
 dials grafana.com every boot — the #92707 crash-loop class). Runtime-verified
@@ -224,7 +225,7 @@ test — stop the sidecar). Full proof in the 2026-07-23 fix-log entries of
 | `docker/` | gateway image + entrypoint; `db-admin/` (bootstrap+rotation Lambda); `grafana/`; `portal/` (download-portal app) |
 | `client/` | `Install-ClaudeCode.ps1` (non-admin Windows install) |
 | `scripts/` | `deploy.env`-driven deploy/operate chain at the root (see `scripts/README.md`); `common.sh` holds the shared helpers |
-| `scripts/mirror/` | **all vendor mirroring**: Claude Code releases, ADOT collector image, Python wheel vendor dirs (`mirror-python-deps.sh` + the per-image `requirements.txt`) |
+| `scripts/mirror/` | **all vendor mirroring**: Claude Code releases, ADOT collector image, the Grafana AMP datasource plugin, Python wheel vendor dirs (`mirror-python-deps.sh` + the per-image `requirements.txt`) |
 | `scripts/diagnostics/` | telemetry/usage diagnostics (`diagnose-telemetry.sh`, `amp-query.py`, `dump-usage.sh`, …) |
 | `docs/README.md` | docs index: what lives where (`ato/`, `operations/`, `requests/`, `generated/`) |
 | `docs/ato/architecture.md` | review package: 8 SVG diagrams + secrets/SG/encryption inventories |

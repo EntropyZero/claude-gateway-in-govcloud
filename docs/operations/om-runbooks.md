@@ -594,8 +594,10 @@ expects it** (`.claude/rules/scripts.md`).
   `grafana/grafana` (the `grafana/grafana-oss` Docker Hub repo froze at
   12.4); the build script also stages the `grafana-amazonprometheus-datasource`
   plugin into the image (SigV4 left the core prometheus datasource in 13.1
-  and the task has no egress to install plugins at boot) — bump
-  `AMP_PLUGIN_VERSION` + `AMP_PLUGIN_SHA256` together in the script when
+  and the task has no egress to install plugins at boot) — the pin and the
+  verified download live in `scripts/mirror/mirror-grafana-plugin.sh`
+  (invoked automatically, idempotent against `mirror/grafana-plugins/`);
+  bump `AMP_PLUGIN_VERSION` + `AMP_PLUGIN_SHA256` together there when
   updating it; and expect a **one-time re-login for all Grafana users** on
   the first post-upgrade start (external OAuth sessions are re-linked —
   `improvedExternalSessionHandling`, default-on since 12.1).

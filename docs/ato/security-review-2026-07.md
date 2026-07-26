@@ -122,9 +122,11 @@ absorbed: (1) the OSS image is now `grafana/grafana` — the
 `grafana/grafana-oss` Docker Hub repo froze at 12.4; (2) **Grafana ≥13.1
 removed SigV4 auth from the core prometheus datasource** — AMP auth moved to
 the Grafana-signed `grafana-amazonprometheus-datasource` plugin, which is
-NOT bundled and cannot be fetched by the egress-less task, so
-`build-and-push-grafana.sh` now stages it into the image (pinned version +
-sha256 fail-closed verify) and `amp.yaml` provisions that type explicitly
+NOT bundled and cannot be fetched by the egress-less task, so it ships in
+the image: the pin + fail-closed sha256 verify live in
+`scripts/mirror/mirror-grafana-plugin.sh` (the central mirroring layer;
+idempotent staging under `mirror/grafana-plugins/`), which
+`build-and-push-grafana.sh` invokes and bakes, and `amp.yaml` provisions that type explicitly
 (dashboards reference uid `amp`, unaffected); (3) Grafana ≥12's background
 plugin preinstaller dials grafana.com at every boot — the same startup-egress
 class that crash-looped 11.x behind inspected egress (#92707) — now disabled

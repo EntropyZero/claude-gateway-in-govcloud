@@ -227,7 +227,9 @@ cp "mirror/$CLAUDE_VERSION/claude" docker/claude
 # 4b. DB-admin Lambda image (bootstrap + rotation)
 ./scripts/build-and-push-dbadmin.sh                           # persists DBADMIN_IMAGE
 
-# 4c. Grafana image
+# 4c. Grafana image (auto-invokes scripts/mirror/mirror-grafana-plugin.sh —
+#     stages the sha256-pinned AMP datasource plugin into mirror/grafana-plugins/,
+#     reusing it if already transferred there like the release mirror)
 ./scripts/build-and-push-grafana.sh                           # persists GRAFANA_IMAGE
 
 # 4d. ADOT collector — mirror the pinned upstream release into ECR
