@@ -1,0 +1,8 @@
+# DB-admin Lambda runtime deps — the single place this image's Python pins
+# live. The committed wheels in vendor/ are generated FROM this file by
+# scripts/mirror/mirror-python-deps.sh (run it after editing, then rebuild
+# with a bumped DBADMIN_VERSION). The Dockerfile installs with --no-index
+# from vendor/, so a pin edit without a re-mirror fails the build loudly.
+# 1.31.5 closes CVE-2025-61385 (SQL injection in pg8000.native.literal();
+# app.py never calls literal(), so this is defense-in-depth, not a live hole).
+pg8000==1.31.5

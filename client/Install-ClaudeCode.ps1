@@ -18,8 +18,8 @@
     (forceLoginMethod:"gateway" + forceLoginGatewayUrl). Claude Code offers the
     "Cloud gateway" login ONLY from a managed source (HKLM policy or a machine
     managed-settings.json) - never from user settings - so this installer does
-    NOT write it. Deliver it by GPO/MDM (docs/ad-request-email.md) or self-serve
-    with local admin (docs/client-config.md). With it present, 'claude' opens
+    NOT write it. Deliver it by GPO/MDM (docs/requests/ad-request-email.md) or self-serve
+    with local admin (docs/operations/client-config.md). With it present, 'claude' opens
     the locked, pre-filled gateway login (no menu, no URL to type; press Enter
     to connect) for a one-time Okta sign-in. Central runtime policy is still
     applied by the GATEWAY after login via its /managed/settings endpoint.
@@ -31,7 +31,7 @@
   If/when the organization wants FORCED gateway login
   (forceLoginMethod/forceLoginGatewayUrl/requiredMinimumVersion - keys Claude
   Code honors only from managed sources), push them via GPO/MDM as documented
-  in docs/client-config.md. The two channels compose: this installer for the
+  in docs/operations/client-config.md. The two channels compose: this installer for the
   binary + user config, GPO for enforcement.
 
 .PARAMETER BinaryPath
@@ -46,7 +46,7 @@
   sign-in instructions at the end of the install ('claude' -> /login ->
   Cloud gateway -> paste this URL). Not written anywhere: the pre-fill/lock
   keys are managed-only and belong to the GPO/MDM channel
-  (docs/client-config.md).
+  (docs/operations/client-config.md).
 
 .PARAMETER DisableUpdates
   Adds DISABLE_UPDATES=1 and DISABLE_AUTOUPDATER=1 to the user settings env
@@ -108,7 +108,7 @@ function Write-Step([string]$m) { Write-Host "==> $m" -ForegroundColor Cyan }
 # $null when there is nothing to write. These are ordinary env vars, honored
 # from the USER settings file - unlike forceLoginMethod /
 # forceLoginGatewayUrl / requiredMinimumVersion, which Claude Code accepts
-# only from managed sources (GPO/MDM - see docs/client-config.md) and which
+# only from managed sources (GPO/MDM - see docs/operations/client-config.md) and which
 # this installer therefore does not attempt. Kept as a function so it can be
 # unit-tested (see tests/powershell/).
 function Build-UserEnv {
@@ -219,12 +219,12 @@ if ($env:CLAUDE_INSTALLER_DOTSOURCE) { return }
 # A SYSTEM-context run (Intune/SCCM device push) would install the binary
 # into SYSTEM's own profile and PATH - developers would never get claude.exe.
 # There is no settings mode to run as SYSTEM either: machine-wide policy is
-# GPO/MDM's job (docs/client-config.md), not this installer's.
+# GPO/MDM's job (docs/operations/client-config.md), not this installer's.
 $isSystem = [Security.Principal.WindowsIdentity]::GetCurrent().IsSystem
 if ($isSystem) {
   throw ('Running as SYSTEM. Deploy the binary in USER context (Intune "user" install ' +
          'behavior, or the download portal); push forced-login/managed policy via GPO/MDM ' +
-         'instead - see docs/client-config.md.')
+         'instead - see docs/operations/client-config.md.')
 }
 
 if (-not $BinaryPath) { throw 'BinaryPath is required.' }
@@ -331,7 +331,7 @@ if (($env:Path -split ';') -notcontains $installDir) { $env:Path += ";$installDi
 # Ordinary env vars only - honored from the user's own settings file, no
 # elevation, no policy keys. Enforcement (forced gateway login, version
 # floor) is deliberately NOT attempted here; it belongs to GPO/MDM
-# (docs/client-config.md) and to the gateway's own /managed/settings push.
+# (docs/operations/client-config.md) and to the gateway's own /managed/settings push.
 $userEnv = Build-UserEnv -DisableUpdates:$DisableUpdates `
   -CostCenter $CostCenter -Team $Team -ExtraCaCertPath $ExtraCaCertPath
 $script:SettingsResult = $null
@@ -366,8 +366,8 @@ if ($WhatIfPreference) {
   Write-Host '  Claude Code only offers the "Cloud gateway" login when forceLoginMethod'
   Write-Host '  and forceLoginGatewayUrl are set in a MANAGED source (HKLM policy or a'
   Write-Host '  machine managed-settings.json) - by design it will NOT appear in /login'
-  Write-Host '  otherwise. Your IT team delivers this by GPO/MDM; see docs/client-config.md'
-  Write-Host '  and docs/ad-request-email.md.'
+  Write-Host '  otherwise. Your IT team delivers this by GPO/MDM; see docs/operations/client-config.md'
+  Write-Host '  and docs/requests/ad-request-email.md.'
   if ($GatewayUrl) {
     Write-Host ''
     Write-Host 'If you have LOCAL ADMIN on this machine, set it yourself once (elevated):'

@@ -1,0 +1,21 @@
+# Operator-tooling Python deps for the scripts in this repo. None of these
+# are needed by the deploy chain itself (pure bash + AWS CLI) — they enable
+# the diagnostics and doc tooling:
+#   botocore   — scripts/diagnostics/amp-query.py (SigV4-signed AMP queries)
+#   pyyaml     — scripts/diagnostics/check-collector-config.py
+#   pg8000     — scripts/diagnostics/dump-usage.py (RDS read-only dump)
+#   markdown, weasyprint — docs/md-to-pdf.py (make docs-pdf)
+#
+# Online host:   pip install -r scripts/requirements-tools.txt
+# Offline host:  scripts/mirror/mirror-python-deps.sh --tools  (on an egress
+#                host; stages wheels into vendor/tools/, gitignored), then
+#                pip install --no-index --find-links vendor/tools -r scripts/requirements-tools.txt
+#
+# Floor pins, matching tests/requirements-test.txt convention — these are
+# operator tools, not shipped artifacts; the image pins (exact ==) live in
+# docker/*/requirements.txt instead.
+botocore>=1.34
+pyyaml>=6
+pg8000>=1.31
+markdown>=3.5
+weasyprint>=61

@@ -3,7 +3,12 @@ apiVersion: 1
 datasources:
   - name: AMP
     uid: amp
-    type: prometheus
+    # Grafana >=13.1 removed SigV4 from the core prometheus datasource; AMP
+    # auth lives in this Grafana-signed plugin, BAKED into the image by
+    # build-and-push-grafana.sh (not bundled upstream, and the task has no
+    # egress to fetch it). Dashboards reference uid "amp", so the type
+    # change is invisible to them. jsonData keys are unchanged.
+    type: grafana-amazonprometheus-datasource
     access: proxy
     isDefault: true
     # Interpolated from the container environment (set in the task definition).

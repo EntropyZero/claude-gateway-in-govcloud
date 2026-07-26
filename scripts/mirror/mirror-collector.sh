@@ -7,7 +7,7 @@
 #
 # Run on a machine with Docker that can reach the upstream registry
 # (public.ecr.aws) plus AWS creds. Pick the release with ADOT_VERSION.
-source "$(dirname "$0")/common.sh"
+source "$(dirname "$0")/../common.sh"
 
 # v0.49.0 = the deployed/validated pin (2026-07-24): the delta-temporality
 # drop, add_metric_suffixes honoring, and dashboard-exact metric names were

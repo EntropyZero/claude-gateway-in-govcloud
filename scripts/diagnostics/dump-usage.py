@@ -14,7 +14,7 @@ per-request token counts. It stores:
   admin_audit       every admin API mutation
 
 Raw per-request token/cost breakdown lives ONLY in AMP as metrics
-(claude_code_token_usage etc.) - use scripts/diagnose-telemetry.sh for that.
+(claude_code_token_usage etc.) - use scripts/diagnostics/diagnose-telemetry.sh for that.
 
 So this dump answers two things precisely:
   1. Is the gateway metering usage per user at all?      -> `spend` populated
@@ -165,7 +165,7 @@ def main():
             print("       * the Grafana dashboard's user_groups filter excludes all")
             print("         series -> panels look empty even when metrics are flowing")
             print("     Fix at the Okta side (groups claim on the token); see")
-            print("     docs/okta-request-email.md.\n")
+            print("     docs/requests/okta-request-email.md.\n")
 
     # 3. Caps + audit, for completeness
     caps = _q(conn, "SELECT scope_type, coalesce(scope_id,''), "

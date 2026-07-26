@@ -2001,7 +2001,7 @@ Outputs:
     Description: >-
       The gateway's public FQDN - the Okta redirect host, and the URL developers
       paste at interactive /login. When an org enforces forced login via GPO/MDM
-      it is the forceLoginGatewayUrl value (see docs/client-config.md); the
+      it is the forceLoginGatewayUrl value (see docs/operations/client-config.md); the
       installer itself does not write it.
     Value: !Sub 'https://${GatewayFqdn}'
   OktaRedirectUri:

@@ -75,7 +75,7 @@ Next steps:
      picks up the co-resident ADOT collector sidecar and starts forwarding
      telemetry (ECS rolls the service; the gateway then pushes the OTLP enable
      env vars to every connected client). COLLECTOR_IMAGE must be set
-     (scripts/mirror-collector.sh) - the sidecar runs that image.
+     (scripts/mirror/mirror-collector.sh) - the sidecar runs that image.
   2. Okta app: register the redirect URI from the GrafanaOidcRedirectUri
      output, then set the client secret: scripts/set-grafana-oidc-secret.sh
   3. Grafana: https://${GATEWAY_FQDN}/grafana - sign in with Okta; the role

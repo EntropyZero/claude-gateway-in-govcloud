@@ -18,7 +18,7 @@ import urllib.parse
 import pytest
 
 SCRIPT = os.path.join(
-    os.path.dirname(__file__), "..", "..", "scripts", "amp-query.py"
+    os.path.dirname(__file__), "..", "..", "scripts", "diagnostics", "amp-query.py"
 )
 
 
