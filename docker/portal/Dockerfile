@@ -16,11 +16,12 @@ FROM ${PORTAL_BASE_IMAGE}
 # is the only non-stdlib dependency, installed from vendored wheels so the
 # build needs NO PyPI access - same offline posture as docker/db-admin. vendor/
 # holds boto3 + its transitive deps as universal (py3-none-any) wheels committed
-# to the repo. Refresh with:
-#   pip download boto3==1.34.162 -d docker/portal/vendor
+# to the repo; the pin lives in requirements.txt. Refresh with:
+#   scripts/mirror/mirror-python-deps.sh portal
+COPY requirements.txt /tmp/requirements.txt
 COPY vendor/ /tmp/vendor/
-RUN pip install --no-cache-dir --no-index --find-links /tmp/vendor boto3==1.34.162 \
- && rm -rf /tmp/vendor
+RUN pip install --no-cache-dir --no-index --find-links /tmp/vendor -r /tmp/requirements.txt \
+ && rm -rf /tmp/vendor /tmp/requirements.txt
 
 # Optional enterprise/TLS-inspection root CA (e.g. Zscaler), staged by
 # build-and-push-portal.sh from EXTRA_CA_CERT_PATH (empty file when unset).

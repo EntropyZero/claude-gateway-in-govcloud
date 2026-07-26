@@ -76,6 +76,7 @@ not operations.)
 ---
 
 *Source of truth: `cloudformation/01–04*.yaml` in this repository; alarm
-runbooks in `docs/om-runbooks.md` §9–10; finding-level rationale in
-`docs/security-review-2026-07.md`. Regenerate this summary when those
-change.*
+runbooks in [`om-runbooks.md`](om-runbooks.md) §9 and
+[`cost-controls.md`](cost-controls.md); finding-level rationale in
+[`../ato/security-review-2026-07.md`](../ato/security-review-2026-07.md).
+Regenerate this summary when those change.*

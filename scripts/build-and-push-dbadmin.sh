@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Build the DB admin Lambda image (app-user bootstrap + secret rotation)
-# from docker/db-admin/ and push to ECR. Run on a machine with Docker and
-# egress (pip pulls pg8000; the RDS CA bundle is fetched here too).
-# For controlled networks, mirror the Lambda Python base image first and
-# pass LAMBDA_BASE_IMAGE pointing at it (pin by digest).
+# from docker/db-admin/ and push to ECR. pip needs NO egress (pg8000 installs
+# from the committed vendor/ wheels — refresh via
+# scripts/mirror/mirror-python-deps.sh db-admin); the only build-time egress
+# is fetching the RDS CA bundle below. For controlled networks, mirror the
+# Lambda Python base image first and pass LAMBDA_BASE_IMAGE pointing at it
+# (pin by digest).
 source "$(dirname "$0")/common.sh"
 
 # The repo is tag-IMMUTABLE: bump DBADMIN_VERSION for every app.py change

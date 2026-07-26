@@ -97,7 +97,7 @@ Legend: ☐ = do it · 🔎 = checkpoint, confirm before moving on.
   never from user settings ([BINARY-VERIFIED]). On a test laptop a one-time
   **elevated** command is the quickest unblock (the exact one-liner is in §9);
   a real fleet gets it by GPO/MDM ([`client-config.md`](client-config.md),
-  [`ad-request-email.md`](ad-request-email.md)). The **binary install itself
+  [`ad-request-email.md`](../requests/ad-request-email.md)). The **binary install itself
   stays no-admin** — only this login config needs the managed entry.
 
 **GPG decision for the image mirror** (the mirror now fails closed)
@@ -204,7 +204,7 @@ so the ECR repos built next are born CMK-encrypted.
 
 ```bash
 # 3a. Gateway binary → gateway image
-./client/mirror-claude-release.sh 2.1.207          # honors ANTHROPIC_GPG_KEY / ALLOW_UNVERIFIED_MANIFEST
+./scripts/mirror/mirror-claude-release.sh 2.1.207          # honors ANTHROPIC_GPG_KEY / ALLOW_UNVERIFIED_MANIFEST
 cp mirror/2.1.207/claude docker/claude
 ./scripts/build-and-push-image.sh                  # persists IMAGE_URI
 
@@ -218,7 +218,7 @@ cp mirror/2.1.207/claude docker/claude
 #     Set ADOT_VERSION to the release you want; the script pulls it,
 #     pushes to your ECR (CMK-encrypted, immutable), and PERSISTS a
 #     digest-pinned COLLECTOR_IMAGE into deploy.env automatically.
-ADOT_VERSION=v0.43.0 ./scripts/mirror-collector.sh
+ADOT_VERSION=v0.43.0 ./scripts/mirror/mirror-collector.sh
 
 # 3e. Download-portal image (only if deploying the optional portal, step 11)
 ./scripts/build-and-push-portal.sh                 # persists PORTAL_IMAGE
@@ -399,7 +399,7 @@ the obs stack exists and keeps the AMP params set.)
   `%ProgramFiles%\ClaudeCode\managed-settings.json`) — it is **not** a
   user-selectable option and is **not** honored from user settings/HKCU
   ([BINARY-VERIFIED]; see [`client-config.md`](client-config.md),
-  [`ad-request-email.md`](ad-request-email.md)). On the test laptop the quickest
+  [`ad-request-email.md`](../requests/ad-request-email.md)). On the test laptop the quickest
   unblock is a **one-time elevated** command to seed the HKLM value (a real
   fleet gets it by GPO/MDM), then run `claude` non-elevated:
   ```powershell
@@ -409,7 +409,7 @@ the obs stack exists and keeps the AMP params set.)
     -Value '{"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<FQDN>"}'
   ```
   This bring-up seed deliberately **omits** `forceRemoteSettingsRefresh` (which
-  the real GPO object carries — see [`ad-request-email.md`](ad-request-email.md)):
+  the real GPO object carries — see [`ad-request-email.md`](../requests/ad-request-email.md)):
   that key makes the CLI exit if it cannot fetch the gateway's managed settings,
   which is the behavior you want in production but which leaves you without a
   working CLI to debug with while the gateway is still being brought up. Once
@@ -467,7 +467,7 @@ live until that lands.
 
 Prereqs: portal image built (step 3e), and the Okta app has the
 `https://<FQDN>/portal/oauth/callback` redirect URI + the `<ACCESS_GROUP>`
-group populated (see `docs/okta-request-email.md`). **Critically, the app must
+group populated (see `docs/requests/okta-request-email.md`). **Critically, the app must
 have a groups claim configured** on the authorization server (ID token, matches
 regex `.*`) — the `groups` scope alone is *not* enough on the Okta org server,
 and without the claim the portal denies **everyone** (groups arrive in neither
@@ -534,7 +534,7 @@ against the manifest SHA-256 before upload.
   `<prefix>/*` secrets. RDS and the KMS key have `DeletionPolicy: Retain` /
   Snapshot — clean those up manually if you want a truly fresh account.
 - **Full reference**: `README.md` (Quick start, VPC endpoints, Teardown &
-  update order) and `docs/security-review-2026-07.md` (What remains).
+  update order) and `docs/ato/security-review-2026-07.md` (What remains).
 
 ---
 
@@ -545,7 +545,7 @@ against the manifest SHA-256 before upload.
 ./scripts/import-enterprise-cert.sh csr <FQDN>
 ./scripts/import-enterprise-cert.sh import <FQDN> leaf.pem <FQDN>.key.pem chain.pem
 ./scripts/deploy-database.sh
-./client/mirror-claude-release.sh 2.1.207 && cp mirror/2.1.207/claude docker/claude
+./scripts/mirror/mirror-claude-release.sh 2.1.207 && cp mirror/2.1.207/claude docker/claude
 ./scripts/build-and-push-image.sh
 ./scripts/build-and-push-dbadmin.sh
 ./scripts/build-and-push-grafana.sh

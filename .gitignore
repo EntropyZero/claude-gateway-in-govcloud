@@ -7,7 +7,7 @@ docker/claude.exe
 
 # Local release mirrors
 client/mirror/
-mirror/
+/mirror/
 
 # Key material and CSRs from import-enterprise-cert.sh
 *.key.pem
@@ -29,6 +29,9 @@ tests/**/__pycache__/
 
 # Generated Grafana TLS cert (built per-run by build-and-push-grafana.sh)
 docker/grafana/tls/
+# AMP datasource plugin, staged per-build by build-and-push-grafana.sh
+# (pinned version + sha256-verified download; never committed)
+docker/grafana/plugins/
 
 # Generated gateway listener TLS cert (built per-run by build-and-push-image.sh)
 docker/tls/
@@ -38,4 +41,7 @@ docker/portal/tls/
 
 # Agent worktree isolation checkouts (never commit)
 .claude/worktrees/
-scripts/.rds-ca-bundle.pem
+scripts/diagnostics/.rds-ca-bundle.pem
+
+# Ephemeral operator-tooling wheel staging (scripts/mirror/mirror-python-deps.sh --tools)
+/vendor/

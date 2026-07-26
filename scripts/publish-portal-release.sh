@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Publish a verified Claude Code release + the installer to the portal's
 # artifacts bucket, so the portal can assemble per-download ZIPs. Reuses the
-# output of client/mirror-claude-release.sh (which downloaded and VERIFIED the
+# output of scripts/mirror/mirror-claude-release.sh (which downloaded and VERIFIED the
 # binary against the GPG-signed manifest) - this script never fetches from the
 # internet itself.
 #
@@ -31,7 +31,7 @@ BUCKET="${PORTAL_ARTIFACTS_BUCKET:-$(stack_output "$PORTAL_STACK_NAME" Artifacts
 }
 
 # The win32-x64 binary + manifest are required; CHECKSUMS.txt is a convenience.
-[ -f "${SRC}/claude.exe" ] || { echo "FATAL: ${SRC}/claude.exe not found (run client/mirror-claude-release.sh ${VERSION} win32-x64)." >&2; exit 1; }
+[ -f "${SRC}/claude.exe" ] || { echo "FATAL: ${SRC}/claude.exe not found (run scripts/mirror/mirror-claude-release.sh ${VERSION} win32-x64)." >&2; exit 1; }
 [ -f "${SRC}/manifest.json" ] || { echo "FATAL: ${SRC}/manifest.json not found." >&2; exit 1; }
 
 # Re-verify the exe against the manifest before publishing (defence in depth -

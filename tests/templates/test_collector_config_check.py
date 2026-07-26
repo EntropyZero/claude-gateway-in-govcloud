@@ -1,4 +1,4 @@
-"""Unit tests for scripts/check-collector-config.py.
+"""Unit tests for scripts/diagnostics/check-collector-config.py.
 
 The telemetry break it detects: a deployed collector whose `metrics` pipeline
 is missing the `otlp` receiver silently drops client claude_code_* metrics
@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 CHECKER = os.path.join(
-    os.path.dirname(__file__), "..", "..", "scripts", "check-collector-config.py"
+    os.path.dirname(__file__), "..", "..", "scripts", "diagnostics", "check-collector-config.py"
 )
 
 GOOD = """

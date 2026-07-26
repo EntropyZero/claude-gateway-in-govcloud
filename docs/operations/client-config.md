@@ -6,14 +6,14 @@ and writes workstation config **entirely in user scope** — no admin rights.
 **Gateway login, however, requires one admin-delivered managed setting**:
 Claude Code only offers the "Cloud gateway" login when it is present, by
 Anthropic's design (§1.2). That setting is delivered by GPO/MDM (the AD request
-is [`ad-request-email.md`](ad-request-email.md)) or self-served by a developer
+is [`ad-request-email.md`](../requests/ad-request-email.md)) or self-served by a developer
 with local admin. So the model is *no-admin install + one required managed
 policy for login* — see §2.
 
 This is an operations how-to (like [`test-run-runbook.md`](test-run-runbook.md))
 and is deliberately **not** part of the PDF review package. The ConOps
-([`conops.md`](conops.md)) references this model; the security-review fix log
-([`security-review-2026-07.md`](security-review-2026-07.md), 2026-07-22 entry)
+([`conops.md`](../ato/conops.md)) references this model; the security-review fix log
+([`security-review-2026-07.md`](../ato/security-review-2026-07.md), 2026-07-22 entry)
 records the redesign.
 
 ## Verification status — read this first
@@ -118,7 +118,7 @@ At first connect Claude Code validates the ALB certificate chain and then pins
 the leaf's SHA-256 fingerprint (**trust-on-first-use**, per hostname); the
 developer confirms it against the fingerprint IT published — which is why TLS
 inspection must not sit in front of the gateway FQDN
-([`networking-request-email.md`](networking-request-email.md) §3).
+([`networking-request-email.md`](../requests/networking-request-email.md) §3).
 
 > **Hourly re-login?** If developers are bounced through the browser SSO at
 > the session TTL (default 1h) and `/login` then shows the default picker until
@@ -129,7 +129,7 @@ inspection must not sit in front of the gateway FQDN
 
 So the managed setting is **not optional**: it is what makes the gateway login
 exist *and* makes it one-touch. The AD/GPO request for it is
-[`ad-request-email.md`](ad-request-email.md). [NEEDS TEST-RUN CONFIRMATION for
+[`ad-request-email.md`](../requests/ad-request-email.md). [NEEDS TEST-RUN CONFIRMATION for
 the live Okta round-trip.]
 
 > ⚠️ **Tell developers to sign out with `claude auth logout` — never `/logout`.**
@@ -249,7 +249,7 @@ resolves to an allowlisted model either way.
 The Okta **groups claim is still required**, but now for a different reason:
 per-group spend caps (`scope_type` `rbac_group`) resolve against it, so the
 gateway requests the `groups` scope unconditionally. See
-[`okta-request-email.md`](okta-request-email.md).
+[`okta-request-email.md`](../requests/okta-request-email.md).
 
 Central push is a per-connected-client server-side control; it does **not**
 require or imply any admin rights on the laptop.
@@ -292,7 +292,7 @@ and project settings** — so a developer cannot edit their way around them
 (nor edit their way *into* the gateway login without one).
 
 Deliver them by **Group Policy / MDM** for a locked-down fleet (the AD request
-is [`ad-request-email.md`](ad-request-email.md)), or self-serve them once on a
+is [`ad-request-email.md`](../requests/ad-request-email.md)), or self-serve them once on a
 machine where the developer has **local admin**. The core value is the same
 small JSON either way (the two login keys; `parentSettingsBehavior` is an
 optional third — §2.1). Two interchangeable mechanisms follow.
@@ -436,7 +436,7 @@ from the managed layer confirms the lock is in force.
   in user scope for the whole fleet with zero elevation.
 - **Managed settings for login (admin — REQUIRED):** `forceLoginMethod:"gateway"`
   + `forceLoginGatewayUrl` (optionally `requiredMinimumVersion`), delivered by
-  GPO/MDM ([`ad-request-email.md`](ad-request-email.md)) or self-served with
+  GPO/MDM ([`ad-request-email.md`](../requests/ad-request-email.md)) or self-served with
   local admin. Without this the gateway login does not exist on the client; with
   it, login is method-locked and URL-prefilled (§1.2). This is the one part that
   is not admin-free.

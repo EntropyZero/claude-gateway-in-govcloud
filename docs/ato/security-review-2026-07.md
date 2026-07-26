@@ -115,6 +115,33 @@ own Lambda, with the service roll built into the rotation itself; the
 master secret became break-glass and its rotation affects no running
 task. See the C-batch header below for the item-by-item mapping.
 
+**Grafana 11.5.1 → 13.1.1 (2026-07-25, committed NOT yet deployed).** 11.x
+left security support 2026-06-15 (11.5.1 also predates the 11.5.3/11.5.5 CVE
+fixes), so the pin moved to the latest stable. Three upstream changes
+absorbed: (1) the OSS image is now `grafana/grafana` — the
+`grafana/grafana-oss` Docker Hub repo froze at 12.4; (2) **Grafana ≥13.1
+removed SigV4 auth from the core prometheus datasource** — AMP auth moved to
+the Grafana-signed `grafana-amazonprometheus-datasource` plugin, which is
+NOT bundled and cannot be fetched by the egress-less task, so it ships in
+the image: the pin + fail-closed sha256 verify live in
+`scripts/mirror/mirror-grafana-plugin.sh` (the central mirroring layer;
+idempotent staging under `mirror/grafana-plugins/`), which
+`build-and-push-grafana.sh` invokes and bakes, and `amp.yaml` provisions that type explicitly
+(dashboards reference uid `amp`, unaffected); (3) Grafana ≥12's background
+plugin preinstaller dials grafana.com at every boot — the same startup-egress
+class that crash-looped 11.x behind inspected egress (#92707) — now disabled
+via `GF_PLUGINS_PREINSTALL_DISABLED=true` in 03. **Verified against a
+throwaway 13.1.1 container with `--network none`**: boots clean with the full
+03 env (zero deprecations — all `GF_*` keys diff-checked 11.5→13.1 against
+the upstream config reference), HTTPS/sub-path serving, datasource + dashboard
+provision, plugin signature `valid` with `GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED=true`,
+and a uid-routed query reaches the plugin backend and attempts SigV4 credential
+resolution. **[NEEDS TEST-RUN CONFIRMATION]:** the Okta login round-trip on
+13.1 (expect a one-time re-login for all users — external-session re-link,
+default-on since 12.1) and the Fargate task-role credential path from the
+plugin subprocess (12.4.0 briefly broke `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`
+forwarding to plugins; fixed 12.4.2, present in 13.1.1 — confirm live).
+
 **Client gateway-login model corrected (2026-07-22).** The earlier "no-admin
 client redesign" (fix-log entry below) carried a **wrong assumption**: that a
 developer could run `claude` → `/login` → pick **Cloud gateway** with **no**
@@ -152,8 +179,8 @@ managed settings. That is **false**. Verified against Anthropic's official docs
   normal devs.)
 
 Remediation applied: the installer's printed instructions and the client docs
-were corrected; a new AD/GPO request template `docs/ad-request-email.md` (create
-the GPO that delivers the managed setting) was added; `docs/client-config.md`
+were corrected; a new AD/GPO request template `docs/requests/ad-request-email.md` (create
+the GPO that delivers the managed setting) was added; `docs/operations/client-config.md`
 was rewritten; README, ConOps §3.1/§5.1, O&M runbooks 5–6, and the test-run
 runbook's login steps were aligned to "gateway login **requires** the managed
 setting." The live forced-login round-trip on a real laptop is **[NEEDS
@@ -599,7 +626,7 @@ using. Enabled it in `02-gateway.yaml`:
 - **`enforcement.fail_closed_on_error: true`** — operator decision. A spend-store
   error blocks with 429 rather than allowing an uncapped request. **This is an
   availability trade: a store outage halts all inference fleet-wide**, and is
-  called out with a recovery path in `om-runbooks.md` §10.
+  called out with a recovery path in `operations/cost-controls.md` §5.
 - **Caps are data, not config** — rows in `spend_limits`, set via
   `POST /v1/organizations/spend_limits` by the new `scripts/set-spend-limit.sh`.
   No cap rows = no enforcement, so the stack is safe to deploy before any limits
@@ -862,7 +889,7 @@ arrives on three composable channels:
   **GPO/MDM admin channel** (GPP Registry `REG_SZ` at
   `HKLM\SOFTWARE\Policies\ClaudeCode` value `Settings`, or a GPP Files copy of
   `managed-settings.json` to `%ProgramFiles%\ClaudeCode\`). Full AD-admin steps
-  in the new `docs/client-config.md`.
+  in the new `docs/operations/client-config.md`.
 
 **CORRECTION (2026-07-22, see the top fix-log entry):** the claim that sign-in
 is a no-settings interactive flow (`claude` → `/login` → "Cloud gateway" → paste
@@ -970,7 +997,7 @@ each is fixed and committed:
 - **Server-side Zscaler inspection broke the Okta token exchange**: VPC
   egress to the Okta issuer passes TLS inspection, so the gateway and
   Grafana saw the inspector's derived cert and failed verification at token
-  exchange. Preferred fix (added to `docs/networking-request-email.md`): an
+  exchange. Preferred fix (added to `docs/requests/networking-request-email.md`): an
   SSL-inspection exemption for the issuer FQDN on the server-side egress
   path — the exchange carries the OIDC client secret, which should not
   transit inspection infrastructure. Interim/fallback implemented:
@@ -1181,7 +1208,7 @@ MDM push need reconciling (user-context deployment, or a two-phase install).
 **Resolved by the 2026-07-22 no-admin redesign** (fix-log entry above): the
 installer is user-scope only with no settings-push mode, so there is no
 SYSTEM-context settings push to contradict; forced login moved to the GPO/MDM
-admin channel (`docs/client-config.md`).
+admin channel (`docs/operations/client-config.md`).
 
 **B5. CLI TLS trust may need `NODE_EXTRA_CA_CERTS`.** The README's prerequisite
 is the enterprise root CA in the Windows cert store, but a Node-based

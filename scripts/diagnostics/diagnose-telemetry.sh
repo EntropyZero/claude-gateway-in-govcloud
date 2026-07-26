@@ -20,8 +20,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
-. "${HERE}/common.sh"
+# shellcheck source=../common.sh
+. "${HERE}/../common.sh"
 
 require_vars GATEWAY_STACK_NAME
 

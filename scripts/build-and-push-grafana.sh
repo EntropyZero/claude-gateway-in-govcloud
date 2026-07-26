@@ -4,13 +4,39 @@
 # and pass GRAFANA_BASE_IMAGE pointing at it.
 source "$(dirname "$0")/common.sh"
 
-GRAFANA_VERSION="${GRAFANA_VERSION:-11.5.1}"
-GRAFANA_BASE_IMAGE="${GRAFANA_BASE_IMAGE:-grafana/grafana-oss:${GRAFANA_VERSION}}"
+# 13.1.1 = the 2026-07-25 upgrade off EOL 11.5.1 (11.x left security support
+# 2026-06-15). Two upstream changes this script now absorbs:
+#   * The OSS image moved: grafana/grafana-oss on Docker Hub is FROZEN as of
+#     12.4 (stops at 13.0.2); the OSS image is grafana/grafana (Enterprise is
+#     grafana/grafana-enterprise).
+#   * Grafana >=13.1 removed SigV4 from the core prometheus datasource — AMP
+#     auth now needs the grafana-amazonprometheus-datasource plugin, which is
+#     NOT bundled, so this script stages it into the image (pinned + sha256).
+# Verified against a throwaway 13.1.1 with --network none (provisioning,
+# plugin signature with public-key retrieval disabled, uid-routed SigV4
+# query path, dashboard render); the Okta login round-trip and the Fargate
+# task-role credential path still need the live pass.
+GRAFANA_VERSION="${GRAFANA_VERSION:-13.1.1}"
+GRAFANA_BASE_IMAGE="${GRAFANA_BASE_IMAGE:-grafana/grafana:${GRAFANA_VERSION}}"
 REPO_NAME="${GRAFANA_ECR_REPO_NAME:-claude-gw-grafana}"
 # The repo is tag-IMMUTABLE (this image bakes in the provisioned dashboard -
 # it must not be silently overwritten). When you change provisioning without
-# bumping Grafana, push under a new tag: GRAFANA_IMAGE_TAG=11.5.1-r2
+# bumping Grafana, push under a new tag: GRAFANA_IMAGE_TAG=13.1.1-r2
 GRAFANA_IMAGE_TAG="${GRAFANA_IMAGE_TAG:-${GRAFANA_VERSION}}"
+
+# Amazon Managed Prometheus datasource plugin, baked into the image (the
+# task has no egress to install it at boot). The pin (version + sha256) and
+# the verified download live in scripts/mirror/mirror-grafana-plugin.sh —
+# invoked here idempotently: it reuses an already-staged, checksum-clean
+# mirror/grafana-plugins/ artifact and only reaches grafana.com when one is
+# missing, so a pre-staged mirror (transferred like a release mirror) makes
+# this build's plugin input fully offline.
+command -v unzip >/dev/null || { echo "FATAL: unzip is required (extracts the AMP datasource plugin preserving the backend binary's exec bit)." >&2; exit 1; }
+log "Staging the AMP datasource plugin (scripts/mirror/mirror-grafana-plugin.sh)"
+PLUGIN_ZIP="$(MIRROR_DIR="${MIRROR_DIR:-${REPO_ROOT}/mirror}" "${SCRIPT_DIR}/mirror/mirror-grafana-plugin.sh")"
+PLUGIN_DIR="${REPO_ROOT}/docker/grafana/plugins"
+rm -rf "$PLUGIN_DIR"; mkdir -p "$PLUGIN_DIR"
+unzip -q "$PLUGIN_ZIP" -d "$PLUGIN_DIR"
 
 # Generate the Grafana TLS leaf on the build host (openssl here, not in the
 # Alpine image - keeps the image build free of any package-repo access). The

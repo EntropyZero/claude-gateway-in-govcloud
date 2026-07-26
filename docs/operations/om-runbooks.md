@@ -21,7 +21,7 @@ three stack names come from `deploy.env`:
 Per the repo honesty rule (`.claude/rules/process.md`), each runbook is tagged
 by how far its steps have been exercised on real infrastructure. The source of
 truth is the fix log at the top of
-[`security-review-2026-07.md`](security-review-2026-07.md) and the Status block
+[`security-review-2026-07.md`](../ato/security-review-2026-07.md) and the Status block
 in `CLAUDE.md`.
 
 - **[VERIFIED-LIVE]** — exercised in the 2026-07 test run: certificate import
@@ -64,6 +64,13 @@ posture:
   rely on `DeletionPolicy: Retain` + bucket lifecycle, not Object Lock. A
   privileged operator can still delete archived objects; there is no WORM
   guarantee.
+- **Bedrock prompt-logs bucket: delivery grant is bucket-wide.** The
+  prompt-logs bucket policy grants `bedrock.amazonaws.com` `s3:PutObject` on
+  the whole bucket rather than AWS's documented `AWSLogs/<account>/...` example
+  prefix, because the large-body delivery prefix is delivery-managed and
+  undocumented; the `aws:SourceAccount`/`aws:SourceArn` conditions carry the
+  cross-account restriction. Tighten to the observed prefixes after the first
+  live delivery — runbook 11.
 
 ---
 
@@ -444,7 +451,7 @@ offline image builds are **[VERIFIED-LIVE]**.
 
    ```bash
    ANTHROPIC_GPG_KEY=/path/to/anthropic-release-key.asc \
-     ./client/mirror-claude-release.sh 2.1.208
+     ./scripts/mirror/mirror-claude-release.sh 2.1.208
    #   verifies the GPG-signed manifest + per-binary SHA-256, writes
    #   mirror/2.1.208/{claude,claude.exe,CHECKSUMS.txt}
    ```
@@ -554,7 +561,7 @@ release is confirmed across the fleet.
   **[BINARY-VERIFIED]** against the mirrored 2.1.211 binary). A developer **with
   local admin** can self-serve the entry once. Full AD-admin steps are in
   [`client-config.md`](client-config.md) §2; the AD/GPO request template is
-  [`ad-request-email.md`](ad-request-email.md). The **binary install stays
+  [`ad-request-email.md`](../requests/ad-request-email.md). The **binary install stays
   no-admin either way** — only the login config needs the managed setting.
 - Never bypass GPG verification as a matter of routine; `ALLOW_UNVERIFIED_MANIFEST=1`
   is for a deliberately air-gapped one-off only.
@@ -589,8 +596,19 @@ expects it** (`.claude/rules/scripts.md`).
 - **Gateway:** `IMAGE_TAG=<new> ./scripts/build-and-push-image.sh` →
   `./scripts/deploy-gateway.sh`.
 - **Grafana:** `GRAFANA_IMAGE_TAG=<new> ./scripts/build-and-push-grafana.sh` →
-  `./scripts/deploy-observability.sh`.
-- **ADOT collector (sidecar):** `ADOT_VERSION=<vX.Y.Z> ./scripts/mirror-collector.sh`
+  `./scripts/deploy-observability.sh`. Notes for version bumps (learned on
+  the 11.5.1 → 13.1.1 upgrade, 2026-07-25): the OSS image is
+  `grafana/grafana` (the `grafana/grafana-oss` Docker Hub repo froze at
+  12.4); the build script also stages the `grafana-amazonprometheus-datasource`
+  plugin into the image (SigV4 left the core prometheus datasource in 13.1
+  and the task has no egress to install plugins at boot) — the pin and the
+  verified download live in `scripts/mirror/mirror-grafana-plugin.sh`
+  (invoked automatically, idempotent against `mirror/grafana-plugins/`);
+  bump `AMP_PLUGIN_VERSION` + `AMP_PLUGIN_SHA256` together there when
+  updating it; and expect a **one-time re-login for all Grafana users** on
+  the first post-upgrade start (external OAuth sessions are re-linked —
+  `improvedExternalSessionHandling`, default-on since 12.1).
+- **ADOT collector (sidecar):** `ADOT_VERSION=<vX.Y.Z> ./scripts/mirror/mirror-collector.sh`
   (mirrors + pins `COLLECTOR_IMAGE` by digest) → `./scripts/deploy-gateway.sh`
   (the sidecar lives in the gateway task, so the collector rolls with a new
   gateway task-def revision — **not** an observability-stack update).
@@ -879,7 +897,7 @@ nothing to roll back beyond the underlying runbook's own recovery.
 
 ### Is the gateway capturing usage at all? (dump Postgres)
 
-*Run:* `scripts/dump-usage.sh` (in-VPC host or bastion; needs IAM to read
+*Run:* `scripts/diagnostics/dump-usage.sh` (in-VPC host or bastion; needs IAM to read
 `<prefix>/db-app-user`). Read-only, connects the same way the gateway does
 (app-user secret + RDS CA, verify-full).
 
@@ -937,7 +955,7 @@ Raw per-request token metrics live only in AMP - use `diagnose-telemetry.sh`.
 
 *Symptom:* activity logs arrive, but `claude_code_*` panels in Grafana are empty.
 
-*Run:* `scripts/diagnose-telemetry.sh`. It reads the ALB access logs (client ->
+*Run:* `scripts/diagnostics/diagnose-telemetry.sh`. It reads the ALB access logs (client ->
 `/managed/settings` and client -> `/v1/metrics`) and then queries AMP directly
 over SigV4, so it distinguishes four different failures that all look identical
 in Grafana:
@@ -1047,7 +1065,7 @@ entirely, so the picker problem disappears with it.
 *Fix (Okta admin, no redeploy):* on the gateway app, enable the **Refresh
 Token** grant type alongside Authorization Code; confirm **`offline_access`**
 is granted; on an org authorization server, confirm its refresh-token policy
-issues them. Then log in fresh once. See `docs/okta-request-email.md` (updated
+issues them. Then log in fresh once. See `docs/requests/okta-request-email.md` (updated
 to request both grants). This is TTL-independent — lowering `SESSION_TTL_HOURS`
 only changes how fast revocation propagates, not whether refresh works.
 
@@ -1089,83 +1107,15 @@ diagnostic only; the egress controls are unchanged.
 
 ## 10. Spend caps (per-user / per-group cost limits)
 
-*Trigger / Frequency:* Onboarding a team or user, a budget change, or a spend
-alert. Status: **[NEEDS TEST-RUN CONFIRMATION]** end to end — the admin API,
-both cap scopes, and read/write key separation are **verified against the
-gateway binary** (2026-07-24) but not yet exercised on the deployed stack.
-
-*Model:* Stack `02` configures the gateway's `admin:` block — which is the
-**master switch**: the gateway runs spend enforcement *only* when admin is
-configured — and mints two API keys into Secrets Manager
-(`<prefix>/spend-admin-write-key`, `<prefix>/spend-admin-read-key`). The **caps
-themselves are data**, rows in the gateway's `spend_limits` table, set through
-`POST /v1/organizations/spend_limits`. **No cap rows = no enforcement**, so the
-stack is safe to deploy before any limits exist.
-
-*Setting a cap — preferred path: the portal admin page.* With the download
-portal deployed (04) and `PORTAL_ADMIN_GROUP` + `SPEND_ADMIN_GROUPS` set to
-the same Okta group, members manage caps at
-`https://<GATEWAY_FQDN>/portal/admin` **as themselves**: the page walks the
-gateway's device-flow sign-in once per session (one click when the Okta
-session is warm), and every list/set/clear rides the admin's own gateway
-token — the gateway re-checks their group membership on each call and its
-audit trail records the individual (`oidc:<sub>`). No admin key is stored
-anywhere in the portal. If the page shows "the gateway refused: not in its
-spend-admin groups", the two group settings have drifted apart — re-align
-`SPEND_ADMIN_GROUPS` (02) and `PORTAL_ADMIN_GROUP` (04).
-
-*Setting a cap — break-glass CLI (shared keys):*
-```bash
-scripts/set-spend-limit.sh --scope user       --id alice@example.com --amount 50
-scripts/set-spend-limit.sh --scope rbac_group --id claude-developers --amount 2500
-scripts/set-spend-limit.sh --scope organization                      --amount 10000
-scripts/set-spend-limit.sh --scope user --id alice@example.com --clear   # remove
-scripts/set-spend-limit.sh --list                                        # review
-```
-`--amount` is **dollars**; the API takes whole **cents as a string** and the
-script converts exactly (no float rounding). `--period` is `daily`, `weekly` or
-`monthly` (default monthly). TLS trust: the script verifies against the system
-store **plus** `GATEWAY_CA_BUNDLE` and `EXTRA_CA_CERT_PATH` combined, so it
-works both on a direct path (internal-PKI ALB cert) and behind TLS inspection;
-on a persistent failure check the bundle carries the ALB cert's full issuing
-chain (the failure hint prints the exact openssl command).
-
-*Precedence:* a **per-user** cap wins over group caps. When a user matches
-several **group** caps they combine per `SPEND_GROUP_LIMIT_MODE` — `min`
-(default) takes the most restrictive, so adding someone to a group can only
-tighten their cap.
-
-*Prerequisite:* per-**group** caps resolve against the **Okta groups claim**, so
-that claim must actually be present in the token (see
-[`okta-request-email.md`](okta-request-email.md)). Per-**user** caps key on
-`sub` and have no such dependency — if the groups claim is missing, per-user and
-org-wide caps still work while group caps silently match nothing.
-
-*What a capped developer sees:* HTTP 429, `billing_error`, *"spend limit
-reached — <SPEND_BLOCKED_MESSAGE>"*, with `x-should-retry: false`. It is not a
-transient error and the client will not retry around it.
-
-> ⚠️ **FAIL-CLOSED is enabled** (`enforcement.fail_closed_on_error: true`,
-> operator decision 2026-07-24). If the spend store is unreachable or errors,
-> the gateway returns 429 **for every request** rather than allowing uncapped
-> spend. This is an availability trade taken deliberately: **a database problem
-> halts all inference fleet-wide, not just cost tracking.** If developers report
-> a sudden fleet-wide "spend limit unavailable", suspect the RDS instance
-> first — check the DB alarms and `spend check failed` / `store_error` in the
-> gateway logs — and if you need to restore service before the store is fixed,
-> flip `fail_closed_on_error` to `false` and re-run `deploy-gateway.sh`.
-
-*Audit:* every mutation lands in the gateway's `admin_audit` table (365-day
-retention), attributed to the acting identity: `oidc:<sub>` for portal admins,
-the key `id` (`deploy-write` / `deploy-read`) for the break-glass CLI. The
-portal admin page shows this trail read-only, and additionally writes
-`event: portal_admin` lines (connects, actions, denials) to the portal's own
-audit log group. Spend history is retained 13 months, identity records 90
-days.
-
-*Key rotation:* both keys are `GenerateSecretString` secrets. Rotate by updating
-the secret and re-running `deploy-gateway.sh` (the task reads them at start), the
-same pattern as the JWT secret in §7.
+*Moved:* spend management now has its own runbook —
+[`cost-controls.md`](cost-controls.md). It covers the enforcement model (the
+`admin:` master switch; caps as `spend_limits` rows), setting caps via the
+portal admin page or the break-glass `scripts/set-spend-limit.sh` CLI,
+monitoring spend (Grafana dashboard, AMP queries, Postgres ground truth),
+what a capped developer sees, the **fail-closed spend-store outage** incident
+runbook (an RDS problem halts all inference fleet-wide — deliberate
+2026-07-24 decision), the audit trail, and known gaps. This section number is
+kept so existing references to "om-runbooks §10" keep resolving.
 
 ---
 

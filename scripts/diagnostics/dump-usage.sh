@@ -14,8 +14,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
-. "${HERE}/common.sh"
+# shellcheck source=../common.sh
+. "${HERE}/../common.sh"
 require_vars NAME_PREFIX
 
 exec python3 "${HERE}/dump-usage.py" "$@"
