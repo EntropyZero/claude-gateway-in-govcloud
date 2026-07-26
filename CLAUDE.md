@@ -126,6 +126,28 @@ throwaway Postgres). **Next step: confirm the deployed gateway image contains th
 an older image ignores the env var SILENTLY - rebuilding with a bumped tag if
 not; then re-run `deploy-gateway.sh` and confirm `/model` in a live session.**
 
+**Added 2026-07-25 (committed, NOT yet deployed): Bedrock prompt logging,
+opt-in.** Bedrock model invocation logging = verbatim prompts+responses of
+EVERY bedrock-runtime call in the ACCOUNT+REGION (not just this gateway's),
+attributed to the gateway TASK ROLE (per-user stays the activity stream).
+No native CFN resource exists: 03 creates the destinations UNCONDITIONALLY
+(CMK CloudWatch group `/claude/<prefix>/bedrock-prompts` 14d window + CMK S3
+bucket 731d — the ONLY place >100KB bodies land; conditioning them on the
+flag was reviewed and rejected: fixed-name Retain group collides on
+re-enable, and dropping the role/grant while the account config points at
+them stops delivery silently), `deploy-observability.sh` applies the
+account-level setting from tri-state `BEDROCK_PROMPT_LOGGING` (empty=never
+touch; false=get-then-delete, no-op when already off). 01's CMK policy gains the
+docs-prescribed `kms:GenerateDataKey` for bedrock.amazonaws.com
+(SourceAccount/SourceArn-scoped, inert until enabled; BYO-key deployments
+add it themselves). Bucket grant is bucket-wide PutObject (conditions carry
+the restriction) because the large-data prefix is delivery-managed and
+undocumented — tighten after first live delivery. Enable order: 01 re-run →
+03 with the flag. Doc-verified only; GovCloud round-trip, SSE-KMS delivery,
+and the data prefix need the live run. Runbook: om-runbooks §11 (old 11/12
+renumbered 12/13); structural tests pin the condition keys + fixed stream
+name.
+
 **Upgraded 2026-07-25 (committed, NOT yet deployed): Grafana 11.5.1 → 13.1.1**
 (11.x left security support 2026-06-15). Three coupled changes: the OSS image
 is now `grafana/grafana` (the `grafana-oss` Docker Hub repo froze at 12.4);

@@ -333,6 +333,81 @@ alarm OK → ALARM when the sidecar is stopped and back to OK when it resumes
 (now cheap to test end-to-end with the always-on heartbeat: stop the sidecar →
 ingestion stops → ALARM; restart → OK).
 
+**Bedrock prompt logging (model invocation logging) added as an opt-in to the
+observability enablement (2026-07-25, committed; NOT deploy-verified).**
+Captures the VERBATIM request and response bodies (prompts + completions) of
+every `bedrock-runtime` call — a new, highest-sensitivity data store, opt-in
+and off by default (`BEDROCK_PROMPT_LOGGING`, tri-state: empty never touches
+the account setting).
+
+- **Mechanics (doc-verified against the Bedrock invocation-logging guide; no
+  native CloudFormation resource exists — AWS's own published pattern is a
+  custom-resource Lambda).** 03 creates the destinations **unconditionally**
+  (inert until used): a CMK CloudWatch group
+  (`/claude/<prefix>/bedrock-prompts`, window 14 d default) + a CMK S3 bucket
+  (full native copy, 731 d default, Retain, TLS-only, BucketOwnerEnforced —
+  ACLs must be disabled for Bedrock's delivery) + the delivery role
+  (docs-prescribed trust/permissions; the log-stream name Bedrock writes is
+  fixed). `deploy-observability.sh` then applies the ACCOUNT+REGION-level
+  `PutModelInvocationLoggingConfiguration` after the stack deploy — a
+  deploy-script step, not a custom resource, because an account-level
+  singleton tied to a stack's lifecycle risks clobbering shared account
+  state. text+image delivery on; embeddings/video off.
+  **Design correction from the pre-commit review:** the first draft gated the
+  destinations on an `EnableBedrockPromptLogging` stack parameter; the
+  line-by-line pass showed that breaks twice — a conditional **fixed-name
+  Retain log group collides on re-enable** ("log group already exists" fails
+  the whole 03 update), and flipping the flag (or leaving the tri-state
+  empty, which mapped to `false`) tore down the delivery role and bucket
+  grant **while the account config still pointed at them**, stopping prompt
+  delivery silently (Bedrock delivery failures don't fail invocations — an
+  audit-continuity gap). Destinations are now always present; the flag drives
+  only the account setting, and the disable path is get-then-delete so a
+  standing `false` doesn't issue account-wide deletes (or require
+  `bedrock:Delete*`) on every unrelated 03 re-run.
+  **Adversarial pass (web-verified) corrections:** (a) the prompt bucket has
+  **no S3 Bucket Key** — a bucket key needs the delivering service principal
+  to also hold `kms:Decrypt` (CloudTrail-delivery precedent), which the
+  docs-prescribed GenerateDataKey-only grant doesn't give, silently breaking
+  delivery of exactly the >100 KB bodies only S3 holds (test-pinned);
+  (b) `videoDataDeliveryEnabled` omitted from the put JSON — older CLI
+  service models reject the member client-side (boto3 #4381 class) and false
+  is its default; (c) the disable path's pre-check runs without stderr
+  suppression and fails the script on a get error — a swallowed AccessDenied
+  would report "already disabled" while account-wide capture keeps running;
+  (d) runbook §11 lists `bedrock:GetModelInvocationLoggingConfiguration` too
+  (the script reads the config back after applying). Also confirmed by the
+  pass: invocation logging covers inference-profile calls (`modelId` may be a
+  profile ID; cross-region logs in the source region), PrivateLink is
+  transparent to it, and the GovCloud Bedrock page documents no
+  invocation-logging exclusion — the live-run flag stays regardless.
+- **Confused-deputy scoping everywhere:** bucket policy, role trust, and the
+  CMK grant all carry `aws:SourceAccount` + `aws:SourceArn
+  arn:<partition>:bedrock:<region>:<account>:*`, per the docs. 01's CMK
+  policy gains the docs-prescribed `kms:GenerateDataKey` for
+  `bedrock.amazonaws.com` (inert until logging is enabled; **BYO-key
+  deployments must add it themselves** — called out in deploy.env). The
+  bucket grant is bucket-wide `s3:PutObject` rather than the documented
+  `AWSLogs/...` prefix because >100 KB bodies land under a separate
+  delivery-managed "data" prefix whose path the docs don't specify — the
+  conditions carry the restriction; tighten after first live delivery.
+- **Stated honestly:** (1) account+region blast radius — it logs EVERY
+  Bedrock invocation in the account, not just the gateway's; fine in a
+  dedicated landing-zone workload account, wrong in a shared one. (2) NO
+  per-user attribution — `identity.arn` is the gateway task role for all
+  gateway traffic; the activity stream stays the who-did-what audit, this is
+  what-was-said. (3) Bodies >100 KB (typical Claude Code contexts) appear
+  ONLY in S3, never in CloudWatch — the bucket is required, not an archive
+  nicety. Structural tests pin the condition keys, the fixed stream name,
+  bucket posture, and the CMK grant.
+- **Needs deploy confirmation:** the put/get CLI round-trip in GovCloud
+  `us-gov-west-1` (feature is documented for the partition; unexercised
+  here), delivery into the SSE-KMS bucket via the 01 grant, the real
+  large-data prefix (then tighten the bucket policy), and pgaudit-class
+  assurance that logs actually appear after a live session. Enable order:
+  re-run 01 (in-place key-policy update) → 03 with
+  `BEDROCK_PROMPT_LOGGING=true`. Runbook: `om-runbooks.md` §11.
+
 **Spend-cap admin page on the download portal; admins act with their own
 Okta identity, not the stored keys (2026-07-25, RUNTIME-VERIFIED end to end
 offline; needs deploy confirmation).** Two user asks: `set-spend-limit.sh`

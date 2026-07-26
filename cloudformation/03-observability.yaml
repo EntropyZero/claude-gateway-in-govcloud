@@ -229,6 +229,22 @@ Parameters:
     MinValue: 1
     Description: Days to keep activity logs in the S3 archive before expiry.
 
+  BedrockPromptLogWindowDays:
+    Type: Number
+    Default: 14
+    MinValue: 1
+    Description: >-
+      CloudWatch retention for the prompt-log group (the short operational /
+      Logs Insights window). The durable copy is the S3 bucket, which
+      natively receives its own full copy - this is not an archive OF the
+      CloudWatch stream.
+
+  BedrockPromptArchiveRetentionDays:
+    Type: Number
+    Default: 731
+    MinValue: 1
+    Description: Days to keep prompt logs in the S3 bucket before expiry.
+
 Conditions:
   WantAmpEndpoint: !Equals [!Ref CreateAmpEndpoint, 'true']
   HaveAdminClientSg: !Not [!Equals [!Ref AdminClientSecurityGroupId, '']]
@@ -516,6 +532,152 @@ Resources:
       FilterPattern: ''
       DestinationArn: !GetAtt ActivityDeliveryStream.Arn
       RoleArn: !GetAtt ActivitySubscriptionRole.Arn
+
+  # -------------------------------------- Bedrock prompt logging (opt-in)
+  # Destinations for Bedrock MODEL INVOCATION LOGGING - the full request and
+  # response bodies (prompts + completions) of every bedrock-runtime call in
+  # this ACCOUNT+REGION. The destinations are ALWAYS created (inert and
+  # near-free until used - an empty CMK log group and bucket) because the
+  # actual switch is ACCOUNT-level state outside CloudFormation:
+  # PutModelInvocationLoggingConfiguration, applied by
+  # deploy-observability.sh from BEDROCK_PROMPT_LOGGING. Conditioning these
+  # on the flag was reviewed and rejected: a conditional fixed-name Retain
+  # log group collides on re-enable ("log group already exists" fails the
+  # whole stack update), and dropping the delivery role / bucket grant while
+  # the account config still points at them stops delivery SILENTLY.
+  # There is no native CloudFormation resource for the logging configuration
+  # itself (AWS's own published pattern is a custom-resource Lambda; this
+  # repo uses the deploy script instead - an account-level singleton managed
+  # by a stack's lifecycle risks clobbering shared account state).
+  #
+  # Sensitivity: STRICTLY ABOVE the activity stream - these are verbatim
+  # prompts and model outputs. CMK everywhere, IAM-only, Retain on teardown,
+  # flag both destinations for SIEM. Per-user attribution is NOT here: every
+  # gateway invocation logs identity.arn = the gateway task role. Use the
+  # activity stream for who-did-what; use this for what-was-said.
+
+  # Short operational window (Logs Insights); the durable copy is the S3
+  # bucket below, which receives its own full copy natively.
+  BedrockPromptLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub '/claude/${NamePrefix}/bedrock-prompts'
+      RetentionInDays: !Ref BedrockPromptLogWindowDays
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+      # Load-bearing on already-deployed stacks (CFN no-op bug #1543) — see
+      # the gateway stack's LogGroup comment. Do not remove.
+      Tags:
+        - Key: retention-policy
+          Value: retain-on-teardown
+
+  # Durable store: batched gzipped JSON under
+  # AWSLogs/<account>/BedrockModelInvocationLogs/, plus >100 KB bodies and
+  # binary (image) payloads as individual objects under a delivery-managed
+  # data prefix. Bodies over 100 KB NEVER appear in CloudWatch - only here -
+  # so this bucket is required, not optional, for Claude Code's large
+  # contexts.
+  BedrockPromptLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      # NO BucketKeyEnabled here, deliberately (adversarial-review catch):
+      # 01's CMK grant for bedrock.amazonaws.com is kms:GenerateDataKey only
+      # (the docs-prescribed shape), and an S3 Bucket Key requires the
+      # delivering service principal to ALSO hold kms:Decrypt (documented for
+      # the analogous CloudTrail delivery case) - the combination silently
+      # breaks delivery of exactly the >100KB bodies only this bucket holds.
+      # Per-object KMS at prompt-log volume is trivial; do not "optimize".
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID:
+                Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # ACLs must be disabled for Bedrock's bucket-policy delivery to work
+      # (per the invocation-logging docs) - BucketOwnerEnforced does that.
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-prompt-logs
+            Status: Enabled
+            ExpirationInDays: !Ref BedrockPromptArchiveRetentionDays
+
+  # The docs-prescribed delivery grant. Scoped bucket-wide rather than to the
+  # documented AWSLogs/.../BedrockModelInvocationLogs/ prefix because the
+  # large-data objects land under a separate delivery-managed "data" prefix
+  # whose exact path the docs do not specify - the SourceAccount/SourceArn
+  # conditions carry the restriction (only THIS account's Bedrock log
+  # delivery can write). Tighten to exact prefixes after the first live
+  # delivery shows the real layout.
+  BedrockPromptLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BedrockPromptLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AmazonBedrockLogsWrite
+            Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${BedrockPromptLogsBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:*'
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt BedrockPromptLogsBucket.Arn
+              - !Sub '${BedrockPromptLogsBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  # Role Bedrock assumes for the CloudWatch leg. Trust + permissions are the
+  # exact shapes from the invocation-logging docs: the log-stream name
+  # Bedrock writes is fixed (aws/bedrock/modelinvocations).
+  BedrockPromptLoggingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-bedrock-prompt-logging'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:*'
+      Policies:
+        - PolicyName: write-prompt-log-group
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${BedrockPromptLogGroup}:log-stream:aws/bedrock/modelinvocations'
 
   # -------------------------------------------------------------- Grafana
   GrafanaSecurityGroup:
@@ -1004,3 +1166,12 @@ Outputs:
   ActivityArchiveBucketName:
     Description: Durable S3 archive of the activity stream (expires per ActivityArchiveRetentionDays).
     Value: !Ref ActivityArchiveBucket
+  BedrockPromptLogGroupName:
+    Description: CloudWatch destination for Bedrock model-invocation (prompt) logs.
+    Value: !Ref BedrockPromptLogGroup
+  BedrockPromptLogsBucketName:
+    Description: S3 destination for Bedrock model-invocation (prompt) logs, incl. >100KB bodies.
+    Value: !Ref BedrockPromptLogsBucket
+  BedrockPromptLoggingRoleArn:
+    Description: Role Bedrock assumes to deliver prompt logs to CloudWatch.
+    Value: !GetAtt BedrockPromptLoggingRole.Arn

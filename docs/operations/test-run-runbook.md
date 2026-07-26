@@ -434,7 +434,7 @@ the obs stack exists and keeps the AMP params set.)
   rollout needs a decision before broad deployment: seed
   `hasCompletedOnboarding: true` into the user profile as part of
   `Install-ClaudeCode.ps1`, or allow the two hosts. Recovery for an
-  already-stuck developer, and the matching `/logout` trap, are O&M runbook 11.
+  already-stuck developer, and the matching `/logout` trap, are O&M runbook 12.
   **[BINARY-VERIFIED against `mirror/2.1.211/claude`, 2026-07-24; NEEDS TEST-RUN
   CONFIRMATION.]**
 - ☐ **App DB user in use, not master**: the running task authenticates as

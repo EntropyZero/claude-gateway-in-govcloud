@@ -445,7 +445,7 @@ the one-time elevated HKLM seed in [`test-run-runbook.md`](test-run-runbook.md)
   through SSO hourly, the Okta app is missing the Refresh Token grant
   (Phase 0). Tell developers: sign out with `claude auth logout`, **never**
   `/logout` — `/logout` strands the client behind an unreachable-hosts
-  preflight (recovery: [`om-runbooks.md`](om-runbooks.md) runbook 11).
+  preflight (recovery: [`om-runbooks.md`](om-runbooks.md) runbook 12).
 - ☐ **Clean-profile first run**: verify a first-ever run on a profile that
   has never run `claude` — the onboarding connectivity preflight can block
   every new developer on a gateway-only egress path; the check and the
@@ -558,5 +558,5 @@ ADOT_VERSION=v0.49.0 ./scripts/mirror/mirror-collector.sh
 ```
 
 Teardown (should you need to start over) is the reverse — 04 and 03, then
-02, then 01: [`om-runbooks.md`](om-runbooks.md) runbook 12, plus the
+02, then 01: [`om-runbooks.md`](om-runbooks.md) runbook 13, plus the
 test-account caveats in [`test-run-runbook.md`](test-run-runbook.md) §10.

@@ -64,6 +64,13 @@ posture:
   rely on `DeletionPolicy: Retain` + bucket lifecycle, not Object Lock. A
   privileged operator can still delete archived objects; there is no WORM
   guarantee.
+- **Bedrock prompt-logs bucket: delivery grant is bucket-wide.** The
+  prompt-logs bucket policy grants `bedrock.amazonaws.com` `s3:PutObject` on
+  the whole bucket rather than AWS's documented `AWSLogs/<account>/...` example
+  prefix, because the large-body delivery prefix is delivery-managed and
+  undocumented; the `aws:SourceAccount`/`aws:SourceArn` conditions carry the
+  cross-account restriction. Tighten to the observed prefixes after the first
+  live delivery — runbook 11.
 
 ---
 
@@ -1112,7 +1119,76 @@ kept so existing references to "om-runbooks §10" keep resolving.
 
 ---
 
-## 11. Client recovery — Claude Code won't start after `/logout`
+## 11. Bedrock prompt logging (model invocation logging)
+
+*Trigger / Frequency:* Enabling or disabling the capture of verbatim prompts
+and model responses; access requests to the captured data. Status:
+**[NEEDS TEST-RUN CONFIRMATION]** — mechanics are doc-verified against the
+Bedrock invocation-logging guide; the GovCloud put/get round-trip, SSE-KMS
+delivery, and the large-data S3 prefix are unexercised.
+
+*Model:* Bedrock's **model invocation logging** is an **account+region-level
+Bedrock setting**, not a stack resource. Stack 03 **always** creates the
+destinations (inert, near-free while unused): a CMK CloudWatch group
+`/claude/<prefix>/bedrock-prompts` (short window,
+`BEDROCK_PROMPT_LOG_WINDOW_DAYS`) and a CMK S3 bucket (its own full copy —
+**and the only place request/response bodies over 100 KB ever land**;
+`BEDROCK_PROMPT_ARCHIVE_RETENTION_DAYS`). Only the account setting toggles:
+`deploy-observability.sh` applies it from `BEDROCK_PROMPT_LOGGING`
+(tri-state; empty = never touched; `false` is a no-op when logging is
+already off, so it is safe to leave standing in deploy.env).
+
+> ⚠️ **Know what you are switching on.** (1) It captures **every Bedrock
+> invocation in the account+region**, not only this gateway's — appropriate
+> in a dedicated workload account, wrong in a shared one. (2) It does **not**
+> attribute prompts to developers: the log identity is the gateway task role.
+> Who-did-what remains the activity stream (runbook 9's pipeline); this adds
+> what-was-said. (3) Sensitivity is strictly above the activity stream —
+> treat access like the activity archive: IAM-only, SIEM-flagged, no
+> ad-hoc grants.
+
+*Enable:*
+```bash
+# 1. CMK grant for Bedrock's delivery (in-place key-policy update).
+#    Bring-your-own-key deployments instead add kms:GenerateDataKey for
+#    bedrock.amazonaws.com (SourceAccount/SourceArn-scoped) to their key.
+scripts/deploy-database.sh
+# 2. Destinations + the account-level switch (operator needs
+#    bedrock:PutModelInvocationLoggingConfiguration,
+#    bedrock:GetModelInvocationLoggingConfiguration - the script reads the
+#    config back after applying - and iam:PassRole on the delivery role):
+BEDROCK_PROMPT_LOGGING=true   # in deploy.env
+scripts/deploy-observability.sh
+```
+
+*Verify (after a live Claude Code session):*
+```bash
+aws bedrock get-model-invocation-logging-configuration --region "$AWS_REGION"
+aws logs tail "/claude/${NAME_PREFIX}/bedrock-prompts" --region "$AWS_REGION" --since 1h
+aws s3 ls "s3://<BedrockPromptLogsBucketName output>/AWSLogs/" --recursive | head
+```
+Then note the real key layout the delivery used and tighten the bucket
+policy's bucket-wide `s3:PutObject` grant to those exact prefixes (tracked in
+the security-review entry).
+
+*Disable:* set `BEDROCK_PROMPT_LOGGING=false` and re-run
+`deploy-observability.sh` — the script removes the account configuration
+(get-then-delete, so it is a no-op when already off). The destinations stay
+in the stack with their data; retention/lifecycle keeps aging data out.
+Re-enabling later is just `=true` and a re-run — nothing is created or
+deleted, so the cycle is clean in both directions.
+
+*Notes & pitfalls:* Enabling in 03 without the 01 re-run leaves Bedrock
+unable to write the SSE-KMS bucket (delivery fails against the CMK). The
+CloudWatch leg only ever shows bodies ≤100 KB — an "empty-looking" log entry
+with an S3 reference is normal for large Claude Code contexts, not a fault.
+Setting `BEDROCK_PROMPT_LOGGING=false` disables invocation logging for the
+**whole account+region** — coordinate if anything else in the account relies
+on it.
+
+---
+
+## 12. Client recovery — Claude Code won't start after `/logout`
 
 *Trigger / Frequency:* A developer reports that `claude` exits at launch with
 **"Unable to connect to Anthropic services"**, and `claude auth login` refuses
@@ -1207,7 +1283,7 @@ restore `.claude.json.bak` to undo. Nothing server-side changes.
 
 ---
 
-## 12. Teardown
+## 13. Teardown
 
 *Trigger / Frequency:* Decommissioning the deployment (test account cleanup or
 end of life). Rare and deliberate. Status:
