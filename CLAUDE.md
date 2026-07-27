@@ -290,11 +290,11 @@ endpoint policies enumerate all three profile/foundation-model pairs; no new
 `cli:` keys (no boot-check needed). `deploy-gateway.sh` REFUSES duplicate
 gateway-facing IDs — a pre-Sonnet-5 deploy.env still setting
 `SONNET_MODEL_ID=claude-sonnet-4-5` collides with the haiku default; update
-deploy.env per the example, don't override the guard. **CAVEAT: the Sonnet 5
-profile ID is pattern-derived (un-dated, like Opus 4.8), NOT yet confirmed
-via `aws bedrock list-inference-profiles`** — confirm before the 02 re-run,
-then check `/model` shows exactly three entries and background calls resolve
-to Sonnet 4.5. Full entry in the security-review fix log.
+deploy.env per the example, don't override the guard. The Sonnet 5 profile ID
+`us-gov.anthropic.claude-sonnet-5` (un-dated, like Opus 4.8) was CONFIRMED
+correct by the operator (2026-07-27). After the 02 re-run, check `/model`
+shows exactly three entries and background calls resolve to Sonnet 4.5. Full
+entry in the security-review fix log.
 
 ## Repo map
 
@@ -385,13 +385,13 @@ FQDN / cert / Zscaler entry (path-based at `/portal`). Teardown is the reverse
 ## Durable context that isn't obvious from the code
 
 - **GovCloud model availability:** Opus 4.8 (`us-gov.anthropic.claude-opus-4-8`,
-  un-dated ID), Sonnet 5 (available since 2026-07; configured as
-  `us-gov.anthropic.claude-sonnet-5`, un-dated — pattern-derived, NOT yet read
-  off the Bedrock console), and Sonnet 4.5
+  un-dated ID), Sonnet 5 (available since 2026-07;
+  `us-gov.anthropic.claude-sonnet-5`, un-dated — operator-confirmed
+  2026-07-27), and Sonnet 4.5
   (`us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`, dated). Sonnet 4.6 was
   never offered in GovCloud. Verify model IDs against the Bedrock console
   (`aws bedrock list-inference-profiles --region us-gov-west-1`) before
-  changing defaults or deploying.
+  changing defaults.
 - **User decisions (2026-07-15):** precompiled native `claude` binary only (no
   npm distribution); Grafana auth = Okta SSO; Object Lock deferred.
 - **Landing zone:** hub-and-spoke with Transit Gateway (not peering); central

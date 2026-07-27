@@ -52,8 +52,8 @@ Legend: ☐ = do it · 🔎 = checkpoint, confirm before moving on.
   exact GovCloud inference-profile IDs:
   `aws bedrock list-inference-profiles --region us-gov-west-1 --query "inferenceProfileSummaries[?contains(inferenceProfileId,'anthropic')].inferenceProfileId"`
   (defaults assume `us-gov.anthropic.claude-opus-4-8`,
-  `us-gov.anthropic.claude-sonnet-5` — pattern-derived, **not yet
-  console-verified** — and `us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`
+  `us-gov.anthropic.claude-sonnet-5` — operator-confirmed correct,
+  2026-07-27 — and `us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`
   for the small/fast role).
 
 **Okta** (see the "two client secrets" note in the deploy.env comments)

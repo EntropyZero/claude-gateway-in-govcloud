@@ -128,9 +128,9 @@ renewal owner.
 - ☐ Enable Claude model access in the account, then confirm the exact
   GovCloud inference-profile IDs the defaults assume
   (`us-gov.anthropic.claude-opus-4-8` — un-dated ID,
-  `us-gov.anthropic.claude-sonnet-5` — un-dated, **pattern-derived, not yet
-  console-verified**, and `us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`
-  for the small/fast role):
+  `us-gov.anthropic.claude-sonnet-5` — un-dated, and
+  `us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0` for the small/fast
+  role):
   ```bash
   aws bedrock list-inference-profiles --region us-gov-west-1 \
     --query "inferenceProfileSummaries[?contains(inferenceProfileId,'anthropic')].inferenceProfileId"

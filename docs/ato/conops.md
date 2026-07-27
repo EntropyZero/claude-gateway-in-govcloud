@@ -538,10 +538,9 @@ D correctness, C12 least-privilege DB user) is in `security-review-2026-07.md`.
   (`us-gov.anthropic.claude-sonnet-5`), and **Sonnet 4.5**
   (`us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`) in `us-gov-west-1`.
   Sonnet 5 became available in GovCloud Bedrock in 2026-07 and is now the
-  configured Sonnet-tier default; its inference-profile ID above is
-  pattern-derived (un-dated format, like Opus 4.8) and **must be confirmed
-  against the Bedrock console** (`aws bedrock list-inference-profiles
-  --region us-gov-west-1`) before deploy. Sonnet 4.6 was never offered in
+  configured Sonnet-tier default; its inference-profile ID above (un-dated
+  format, like Opus 4.8) was confirmed by the operator on 2026-07-27.
+  Sonnet 4.6 was never offered in
   GovCloud, and no Haiku-family model is (Sonnet 4.5 fills the small/fast
   role). Model IDs must always be verified against the Bedrock console before
   changing defaults (`scripts/deploy.env.example`; CLAUDE.md "GovCloud model

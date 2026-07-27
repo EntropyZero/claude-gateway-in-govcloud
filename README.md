@@ -270,10 +270,9 @@ moves to the small/fast role — GovCloud has no Haiku-family model, and the
 gateway points the client's `ANTHROPIC_DEFAULT_HAIKU_MODEL` at
 `HAIKU_MODEL_ID` so background/small-model calls resolve to it. Note the
 ID-format difference — Opus 4.8 and Sonnet 5 use the new un-dated format
-while Sonnet 4.5 keeps the dated `-v1:0` suffix. The Sonnet 5 profile ID
-default is pattern-derived from that un-dated format, **not yet
-console-verified** — `us-gov-west-1` also supports in-region invocation, so
-confirm what your account actually sees before first deploy:
+while Sonnet 4.5 keeps the dated `-v1:0` suffix. This repo is a client
+template — confirm what your account actually sees before first deploy
+(`us-gov-west-1` also supports in-region invocation):
 
 ```bash
 aws bedrock list-inference-profiles --region us-gov-west-1 \
@@ -711,7 +710,7 @@ and then works through:
    client secret with `scripts/set-okta-secret.sh`.
 2. Verify all three GovCloud inference-profile IDs against the Bedrock
    console (`aws bedrock list-inference-profiles --region us-gov-west-1`) —
-   the Sonnet 5 default is pattern-derived, not console-verified.
+   this repo is a template; confirm what your account sees.
 3. Issue and import the enterprise-CA certificate
    (`scripts/import-enterprise-cert.sh`). The stack alarms when
    `DaysToExpiry` ≤ 30 (imported ACM certs do not auto-renew) — set

@@ -136,12 +136,12 @@ new haiku default and render two identical gateway `models:` entries.
 Structural tests updated (three-entry allowlist, haiku override ∈ allowlist,
 new gates: `models:` has exactly the three role entries; both Bedrock scoping
 layers enumerate all three). No new `cli:` keys were introduced, so no
-throwaway-Postgres boot check was needed. **[NEEDS DEPLOY CONFIRMATION]:**
-the Sonnet 5 profile ID `us-gov.anthropic.claude-sonnet-5` is pattern-derived
-(un-dated format, same as Opus 4.8), NOT yet read off the Bedrock console —
-run `aws bedrock list-inference-profiles --region us-gov-west-1` before the
-02 re-run, then confirm `/model` shows exactly the three IDs and a background
-(small-model) call resolves to Sonnet 4.5.
+throwaway-Postgres boot check was needed. The Sonnet 5 profile ID
+`us-gov.anthropic.claude-sonnet-5` (un-dated format, same as Opus 4.8) was
+initially pattern-derived and then **confirmed correct by the operator
+(2026-07-27)**. **[NEEDS DEPLOY CONFIRMATION]:** after the 02 re-run,
+confirm `/model` shows exactly the three IDs and a background (small-model)
+call resolves to Sonnet 4.5.
 
 **Grafana 11.5.1 → 13.1.1 (2026-07-25, committed NOT yet deployed).** 11.x
 left security support 2026-06-15 (11.5.1 also predates the 11.5.3/11.5.5 CVE
