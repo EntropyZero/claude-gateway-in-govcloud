@@ -1124,6 +1124,46 @@ and either way it says nothing about whether ingestion is working.
 > Prometheus-2-lineage (window boundaries closed both ends vs 3.x left-open);
 > the validated expressions do not depend on boundary inclusivity.
 
+> **Cumulative panels: pre-range "ghost" sessions excluded (2026-07-27).**
+> Live 1/2/3-day screenshots showed the sliding-lookback caveat above is
+> worse than "sessions overlapping the range START": a session that ENDED
+> BEFORE the range start still appears at its FULL value at the left edge of
+> the cumulative curves whenever it falls within one range-width before the
+> range start (`(start - range, start)`) - its samples sit inside the
+> per-plot-point `[$__range]` lookback while the `offset $__range` baseline
+> window is empty, so `or 0` counts the whole counter. Mid-graph it decays as
+> the shifted baseline window slides through the session's climb, then goes
+> absent - the "drop-off" an operator sees at exactly one window width (a
+> 07/25 session ghosted the 2-day view; the 1-day and 3-day views of the same
+> data were clean). Tiles (instant queries) were always correct. Fix: every
+> cumulative time-series expression is now gated per-session on having at
+> least one sample INSIDE the visible range -
+> `(... existing per-session rise ...) and
+> count_over_time(m{...}[$__range] @ end())` - the `@ end()`-anchored window
+> is exactly the visible range regardless of plot step, so fully-pre-range
+> sessions vanish from every step while range-start-spanning sessions (which
+> do have in-range samples) keep their documented mid-graph decline. The
+> `and` matches on the full label set; both sides are range functions over
+> the same selector so the sets align, and `__name__` is dropped on both.
+> Instant tiles and the top-users table are untouched: at instant eval the
+> lookback already equals the visible range, so the gate is a no-op there
+> (asserted, not assumed). Validated against a real Prometheus (3.7-lineage)
+> with a synthetic 5-session TSDB (ghost, freeze-and-hold, single-sample,
+> spanning-range-start, >1h-gap-resume; 16 assertions): the old expression
+> reproduces the screenshot ghost, the new one drops it at every step, all
+> other session accounting is value-identical, and right edge == tiles still
+> holds. Cost note: the gate adds a third full-range range-vector per plot
+> step on AMP (same `maxDataPoints: 200` cap applies). LIVE CHECK NEEDED: the
+> `@` modifier is standard PromQL (on by default upstream since 2.33,
+> Jan 2022) but is UNVERIFIED against AMP's Cortex-lineage engine from this
+> host - if AMP lacks it, the panels fail LOUDLY with a parse error (not
+> silently wrong data); if that happens, drop the `and count_over_time(...)`
+> gate clause to roll back to the previous (ghosting but correct-at-the-
+> right-edge) behavior. Deploy as above: bump GRAFANA_IMAGE_TAG, rebuild +
+> push, re-run 03. On the live run: pick a range width that puts a finished
+> session just before the range start (the failing 2-day view) and confirm
+> the curve no longer shows it while the tile total is unchanged.
+
 > **Session labels (2026-07-24).** `session.id` is KEPT as a metric label. It
 > was previously deleted for cardinality, but each session's counters start at
 > 0, so concurrent sessions from the same user+model interleaved onto one
