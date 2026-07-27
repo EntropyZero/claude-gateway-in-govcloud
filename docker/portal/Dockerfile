@@ -23,15 +23,23 @@ COPY vendor/ /tmp/vendor/
 RUN pip install --no-cache-dir --no-index --find-links /tmp/vendor -r /tmp/requirements.txt \
  && rm -rf /tmp/vendor /tmp/requirements.txt
 
-# Optional enterprise/TLS-inspection root CA (e.g. Zscaler), staged by
-# build-and-push-portal.sh from EXTRA_CA_CERT_PATH (empty file when unset).
-# The portal's outbound Okta OIDC calls (discovery/token/jwks/userinfo) present
-# the inspector's derived cert behind inspected egress, so its root must be in
-# the system trust store Python's ssl reads. Root only for the install; back to
-# the unprivileged user immediately after.
+# Optional extra trust anchors (enterprise/TLS-inspection root, gateway
+# internal-PKI chain), staged by build-and-push-portal.sh as one concatenated
+# extra-ca.pem (empty file when unset). The portal's outbound Okta OIDC calls
+# (discovery/token/jwks/userinfo) present the inspector's derived cert behind
+# inspected egress, so these roots must be in the system trust store Python's
+# ssl reads. Root only for the install; back to the unprivileged user
+# immediately after.
+#
+# The bundle is split one-cert-per-file: openssl rehash refuses multi-cert
+# files under /usr/local/share/ca-certificates ("skipping ..., it does not
+# contain exactly one certificate or crl"), leaving those CAs without hash
+# symlinks in /etc/ssl/certs. The same rehash warning for ca-certificates.crt
+# itself is unavoidable Debian-trixie noise (it scans the master bundle in
+# /etc/ssl/certs) and harmless — update-ca-certificates still exits 0.
 COPY extra-ca.pem /tmp/extra-ca.pem
 RUN if [ -s /tmp/extra-ca.pem ]; then \
-      cp /tmp/extra-ca.pem /usr/local/share/ca-certificates/extra-ca.crt \
+      awk '/-----BEGIN /{n++; p=1} p{print > ("/usr/local/share/ca-certificates/extra-ca-" n ".crt")} /-----END /{p=0}' /tmp/extra-ca.pem \
       && update-ca-certificates; \
     fi \
  && rm -f /tmp/extra-ca.pem
