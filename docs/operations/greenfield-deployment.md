@@ -468,7 +468,7 @@ the one-time elevated HKLM seed in [`test-run-runbook.md`](test-run-runbook.md)
     ```
   Deploy in **user** context — the installer refuses SYSTEM runs. Machines
   provisioned by an *older* installer need stale managed settings cleared
-  first ([`client-config.md`](client-config.md) §2.4).
+  first ([`client-config.md`](client-config.md) §8.4).
 - ☐ **One-time login**: new terminal → `claude` → the login screen is
   locked to gateway with the URL pre-filled (no picker, no typing) → press
   Enter → one-time **Okta SSO** in the browser (+MFA) → confirm the
