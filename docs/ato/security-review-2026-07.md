@@ -126,7 +126,11 @@ NOT bundled and cannot be fetched by the egress-less task, so it ships in
 the image: the pin + fail-closed sha256 verify live in
 `scripts/mirror/mirror-grafana-plugin.sh` (the central mirroring layer;
 idempotent staging under `mirror/grafana-plugins/`), which
-`build-and-push-grafana.sh` invokes and bakes, and `amp.yaml` provisions that type explicitly
+`build-and-push-grafana.sh` invokes and bakes *(updated 2026-07-26: the
+build script no longer invokes the mirror script — the offline build host
+consumes the transferred artifact, re-verified against the shared pin in
+`scripts/mirror/grafana-plugin.pin`; see `.claude/rules/offline-build.md`)*,
+and `amp.yaml` provisions that type explicitly
 (dashboards reference uid `amp`, unaffected); (3) Grafana ≥12's background
 plugin preinstaller dials grafana.com at every boot — the same startup-egress
 class that crash-looped 11.x behind inspected egress (#92707) — now disabled

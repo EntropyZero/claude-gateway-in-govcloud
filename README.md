@@ -100,12 +100,13 @@ cp scripts/deploy.env.example scripts/deploy.env   # fill in VPC, Okta, network 
 #    next step are CMK-encrypted (ECR encryption is fixed at creation).
 ./scripts/deploy-database.sh
 
-# 3. Image (on a machine with egress + Docker). Verification fails closed:
-#    supply Anthropic's release-signing key via ANTHROPIC_GPG_KEY, or
-#    explicitly accept TLS-only trust with ALLOW_UNVERIFIED_MANIFEST=1.
-./scripts/mirror/mirror-claude-release.sh 2.1.207
-cp mirror/2.1.207/claude docker/claude
-./scripts/build-and-push-image.sh          # writes IMAGE_URI back into deploy.env
+# 3. Image. Mirror on the egress host (verification fails closed: supply
+#    Anthropic's release-signing key via ANTHROPIC_GPG_KEY, or explicitly
+#    accept TLS-only trust with ALLOW_UNVERIFIED_MANIFEST=1), copy mirror/
+#    to the build machine, build there (Docker + AWS only, no internet).
+./scripts/mirror/mirror-claude-release.sh 2.1.207   # egress host
+./scripts/mirror/mirror-rds-ca-bundle.sh            # egress host
+./scripts/build-and-push-image.sh          # build machine; stages claude + CA bundle from mirror/, writes IMAGE_URI back into deploy.env
 ./scripts/build-and-push-dbadmin.sh        # writes DBADMIN_IMAGE (DB user bootstrap + rotation)
 
 # 4. Gateway stack
@@ -138,7 +139,11 @@ build-time install:
   `docker/db-admin/vendor/` (`pip --no-index`).
 - **Grafana** — TLS cert generated on the build host and baked in (no `apk`).
 
-All three verified building with networking disabled.
+All three verified building with networking disabled. Build-time inputs that
+*would* need internet (the Claude binary, the Grafana AMP plugin, the RDS CA
+trust bundle) are staged by `scripts/mirror/` on a separate egress host and
+transferred as the `mirror/` directory — the build machine itself reaches
+only AWS service endpoints (`.claude/rules/offline-build.md`).
 
 ## Windows client rollout (offline)
 

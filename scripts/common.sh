@@ -63,6 +63,30 @@ require_vars() {
   fi
 }
 
+# require_mirrored_file PATH MIRROR-SCRIPT - abort with transfer instructions
+# when a pre-staged mirror artifact is missing. Build/deploy hosts have no
+# internet (.claude/rules/offline-build.md): artifacts are staged by the named
+# scripts/mirror/ script on the egress host and mirror/ is copied over.
+require_mirrored_file() {
+  if [ ! -f "$1" ]; then
+    echo "FATAL: missing mirrored artifact: $1" >&2
+    echo "       This host builds OFFLINE. Run $2 on the egress host," >&2
+    echo "       then copy the mirror/ directory to this machine." >&2
+    exit 1
+  fi
+}
+
+# verify_sha256 FILE EXPECTED-SHA256 - abort on digest mismatch (tamper /
+# truncation check for artifacts that crossed the egress->build transfer).
+verify_sha256() {
+  if ! echo "$2  $1" | sha256sum -c - >/dev/null 2>&1; then
+    echo "FATAL: sha256 mismatch for $1 (expected $2)." >&2
+    echo "       The artifact is corrupt or was tampered with in transfer -" >&2
+    echo "       re-stage it on the egress host and copy mirror/ again." >&2
+    exit 1
+  fi
+}
+
 # stack_output STACK-NAME OUTPUT-KEY
 stack_output() {
   aws cloudformation describe-stacks \

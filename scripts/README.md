@@ -5,13 +5,21 @@ in; scripts persist their outputs back into it via `set_env_var`, so there are
 no copy-paste steps between them). The deploy/operate scripts source
 `common.sh` for the shared helpers (`require_vars`, `stack_output`,
 `put_secret_and_roll`, `ensure_ecr_repo`, …); the standalone egress-host
-mirror tools (`mirror/mirror-claude-release.sh`,
-`mirror/mirror-python-deps.sh`) deliberately don't, so they run without a
-filled-in `deploy.env`. See `.claude/rules/scripts.md` for the house rules.
+mirror tools (`mirror/mirror-claude-release.sh`, `mirror/mirror-python-deps.sh`,
+`mirror/mirror-grafana-plugin.sh`, `mirror/mirror-rds-ca-bundle.sh`)
+deliberately don't, so they run without a filled-in `deploy.env`. See `.claude/rules/scripts.md` for the house rules.
 
 Layout: the **deploy/operate chain lives flat at this level** (these names
 appear throughout the runbooks — they are the repo's operator API);
 special-purpose tooling lives in `mirror/` and `diagnostics/`.
+
+**Two-host model** (`.claude/rules/offline-build.md`): the build/deploy
+machine has **no internet** — only AWS service endpoints. Everything external
+is fetched, verified, and staged by the `mirror/` tools on a **separate
+egress host**; the `mirror/` directory is then copied to the build machine,
+and the `build-and-push-*.sh` scripts consume it (failing closed with
+instructions when an artifact is missing — they never fetch and never invoke
+a mirror script).
 
 ## Core deploy chain (in run order)
 
@@ -23,10 +31,10 @@ for the full runbook.
 |---|---|
 | `import-enterprise-cert.sh` | Generate a CSR / import the signed enterprise cert into ACM for the ALB (runs without `deploy.env` for PKI workstations) |
 | `deploy-database.sh` | Stack 01: RDS PostgreSQL + the KMS CMK (created first so ECR repos are born encrypted) |
-| `mirror/mirror-claude-release.sh` | Download + GPG/checksum-verify a pinned Claude Code release (egress host) |
-| `build-and-push-image.sh` | Gateway image (expects the mirrored `claude` binary staged at `docker/claude`) |
-| `build-and-push-dbadmin.sh` | DB bootstrap/rotation Lambda image (no PyPI egress — vendored wheels) |
-| `build-and-push-grafana.sh` | Provisioned Grafana image (dashboard, AMP datasource + SigV4 plugin baked in — sha256-pinned download at build) |
+| `mirror/mirror-claude-release.sh` + `mirror/mirror-rds-ca-bundle.sh` | Egress host: verify + stage the pinned Claude Code release and the RDS CA trust bundle into `mirror/`, then copy `mirror/` to the build machine |
+| `build-and-push-image.sh` | Gateway image (stages `claude` from `mirror/<version>/`, re-verified against `CHECKSUMS.txt`, + `mirror/rds-ca-bundle.pem`) |
+| `build-and-push-dbadmin.sh` | DB bootstrap/rotation Lambda image (vendored wheels + `mirror/rds-ca-bundle.pem` — no egress) |
+| `build-and-push-grafana.sh` | Provisioned Grafana image (dashboard + AMP SigV4 plugin baked in from `mirror/grafana-plugins/`, re-verified against `mirror/grafana-plugin.pin`) |
 | `mirror/mirror-collector.sh` | Mirror the pinned ADOT collector image into ECR, digest-pinned |
 | `build-and-push-portal.sh` | Optional download-portal image |
 | `deploy-gateway.sh` | Stack 02: ALB + ECS gateway (+ telemetry sidecar on the 02 re-run) |
@@ -61,8 +69,9 @@ egress-capable host; everything downstream is offline.
 | Script | Mirrors |
 |---|---|
 | `mirror/mirror-claude-release.sh` | Claude Code native binaries (GPG-verified manifest, SHA-256 per platform) → `mirror/<version>/` (gitignored staging) |
-| `mirror/mirror-collector.sh` | ADOT collector image → your ECR, digest-pinned into `deploy.env` (`COLLECTOR_IMAGE`) |
-| `mirror/mirror-grafana-plugin.sh` | Grafana AMP datasource plugin (SigV4 auth; not bundled upstream) → `mirror/grafana-plugins/` (gitignored staging), version+sha256 pinned here; `build-and-push-grafana.sh` invokes it and bakes the artifact into the image |
+| `mirror/mirror-collector.sh` | ADOT collector image → your ECR, digest-pinned into `deploy.env` (`COLLECTOR_IMAGE`). The one mirror step needing **both** upstream-registry reach (`public.ecr.aws`) and AWS creds — run it where both are available |
+| `mirror/mirror-grafana-plugin.sh` | Grafana AMP datasource plugin (SigV4 auth; not bundled upstream) → `mirror/grafana-plugins/` (gitignored staging); version+sha256 pinned in `mirror/grafana-plugin.pin`, which `build-and-push-grafana.sh` re-verifies against when it bakes the transferred artifact into the image |
+| `mirror/mirror-rds-ca-bundle.sh` | RDS CA trust bundle (GovCloud truststore; `RDS_CA_BUNDLE_URL` overrides for commercial regions) → `mirror/rds-ca-bundle.pem`, baked into the gateway + db-admin images by their build scripts |
 | `mirror/mirror-python-deps.sh` | Python wheels: regenerates the **committed** `docker/portal/vendor/` and `docker/db-admin/vendor/` sets from each image's `requirements.txt`, and (`--tools`) stages operator-tooling wheels into `vendor/tools/` (gitignored) |
 
 Dependency-update flow: edit the pin in `docker/<image>/requirements.txt` →

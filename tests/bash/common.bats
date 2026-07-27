@@ -205,3 +205,36 @@ srcf() { run bash -c "DEPLOY_ENV_FILE='$ENVFILE' COMMON_SH_OPTIONAL_ENV=1 source
   src "SSL_CERT_FILE='$BATS_TEST_TMPDIR/sys.pem' combined_ca_bundle '$BATS_TEST_TMPDIR/out.pem' '$BATS_TEST_TMPDIR/missing.pem'"
   [ "$status" -eq 1 ]
 }
+
+# ---- require_mirrored_file / verify_sha256 (offline build hosts) ---------
+
+@test "require_mirrored_file: passes silently when the artifact exists" {
+  printf 'x' > "$BATS_TEST_TMPDIR/artifact.zip"
+  src "require_mirrored_file '$BATS_TEST_TMPDIR/artifact.zip' 'scripts/mirror/foo.sh' && echo staged"
+  [ "$status" -eq 0 ]
+  [ "$output" = "staged" ]
+}
+
+@test "require_mirrored_file: missing artifact fails naming the mirror script and the transfer step" {
+  src "require_mirrored_file '$BATS_TEST_TMPDIR/nope.zip' 'scripts/mirror/foo.sh'"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"scripts/mirror/foo.sh"* ]]
+  [[ "$output" == *"egress host"* ]]
+  [[ "$output" == *"copy the mirror/"* ]]
+}
+
+@test "verify_sha256: matching digest passes" {
+  printf 'payload' > "$BATS_TEST_TMPDIR/f"
+  good="$(sha256sum "$BATS_TEST_TMPDIR/f" | cut -d' ' -f1)"
+  src "verify_sha256 '$BATS_TEST_TMPDIR/f' '$good' && echo verified"
+  [ "$status" -eq 0 ]
+  [ "$output" = "verified" ]
+}
+
+@test "verify_sha256: mismatched digest fails closed with a re-stage hint" {
+  printf 'payload' > "$BATS_TEST_TMPDIR/f"
+  src "verify_sha256 '$BATS_TEST_TMPDIR/f' '0000000000000000000000000000000000000000000000000000000000000000'"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"sha256 mismatch"* ]]
+  [[ "$output" == *"egress host"* ]]
+}
