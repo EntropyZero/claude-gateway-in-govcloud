@@ -9,8 +9,8 @@ How Claude Code is installed, signed in, and configured on developer laptops.
   centrally, which settings must come from a managed source, and the GPO/MDM
   delivery of the login policy.
 
-The rollout model in one line: the Windows installer
-(`client/Install-ClaudeCode.ps1`, or the download-portal ZIP) installs the
+The rollout model in one line: the download portal's installer ZIP
+(`client/Install-ClaudeCode.ps1` under the hood) installs the
 binary and writes workstation config **entirely in user scope** — no admin
 rights — but **gateway login requires one admin-delivered managed setting**:
 Claude Code only offers the "Cloud gateway" login when it is present, by
@@ -48,8 +48,9 @@ Before installing and running Claude Code you need:
   precompiled native `claude.exe`; nothing is installed from npm, and
   `npm install`-based instructions you may find online do not apply here
   (updates are locked down and this network does not reach npm anyway).
-- **An Okta account** in the authorized group, with MFA enrolled — sign-in is
-  your normal corporate SSO in the browser.
+- **An Okta account** in the authorized group, with MFA enrolled — the same
+  corporate SSO sign-in gates both the download portal and Claude Code
+  itself.
 - **The managed login policy on your machine.** IT delivers it automatically
   by GPO/MDM; there is nothing for you to do. Without it Claude Code has no
   gateway login option at all — if `/login` shows no "Cloud gateway" screen,
@@ -61,10 +62,43 @@ Before installing and running Claude Code you need:
 
 ## 2. Installing
 
-Run `Install-ClaudeCode.ps1` directly from the software share, or download
-the ZIP from the portal and double-click the `install.cmd` inside it. No
-elevation prompt appears; the installer does exactly three things, all in
-your own profile:
+### 2.1 Downloading from the portal
+
+The installer comes from the **download portal**: open the portal link IT
+published (`https://<gateway-host>/portal`) in your browser and sign in with
+your normal Okta SSO. Before the download, the portal asks for two picks:
+
+1. **Cost center** — choose yours and press **Continue**. The page reloads
+   with the second dropdown (the portal is deliberately JavaScript-free, so
+   this is two quick page loads, not one dynamic form); a **(change)** link
+   takes you back if you picked the wrong one.
+2. **Team** — the list now shows only the teams belonging to the cost center
+   you picked. Choose the team you actually work in and press
+   **Download pre-configured installer**.
+
+**What the picks are for, and how to choose.** Your selections are baked into
+the installer and become labels on your usage telemetry
+(`cost_center=…`, `team=…`), so your Claude Code usage and spend are
+attributed to the right team and cost center on IT's dashboards. They are
+**attribution only** — they grant nothing and restrict nothing: no
+permissions, models, or limits depend on them. Choose the team you actually
+work in; if you don't know which cost center funds your work, ask your
+manager or IT rather than picking the closest match — a wrong pick means
+your usage shows up under someone else's budget. Both lists (and which teams
+belong to which cost center) are maintained by IT, so if yours is missing,
+tell IT — don't substitute another. Picked wrong? Download again with the
+right pair and re-run the installer: re-installing is harmless and simply
+overwrites the labels. Each download is recorded (who, which team/cost
+center, which version) in an audit log.
+
+### 2.2 Running the installer
+
+The ZIP contains `claude.exe`, the installer script
+(`Install-ClaudeCode.ps1`), an `install.cmd` with your portal picks and the
+deployment's standard options baked in, a `README.txt`, and — when the
+deployment bundles one — an `extra-ca.pem` trust file. Extract it and
+double-click **`install.cmd`**. No elevation prompt appears; the installer
+does exactly three things, all in your own profile:
 
 - **Binary** → `%USERPROFILE%\.local\bin\claude.exe`, verified (SHA-256
   against the release manifest + Anthropic Authenticode) on a local staging
@@ -80,7 +114,7 @@ your own profile:
   |---|---|---|
   | `DISABLE_UPDATES` = `1` | `-DisableUpdates` | Blocks all update paths (background checks **and** manual `claude update` / `claude install`) — keeps users on the distributed build |
   | `DISABLE_AUTOUPDATER` = `1` | `-DisableUpdates` | Background-check lockdown, defense in depth |
-  | `OTEL_RESOURCE_ATTRIBUTES` | `-Team` / `-CostCenter` | Telemetry grouping labels (`team=…,cost_center=…`); telemetry itself is enabled centrally by the gateway |
+  | `OTEL_RESOURCE_ATTRIBUTES` | `-Team` / `-CostCenter` (your portal picks, passed via `install.cmd`) | Telemetry grouping labels (`team=…,cost_center=…`); telemetry itself is enabled centrally by the gateway |
   | `NODE_EXTRA_CA_CERTS` | `-ExtraCaCertPath` | Enterprise CA trust for the gateway TLS chain (the precompiled binary honors it) |
 
 These are ordinary environment variables, honored from the user settings
@@ -133,8 +167,9 @@ unable to start (§5.6 has the recovery).
 - Web tools (WebFetch / WebSearch) and MCP tools are disabled centrally and
   cannot be re-enabled in your local settings.
 - Updates are disabled; you always run the IT-distributed build, so `claude
-  update` doing nothing is intentional. New versions arrive through the
-  normal software distribution channel.
+  update` doing nothing is intentional. New versions are published to the
+  download portal (the version is shown on its page) — when IT announces
+  one, download a fresh installer ZIP and run `install.cmd` again.
 - `/status` shows which configuration sources are active — useful to see
   what is centrally managed vs. your own `settings.json`.
 
