@@ -10,7 +10,7 @@ source "$(dirname "$0")/common.sh"
 
 require_vars VPC_ID PRIVATE_SUBNET_IDS GATEWAY_FQDN PORTAL_IMAGE \
              OKTA_ISSUER PORTAL_OKTA_CLIENT_ID ACCESS_GROUP \
-             PORTAL_TEAMS PORTAL_COST_CENTERS CLAUDE_VERSION
+             PORTAL_COST_CENTER_TEAMS CLAUDE_VERSION
 
 PORTAL_STACK_NAME="${PORTAL_STACK_NAME:-${NAME_PREFIX}-portal}"
 
@@ -35,8 +35,7 @@ aws cloudformation deploy \
       "PortalOktaClientId=${PORTAL_OKTA_CLIENT_ID}" \
       "AccessGroup=${ACCESS_GROUP}" \
       "PortalAdminGroup=${PORTAL_ADMIN_GROUP:-}" \
-      "PortalTeams=${PORTAL_TEAMS}" \
-      "PortalCostCenters=${PORTAL_COST_CENTERS}" \
+      "PortalCostCenterTeams=${PORTAL_COST_CENTER_TEAMS}" \
       "ReleaseVersion=${PORTAL_RELEASE_VERSION:-${CLAUDE_VERSION}}" \
       "BundleExtraCa=${PORTAL_BUNDLE_EXTRA_CA:-false}" \
       "DisableUpdates=${PORTAL_DISABLE_UPDATES:-true}" \

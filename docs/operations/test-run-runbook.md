@@ -506,7 +506,7 @@ against the manifest SHA-256 before upload.
 
 - ☐ **Portal login + download** (needs the Okta round-trip, so only after the
   Zscaler exemption lands): browse `https://<FQDN>/portal` → Okta SSO → pick
-  Team + Cost Center → the ZIP downloads → `install.cmd` inside it carries the
+  Cost Center, then one of its Teams → the ZIP downloads → `install.cmd` inside it carries the
   baked `-GatewayUrl` / `-Sha256` / `-Team` / `-CostCenter` / `-DisableUpdates`.
 - ☐ **Access denied path**: a user NOT in `<ACCESS_GROUP>` is denied, and the
   denial lands in the `/claude/<prefix>/portal-audit` log group.

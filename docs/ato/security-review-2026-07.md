@@ -116,6 +116,27 @@ own Lambda, with the service roll built into the rotation itself; the
 master secret became break-glass and its rotation affects no running
 task. See the C-batch header below for the item-by-item mapping.
 
+**Portal dropdowns are now dependent: Cost Center → its Teams (2026-07-27,
+committed NOT yet deployed).** The download portal's flat `PORTAL_TEAMS` +
+`PORTAL_COST_CENTERS` lists (any team could pair with any cost center) were
+replaced by a single cost-center→teams mapping,
+`PORTAL_COST_CENTER_TEAMS="CC-1000:platform|data,CC-2000:security"` (04 param
+`PortalCostCenterTeams`, env `PORTAL_COST_CENTER_TEAMS`; the old two
+params/vars are GONE — deploy.env must be updated, `require_vars` fails
+otherwise). The page stays zero-JavaScript (the CSP still has no
+`script-src`), so the dependent dropdown is a two-step server round-trip:
+stage 1 submits the cost center via GET back to `/portal`, stage 2 renders
+only that cost center's teams with the cost center as a hidden field.
+Server-side validation now rejects any team/cost-center **pair** not in the
+mapping (previously two independent list checks — strictly narrower now), a
+malformed mapping string fails the task at **boot** (ValueError, not an empty
+dropdown), and the reserved delimiters (`,` `:` `|`) are rejected inside
+values alongside the existing no-space/no-comma OTEL rules. Audit records are
+unchanged (same team/cost_center fields). Portal suite extended (mapping
+parse/boot-failure cases, wrong-pair rejection, both page stages); no ALB /
+IAM / secret / network changes. Deploy: bump + push the portal image, update
+deploy.env, re-run `deploy-download-portal.sh`.
+
 **Sonnet 5 added; model set is now THREE models (2026-07-27, committed NOT
 yet deployed).** Claude Sonnet 5 became available in GovCloud Bedrock and was
 enabled in the account (operator confirmation), so the served set changed from

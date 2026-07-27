@@ -229,7 +229,7 @@ all ride the same `put_secret_and_roll` helper (hidden prompt → mode-600
   and issue a device `user_code`.
 - Grafana: sign in at `https://${GATEWAY_FQDN}/grafana` via Okta.
 - Portal: sign in at `https://${GATEWAY_FQDN}/portal` via Okta and reach the
-  Team/Cost-Center page.
+  Cost-Center selection page.
 
 *Rollback / recovery:* If login breaks after the roll, re-run the same script
 and paste the **previous** secret value (Okta still honours it during the

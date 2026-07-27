@@ -224,6 +224,18 @@ the build-side re-verification. Runbooks updated (greenfield Phase 4,
 test-run §3, om-runbooks §4/§5/§6). Offline fail paths exercised locally;
 the real two-host mirror→transfer→build chain is exercised by the test run.
 
+**Changed 2026-07-27 (committed, NOT yet deployed): portal dropdowns are now
+dependent — Cost Center first, then that cost center's Teams.** The flat
+`PORTAL_TEAMS`/`PORTAL_COST_CENTERS` lists are REPLACED by one mapping:
+`PORTAL_COST_CENTER_TEAMS="CC-1000:platform|data,CC-2000:security"` (04 param
+`PortalCostCenterTeams`); update deploy.env — `deploy-download-portal.sh`
+`require_vars` fails on the old names. Zero-JS page → the dependency is a
+two-step GET round-trip (stage 1 picks the cost center, stage 2 renders only
+its teams + hidden cost_center). Validation now rejects wrong team/cost-center
+PAIRS; a malformed mapping fails the task at boot. Deploy: bump+push portal
+image, re-run `deploy-download-portal.sh`. Full entry in the security-review
+fix log.
+
 **Added 2026-07-25 (committed, NOT yet deployed): portal spend-cap admin page
 + set-spend-limit.sh TLS fix.** (1) `set-spend-limit.sh` failed TLS because
 `--cacert` REPLACES curl's trust store — one extra CA can't verify a chain

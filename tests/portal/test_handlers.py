@@ -51,13 +51,37 @@ def test_index_without_session_redirects_to_login(app, config, audit):
     assert status == 302 and headers["Location"] == "/portal/login"
 
 
-def test_index_with_session_renders_dropdowns(app, config, audit):
+def test_index_stage1_renders_cost_centers_only(app, config, audit):
     cookie = _session_cookie(app, config)
     status, _, _, body = run(app, config, StubOidc(config, {"keys": []}), audit,
                              "/portal", cookies={"portal_session": cookie})
     assert status == 200
-    assert b"platform" in body and b"CC-1000" in body
+    assert b"CC-1000" in body and b"CC-2000" in body
+    # No team dropdown yet - teams depend on the cost-center pick.
+    assert b'name="team"' not in body and b"platform" not in body
     assert b"dev@example.com" in body
+
+
+def test_index_stage2_renders_only_selected_cost_centers_teams(app, config, audit):
+    cookie = _session_cookie(app, config)
+    status, _, _, body = run(app, config, StubOidc(config, {"keys": []}), audit,
+                             "/portal?cost_center=CC-1000",
+                             cookies={"portal_session": cookie})
+    assert status == 200
+    # CC-1000's teams, and none of CC-2000's.
+    assert b"platform" in body and b"data" in body and b"security" not in body
+    # The download form carries the chosen cost center.
+    assert b'name="cost_center" value="CC-1000"' in body
+
+
+def test_index_stage2_invalid_cost_center_falls_back_to_stage1(app, config, audit):
+    cookie = _session_cookie(app, config)
+    status, _, _, body = run(app, config, StubOidc(config, {"keys": []}), audit,
+                             "/portal?cost_center=CC-9999",
+                             cookies={"portal_session": cookie})
+    assert status == 400
+    assert b"not an allowed value" in body
+    assert b'name="team"' not in body and b"CC-1000" in body
 
 
 # ------------------------------------------------------------- login
@@ -215,6 +239,22 @@ def test_download_invalid_selection_is_400_and_audited(app, config, audit, monke
     assert status == 400
     assert len(audit.records) == 1 and audit.records[0]["outcome"] == "denied"
     assert "invalid selection" in audit.records[0]["reason"]
+    # The error page returns to stage 2 (the cost center was valid) with only
+    # that cost center's teams.
+    assert b'name="cost_center" value="CC-1000"' in body
+    assert b"security" not in body
+
+
+def test_download_rejects_team_from_other_cost_center(app, config, audit, monkeypatch):
+    # A hand-crafted URL pairing a real team with the wrong cost center must
+    # fail exactly like an unknown team - the mapping is the authority.
+    _wire_s3(app, monkeypatch)
+    cookie = _session_cookie(app, config)
+    status, _, _, _ = run(app, config, StubOidc(config, {"keys": []}), audit,
+                          "/portal/download?team=security&cost_center=CC-1000",
+                          cookies={"portal_session": cookie})
+    assert status == 400
+    assert len(audit.records) == 1 and audit.records[0]["outcome"] == "denied"
 
 
 def test_download_streams_zip_and_audits_success(app, config, audit, monkeypatch):
@@ -253,7 +293,7 @@ def test_download_uses_last_xff_entry_for_source_ip(app, config, audit, monkeypa
     h = make_handler(app, config, StubOidc(config, {"keys": []}), audit,
                      cookies={"portal_session": cookie},
                      headers={"X-Forwarded-For": "198.51.100.9, 10.0.0.42"})
-    h.path = "/portal/download?team=data&cost_center=CC-2000"
+    h.path = "/portal/download?team=security&cost_center=CC-2000"
     h.do_GET()
     assert audit.records[0]["source_ip"] == "10.0.0.42"
 

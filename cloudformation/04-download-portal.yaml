@@ -89,21 +89,17 @@ Parameters:
       the gateway independently re-checks membership on every call - the portal
       holds no admin API key. Empty (default) disables the admin page entirely.
 
-  PortalTeams:
+  PortalCostCenterTeams:
     Type: String
-    Default: 'platform,data,security'
+    Default: 'CC-1000:platform|data,CC-2000:security'
     Description: >-
-      Comma-delimited Team dropdown options (placeholder examples - set your
-      real teams in deploy.env). Values must contain no spaces or commas (they
-      become OTEL_RESOURCE_ATTRIBUTES labels). Server-side validation rejects
-      anything not in this list.
-
-  PortalCostCenters:
-    Type: String
-    Default: 'CC-1000,CC-2000,CC-3000'
-    Description: >-
-      Comma-delimited Cost Center dropdown options (placeholder examples). Same
-      rules as PortalTeams.
+      Cost-center -> teams mapping driving the portal's two-step dropdowns
+      (pick a cost center, then one of ITS teams). Comma-delimited entries of
+      '<cost-center>:<team>|<team>' (placeholder examples - set your real
+      values in deploy.env). Values must contain no spaces, commas, colons or
+      pipes (they become OTEL_RESOURCE_ATTRIBUTES labels); a malformed mapping
+      fails the portal task at boot. Server-side validation rejects any
+      team/cost-center pair not in this mapping.
 
   ReleaseVersion:
     Type: String
@@ -505,10 +501,8 @@ Resources:
               Value: !Sub 'https://${GatewayFqdn}'
             - Name: ACCESS_GROUP
               Value: !Ref AccessGroup
-            - Name: PORTAL_TEAMS
-              Value: !Ref PortalTeams
-            - Name: PORTAL_COST_CENTERS
-              Value: !Ref PortalCostCenters
+            - Name: PORTAL_COST_CENTER_TEAMS
+              Value: !Ref PortalCostCenterTeams
             - Name: ARTIFACTS_BUCKET
               Value: !Ref ArtifactsBucket
             - Name: RELEASE_VERSION
