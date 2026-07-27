@@ -7,10 +7,12 @@ VECTORS - they zoom losslessly in the PDF, so keep referencing the .svg
 files, never pre-rasterized PNGs.
 
 Deps (not part of the test toolchain):  pip install weasyprint markdown
-Usage:  python3 docs/md-to-pdf.py [doc.md ...]
+Usage:  python3 docs/md-to-pdf.py [doc.md | user-manual ...]
         default: docs/ato/architecture.md docs/ato/network-access-controls.md
                  docs/operations/om-runbooks.md docs/operations/cost-controls.md
                  docs/ato/conops.md docs/ato/security-review-2026-07-resubmission.md
+                 + user-manual (Part I of client-config.md -> user-manual.pdf;
+                 the full client-config.md is deliberately not rendered)
 Output: docs/generated/<doc>.pdf. Committed alongside the sources -
         regenerate in the same change whenever a doc or diagram changes.
 """
@@ -55,11 +57,13 @@ a { color: #2563EB; text-decoration: none; }
 """
 
 
-def convert(src: pathlib.Path) -> pathlib.Path:
+def convert(src: pathlib.Path, text: str | None = None,
+            out_name: str | None = None) -> pathlib.Path:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / src.with_suffix(".pdf").name
+    out = OUT_DIR / ((out_name or src.stem) + ".pdf")
     body = markdown.markdown(
-        src.read_text(), extensions=["tables", "fenced_code", "toc"])
+        text if text is not None else src.read_text(),
+        extensions=["tables", "fenced_code", "toc"])
     doc = (f"<html><head><meta charset='utf-8'><style>{CSS}</style></head>"
            f"<body>{body}</body></html>")
     weasyprint.HTML(string=doc, base_url=str(src.parent)).write_pdf(str(out))
@@ -67,7 +71,33 @@ def convert(src: pathlib.Path) -> pathlib.Path:
     return out
 
 
+def user_manual() -> pathlib.Path:
+    """docs/generated/user-manual.pdf — Part I of client-config.md only,
+    extracted between its Part I / Part II H1s so the developer-facing manual
+    can be handed out without the administrator reference. The source stays
+    one file (no content duplication to drift); regenerate here whenever
+    client-config.md changes."""
+    src = REPO / "docs" / "operations" / "client-config.md"
+    text = src.read_text()
+    start = text.index("# Part I — Developer user manual")
+    end = text.index("# Part II — Administrators")
+    part1 = text[start:end].rstrip().removesuffix("---").rstrip()
+    note = ("\n\n---\n\n*This manual is Part I (§1–§5) of "
+            "`docs/operations/client-config.md`. References to §6–§9 point "
+            "at Part II — Administrators — in the full document; end users "
+            "normally don't need it (§8 self-service requires local admin).*\n")
+    return convert(src, text=part1 + note, out_name="user-manual")
+
+
 if __name__ == "__main__":
-    targets = [pathlib.Path(a).resolve() for a in sys.argv[1:]] or DEFAULT
-    for t in targets:
-        convert(t)
+    args = sys.argv[1:]
+    if not args:
+        for t in DEFAULT:
+            convert(t)
+        user_manual()
+    else:
+        for a in args:
+            if a == "user-manual":
+                user_manual()
+            else:
+                convert(pathlib.Path(a).resolve())
