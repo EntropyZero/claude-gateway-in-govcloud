@@ -134,22 +134,38 @@ Mechanics that matter:
 
 ### 3.1 Grafana — "Claude Code — Usage & Cost" dashboard
 
-Provisioned from `docker/grafana/dashboards/claude-code-usage.json`; all
-panels honor the `Team`, `Cost center`, and `Okta group` variables
-(populated from the `team` / `cost_center` / `user_groups` metric labels).
+Provisioned from `docker/grafana/dashboards/claude-code-usage.json`; every
+panel honors the `Team`, `Cost center`, and `Okta group` variables
+(populated from the `team` / `cost_center` / `user_groups` metric labels)
+except **Active users (24h)**, which is deliberately org-wide and
+fixed-window.
+
+The time-series live in two sections, one metric family per section pair:
+**"Cumulative (selected range)"** — running totals where every session seen
+in the range holds its final contribution to the right edge (a client going
+quiet does NOT drop off the graph; the right edge matches the stat tiles) —
+and **"Burn rate (trailing 1h)"** — activity in the trailing hour, which
+drains to zero within an hour of a session ending, by design. Read trends
+and "who is driving cost" from the cumulative section; read "who is spending
+right now" from the burn-rate section.
 
 | Panel | What it answers |
 |---|---|
-| **Cost / Tokens / Sessions / Active users** (stat row) | Totals for the selected range; sessions counted by distinct `session_id`, active users (24h) by distinct `user_email` |
-| **Cost by team / by cost center / by Okta group** | Hourly spend split along each org dimension — your first stop for "who is driving cost" |
-| **Tokens by model** | Model mix (e.g. Opus vs Sonnet) — a cheap lever when cost spikes |
-| **Tokens by type (input / output / cache)** | Cache effectiveness and prompt-heavy workloads |
+| **Cost / Tokens / Sessions / Active users** (stat row) | Totals for the selected range; sessions/active-users counted by distinct `session_id` / `user_email` **with spend activity** (`claude_code_cost_usage` samples) |
+| **Cost by team / by cost center / by Okta group** (both sections) | Spend split along each org dimension — cumulative for trends, burn rate for right-now |
+| **Tokens by model** (both sections) | Model mix (e.g. Opus vs Sonnet) — a cheap lever when cost spikes |
+| **Tokens by type** (both sections) | input / output / cache split: cache effectiveness and prompt-heavy workloads |
 | **Top users by cost (selected range)** | `topk(15)` table by `user_email` with team/cost-center — the candidates for a per-user cap |
-| **Lines of code changed / Commits created** | Output-side context so cost is read against delivered work |
+| **Lines of code changed / Commits created** (both sections) | Output-side context so cost is read against delivered work |
 
-Query note: the panels compute per-window deltas via **window functions**
-(`max_over_time - min_over_time`), not `increase()` — reworked after the
-`session.id` label fix (§6). Empty `Okta group` dropdown → the groups claim
+Query note: everything is **window functions**, not `increase()` — reworked
+after the `session.id` label fix (§6). Burn-rate panels are
+`max_over_time - min_over_time` over the trailing hour; the cumulative
+panels, tiles, and top-users table compute each session's in-range rise
+(counter peak minus its value at the range start when it was already
+running, else the full counter — so single-sample sessions count). Exact
+expressions and caveats: the 2026-07-26 dashboard entry in
+`om-runbooks.md`. Empty `Okta group` dropdown → the groups claim
 is not landing; see §1's prerequisite and §3.3.
 
 ### 3.2 Direct AMP queries — `scripts/diagnostics/amp-query.py`
@@ -312,7 +328,9 @@ inference fleet-wide, not just cost tracking.**
   one user then interleaved onto a single series as a sawtooth and
   `increase()` **drastically inflated** dashboard spend (observed live).
   `session.id` is now kept — each session is its own monotonic series — and
-  the dashboards were reworked to window functions accordingly. Committed;
+  the dashboards were reworked to window functions accordingly (twice: the
+  2026-07-24 rework, then the 2026-07-26 cumulative/burn-rate split so stale
+  clients hold their contribution — see §3.1). Committed;
   confirm the deployed sidecar carries it after the next
   `deploy-gateway.sh` run **[NEEDS TEST-RUN CONFIRMATION]**. Treat
   pre-fix dashboard history as unreliable; Postgres `spend` was and remains

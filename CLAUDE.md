@@ -165,6 +165,26 @@ needs live: Okta login on 13.1 (expect one-time re-login for all users) and
 the Fargate task-role credential path from the plugin subprocess. Full entry
 in the security-review fix log.
 
+**Added 2026-07-26 (committed, NOT yet deployed): dashboard cumulative
+panels — stale clients no longer fall off the graphs; Sessions/Active-users
+tiles were silently broken.** The trailing-1h time-series drained a session's
+contribution within an hour of the client going quiet (operator-reported
+trend confusion). The dashboard now has a **Cumulative (selected range)**
+section (per-session in-range rise via
+`max_over_time[$__range] - (last_over_time[1h] offset $__range or 0)`;
+sessions freeze at their final value and hold to the right edge; right edge
+== tiles) plus the old panels retitled **Burn rate (trailing 1h)**; tiles run
+as instant queries with the same accounting. Validation against a real
+Prometheus (synthetic multi-session TSDB, 22 assertions) also exposed that
+the Sessions/Active-users tiles' `{__name__=~"claude_code_.+"}` selector
+ERRORS whenever one session emits two attribute-less counters (range
+functions drop the metric name → "vector cannot contain metrics with the
+same labelset") — tiles now count `claude_code_cost_usage` only, and
+`amp-query.py`'s identical probe now uses the series endpoint. Full entry +
+caveats (range-start-spanning sessions, >1h export gaps): the 2026-07-26
+note in `docs/operations/om-runbooks.md`. Deploy: bump `GRAFANA_IMAGE_TAG`,
+rebuild+push, re-run 03; live checks are listed in the runbook entry.
+
 **Fixed 2026-07-26 (committed): build scripts fetched from the internet on
 the OFFLINE build machine.** The real build/deploy host reaches only AWS
 service endpoints (new rule: `.claude/rules/offline-build.md`) — but

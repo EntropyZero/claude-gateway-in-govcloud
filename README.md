@@ -543,9 +543,10 @@ tweaks (users re-materialize on next login; the dashboard and datasource
 are baked into the image).
 
 The provisioned "Claude Code — Usage & Cost" dashboard has
-cost/tokens/sessions/active-users stats, cost by team, cost center, and
-Okta group, tokens by model and type, top users by cost, and
-lines-of-code/commit panels. The ADOT collector (required) is mirrored into
+cost/tokens/sessions/active-users stats, top users by cost, and — in two
+sections, cumulative-over-range (sessions hold their contribution to the
+right edge) and trailing-1h burn rate — cost by team, cost center, and
+Okta group, tokens by model and type, and lines-of-code/commit panels. The ADOT collector (required) is mirrored into
 ECR and digest-pinned by `scripts/mirror/mirror-collector.sh` (sets
 `COLLECTOR_IMAGE`); mirror the Grafana base (`GRAFANA_BASE_IMAGE`) too. Amazon Managed Grafana exists in GovCloud but has no
 CloudFormation support, so the stack self-hosts Grafana OSS on the existing
