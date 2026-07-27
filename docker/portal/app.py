@@ -8,8 +8,9 @@ A small, dependency-light HTTP service (stdlib + boto3 only) that:
     signature against the issuer's JWKS in pure Python (no crypto dependency),
   * authorizes on Okta GROUP membership (a value the ALB's authenticate-oidc
     cannot evaluate - which is why auth lives in the app, not the listener),
-  * renders one server-side page with Team and Cost Center dropdowns whose
-    option lists come from deployment config, and
+  * renders a two-step server-side page - pick a Cost Center, then a Team
+    belonging to it - from a cost-center->teams mapping in deployment config
+    (no JavaScript: the dependent dropdown is a GET round-trip), and
   * streams a single ZIP per download - claude.exe (stored, streamed from the
     CMK-encrypted artifacts bucket), the unmodified Install-ClaudeCode.ps1, a
     generated install.cmd with the selected options baked in, a README, and an
@@ -88,9 +89,18 @@ class Config:
         # lifetime stays in seconds (short, internal).
         self.session_ttl_seconds = int(env.get("SESSION_TTL_HOURS", "8")) * 3600
         self.transaction_ttl_seconds = int(env.get("TRANSACTION_TTL_SECONDS", "600"))
-        # Dropdown option lists (comma-delimited; whitespace trimmed).
-        self.teams = _split_list(env.get("PORTAL_TEAMS", ""))
-        self.cost_centers = _split_list(env.get("PORTAL_COST_CENTERS", ""))
+        # Cost-center -> teams mapping driving the two-step dropdown flow
+        # (pick a cost center, then a team belonging to it). Format:
+        #   "CC-1000:platform|data,CC-2000:security"
+        # Malformed OR empty input is a boot failure, not a silently empty
+        # dropdown that rejects every download (same fail-fast posture as
+        # ACCESS_GROUP above).
+        self.cost_center_teams = _parse_cost_center_teams(
+            env.get("PORTAL_COST_CENTER_TEAMS", ""))
+        if not self.cost_center_teams:
+            raise ValueError("PORTAL_COST_CENTER_TEAMS must map at least one "
+                             "cost center to its teams")
+        self.cost_centers = list(self.cost_center_teams)
         # Artifacts + release.
         self.artifacts_bucket = env["ARTIFACTS_BUCKET"]
         self.release_version = env["RELEASE_VERSION"]
@@ -110,6 +120,35 @@ class Config:
 
 def _split_list(raw):
     return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def _parse_cost_center_teams(raw):
+    """Parse 'CC-1000:platform|data,CC-2000:security' into an ordered
+    {cost_center: [teams]} dict. Every token must survive _clean_token (the
+    installer's own argument rules) and the delimiters (: | ,) are reserved,
+    so a malformed entry raises ValueError at boot rather than rendering a
+    broken or empty dropdown."""
+    mapping = {}
+    for entry in _split_list(raw):
+        cc, sep, teams_raw = entry.partition(":")
+        cc = cc.strip()
+        teams = [t.strip() for t in teams_raw.split("|") if t.strip()]
+        if not sep or not cc or not teams:
+            raise ValueError(
+                "PORTAL_COST_CENTER_TEAMS entry %r must look like "
+                "'<cost-center>:<team>|<team>'" % entry)
+        for token in [cc] + teams:
+            if not _clean_token(token) or ":" in token or "|" in token:
+                raise ValueError(
+                    "PORTAL_COST_CENTER_TEAMS value %r must have no spaces, "
+                    "commas, colons or pipes" % token)
+        if cc in mapping:
+            raise ValueError("PORTAL_COST_CENTER_TEAMS lists cost center %r twice" % cc)
+        if len(set(teams)) != len(teams):
+            raise ValueError(
+                "PORTAL_COST_CENTER_TEAMS lists a team twice under %r" % cc)
+        mapping[cc] = teams
+    return mapping
 
 
 # ---------------------------------------------------------------- base64url
@@ -421,17 +460,30 @@ def _clean_token(value):
     return value != "" and not any(c.isspace() for c in value) and "," not in value
 
 
+def validate_cost_center(cost_center, config):
+    """Reject anything not a configured cost center (and, defensively,
+    anything with whitespace/commas). Returns cost_center or raises."""
+    if cost_center is None:
+        raise SelectionError("cost_center is required")
+    if not _clean_token(cost_center):
+        raise SelectionError("cost_center must not contain spaces or commas")
+    if cost_center not in config.cost_center_teams:
+        raise SelectionError("cost_center %r is not an allowed value" % cost_center)
+    return cost_center
+
+
 def validate_selection(team, cost_center, config):
-    """Reject anything not in the configured lists (and, defensively, anything
-    with whitespace/commas). Returns (team, cost_center) or raises."""
+    """Reject anything not in the configured mapping - the team must belong
+    to the selected cost center, not merely appear somewhere in the config.
+    Returns (team, cost_center) or raises."""
     if team is None or cost_center is None:
         raise SelectionError("both team and cost_center are required")
-    if not _clean_token(team) or not _clean_token(cost_center):
-        raise SelectionError("team/cost_center must not contain spaces or commas")
-    if team not in config.teams:
-        raise SelectionError("team %r is not an allowed value" % team)
-    if cost_center not in config.cost_centers:
-        raise SelectionError("cost_center %r is not an allowed value" % cost_center)
+    cost_center = validate_cost_center(cost_center, config)
+    if not _clean_token(team):
+        raise SelectionError("team must not contain spaces or commas")
+    if team not in config.cost_center_teams[cost_center]:
+        raise SelectionError("team %r is not an allowed value for cost center %r"
+                             % (team, cost_center))
     return team, cost_center
 
 
@@ -911,6 +963,10 @@ def release_sha256(config):
 # ---------------------------------------------------------------- HTML
 
 
+# The Team dropdown depends on the Cost Center pick, and this page ships no
+# JavaScript (the CSP has no script-src, and that stays true) - so the
+# dependency is a two-step server round-trip: stage 1 submits the cost center
+# back to /portal via GET, stage 2 renders only that cost center's teams.
 _PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -922,32 +978,50 @@ _PAGE = """<!doctype html>
  button{{margin-top:1.5rem;background:#0b5;color:#fff;border:0;border-radius:.35rem;cursor:pointer}}
  .who{{color:#555;font-size:.85rem;margin-bottom:1.5rem}}
  .err{{background:#fee;border:1px solid #e99;padding:.75rem;border-radius:.35rem}}
+ .cc{{margin:1rem 0 0}} .cc a{{font-size:.85rem;font-weight:400;margin-left:.5rem}}
 </style></head><body>
 <h1>Claude Code installer</h1>
 <p class="who">Signed in as {email}. Version {version}.{admin_link}</p>
 {error}
-<form method="GET" action="/portal/download">
- <label for="team">Team</label>
- <select id="team" name="team" required>{teams}</select>
+{form}
+</body></html>"""
+
+_STAGE1_FORM = """<form method="GET" action="/portal">
  <label for="cost_center">Cost center</label>
  <select id="cost_center" name="cost_center" required>{cost_centers}</select>
+ <button type="submit">Continue</button>
+</form>"""
+
+_STAGE2_FORM = """<p class="cc"><strong>Cost center:</strong> {cost_center}\
+ <a href="/portal">(change)</a></p>
+<form method="GET" action="/portal/download">
+ <input type="hidden" name="cost_center" value="{cost_center}">
+ <label for="team">Team</label>
+ <select id="team" name="team" required>{teams}</select>
  <button type="submit">Download pre-configured installer</button>
-</form>
-</body></html>"""
+</form>"""
 
 
 def _options(values):
     return "".join('<option value="%s">%s</option>' % (html.escape(v), html.escape(v)) for v in values)
 
 
-def render_page(config, email, error=None, is_admin=False):
+def render_page(config, email, error=None, is_admin=False, cost_center=None):
+    """Stage 1 (no cost_center): pick a cost center. Stage 2 (cost_center is a
+    validated configured value): pick one of ITS teams and download."""
+    if cost_center is None:
+        form = _STAGE1_FORM.format(cost_centers=_options(config.cost_centers))
+    else:
+        form = _STAGE2_FORM.format(
+            cost_center=html.escape(cost_center),
+            teams=_options(config.cost_center_teams[cost_center]),
+        )
     err_html = '<p class="err">%s</p>' % html.escape(error) if error else ""
     return _PAGE.format(
         email=html.escape(email),
         version=html.escape(config.release_version),
         error=err_html,
-        teams=_options(config.teams),
-        cost_centers=_options(config.cost_centers),
+        form=form,
         admin_link=' <a href="/portal/admin">Spend-cap admin</a>' if is_admin else "",
     )
 
@@ -1240,7 +1314,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/portal/admin/audit":
                 return self._handle_admin_audit()
             if path == "/portal":
-                return self._handle_index()
+                return self._handle_index(urllib.parse.parse_qs(parsed.query))
             self._send_html(404, "<h1>Not found</h1>")
         except Exception:  # last-resort guard; never leak a stack trace
             log.exception("unhandled error on %s", self.path)
@@ -1278,13 +1352,25 @@ class PortalHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _handle_index(self):
+    def _handle_index(self, query=None):
         session = self._session()
         if not session:
             return self._redirect("/portal/login")
         is_admin = bool(self.config.admin_groups) and is_authorized(
             session.get("groups", []), self.config.admin_groups)
-        self._send_html(200, render_page(self.config, session.get("email", ""), is_admin=is_admin))
+        # Stage 2 when a cost center was submitted (and is valid); a bad value
+        # falls back to stage 1 with the error shown.
+        cost_center = (query or {}).get("cost_center", [None])[0]
+        error = None
+        if cost_center is not None:
+            try:
+                cost_center = validate_cost_center(cost_center, self.config)
+            except SelectionError as exc:
+                cost_center, error = None, str(exc)
+        self._send_html(200 if error is None else 400,
+                        render_page(self.config, session.get("email", ""),
+                                    error=error, is_admin=is_admin,
+                                    cost_center=cost_center))
 
     def _handle_login(self):
         state = secrets.token_urlsafe(24)
@@ -1370,8 +1456,14 @@ class PortalHandler(BaseHTTPRequestHandler):
                                team=team, cost_center=cost_center)
             is_admin = bool(self.config.admin_groups) and is_authorized(
                 groups, self.config.admin_groups)
+            # Back to stage 2 if the cost center itself was valid, else stage 1.
+            try:
+                page_cc = validate_cost_center(cost_center, self.config)
+            except SelectionError:
+                page_cc = None
             return self._send_html(400, render_page(self.config, email, error=str(exc),
-                                                    is_admin=is_admin))
+                                                    is_admin=is_admin,
+                                                    cost_center=page_cc))
 
         sha256 = release_sha256(self.config)
         install_cmd = build_install_cmd(

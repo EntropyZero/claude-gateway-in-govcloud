@@ -453,7 +453,7 @@ the one-time elevated HKLM seed in [`test-run-runbook.md`](test-run-runbook.md)
   *before* the pin.
 - ☐ **Distribute the installer** — either path:
   - **Portal** (Phase 9): developers browse `https://<GATEWAY_FQDN>/portal`
-    → Okta SSO → pick Team + Cost Center → ZIP with a pre-baked
+    → Okta SSO → pick Cost Center, then one of its Teams → ZIP with a pre-baked
     `install.cmd` (`-GatewayUrl` / `-Sha256` / `-Team` / `-CostCenter` /
     `-DisableUpdates`).
   - **Direct** (file share): stage `claude.exe` + `CHECKSUMS.txt` from the

@@ -73,7 +73,35 @@ def test_access_group_empty_fails_fast(app, env):
         app.Config(env)
 
 
-def test_validate_selection_accepts_configured_values(app, config):
+def test_cost_center_teams_parses_mapping_ordered(app, config):
+    assert config.cost_center_teams == {
+        "CC-1000": ["platform", "data"], "CC-2000": ["security"]}
+    assert config.cost_centers == ["CC-1000", "CC-2000"]
+
+
+def test_cost_center_teams_trims_whitespace(app, env):
+    env["PORTAL_COST_CENTER_TEAMS"] = " CC-1000 : platform | data , CC-2000:security "
+    assert app.Config(env).cost_center_teams == {
+        "CC-1000": ["platform", "data"], "CC-2000": ["security"]}
+
+
+@pytest.mark.parametrize("raw", [
+    "",                              # empty mapping = dead portal, fail fast
+    "CC-1000",                       # no teams separator
+    "CC-1000:",                      # empty team list
+    ":platform",                     # empty cost center
+    "CC-1000:plat form",             # space inside a team
+    "CC-1000:a:b",                   # reserved delimiter inside a team
+    "CC-1000:platform,CC-1000:data", # duplicate cost center
+    "CC-1000:platform|platform",     # duplicate team within a cost center
+])
+def test_cost_center_teams_malformed_fails_boot(app, env, raw):
+    env["PORTAL_COST_CENTER_TEAMS"] = raw
+    with pytest.raises(ValueError, match="PORTAL_COST_CENTER_TEAMS"):
+        app.Config(env)
+
+
+def test_validate_selection_accepts_configured_pair(app, config):
     team, cc = app.validate_selection("platform", "CC-1000", config)
     assert (team, cc) == ("platform", "CC-1000")
 
@@ -81,6 +109,13 @@ def test_validate_selection_accepts_configured_values(app, config):
 def test_validate_selection_rejects_unlisted_team(app, config):
     with pytest.raises(app.SelectionError, match="team"):
         app.validate_selection("marketing", "CC-1000", config)
+
+
+def test_validate_selection_rejects_team_of_other_cost_center(app, config):
+    # 'security' is a real team - but it belongs to CC-2000, not CC-1000. The
+    # pairing is what's validated, not membership in a global list.
+    with pytest.raises(app.SelectionError, match="not an allowed value for"):
+        app.validate_selection("security", "CC-1000", config)
 
 
 def test_validate_selection_rejects_unlisted_cost_center(app, config):
@@ -94,9 +129,20 @@ def test_validate_selection_rejects_missing(app, config):
 
 
 def test_validate_selection_rejects_injection_chars(app, config):
-    # Even if someone slipped a comma/space value into the configured list, the
-    # token cleanliness check (mirrors the installer's ValidatePattern) rejects
-    # it. Simulate by pointing config at a dirty list.
-    config.teams = ["bad team"]
+    # Even if someone slipped a comma/space value into the configured mapping,
+    # the token cleanliness check (mirrors the installer's ValidatePattern)
+    # rejects it. Simulate by pointing config at a dirty mapping.
+    config.cost_center_teams = {"CC-1000": ["bad team"]}
     with pytest.raises(app.SelectionError, match="spaces or commas"):
         app.validate_selection("bad team", "CC-1000", config)
+
+
+def test_validate_cost_center_accepts_configured_value(app, config):
+    assert app.validate_cost_center("CC-2000", config) == "CC-2000"
+
+
+def test_validate_cost_center_rejects_unlisted_and_missing(app, config):
+    with pytest.raises(app.SelectionError):
+        app.validate_cost_center("CC-9999", config)
+    with pytest.raises(app.SelectionError):
+        app.validate_cost_center(None, config)

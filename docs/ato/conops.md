@@ -157,9 +157,10 @@ holds the RDS master credential.
   domain," with per-group policy as an available, unexercised extension.
 - Obtain the installer either from an operator/MDM push or **self-service from
   the download portal** (when stack `04` is deployed): they browse to
-  `/portal` on the gateway FQDN, authenticate through Okta, pick their **Team**
-  and **Cost Center** from configured dropdowns, and receive a single ZIP whose
-  generated `install.cmd` bakes those choices in (§5.1;
+  `/portal` on the gateway FQDN, authenticate through Okta, pick their **Cost
+  Center** and then a **Team belonging to it** (a configured
+  cost-center→teams mapping drives the two-step dropdowns), and receive a
+  single ZIP whose generated `install.cmd` bakes those choices in (§5.1;
   `cloudformation/04-download-portal.yaml`; `docker/portal/app.py`).
 
 ### 3.2 Platform operators
@@ -274,7 +275,9 @@ flow through the fielded system and cites the file that implements it.
    - **Self-service (portal, when stack `04` is deployed).** The developer
      browses to `https://<gateway-fqdn>/portal`, signs in through Okta
      (authorization-code flow with PKCE, enforced `AccessGroup` membership —
-     §3.6), selects **Team** and **Cost Center**, and downloads a single ZIP:
+     §3.6), selects a **Cost Center** and then one of **its Teams** (two-step
+     dropdowns from the configured cost-center→teams mapping), and downloads a
+     single ZIP:
      the verified `claude.exe`, `Install-ClaudeCode.ps1`, and a generated
      `install.cmd` that invokes the installer with `-GatewayUrl`, `-Sha256`,
      `-Team`, `-CostCenter` (and update lockdown) already baked in — one
