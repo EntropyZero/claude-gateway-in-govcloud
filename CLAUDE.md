@@ -58,6 +58,21 @@ telemetry/audit processing is down; a **missing-telemetry alarm** (03,
 `AWS/Usage ResourceCount`/`IngestionRate` on the workspace) is the end-to-end
 backstop that container health cannot provide.
 
+**Added 2026-07-27 (committed): the ATO RESUBMISSION assessment —
+`docs/ato/security-review-2026-07-resubmission.md` (in the PDF set).**
+Point-in-time multi-agent review of the whole posture at `a3ba69f` (8
+dimensions; every finding adversarially verified with web-checked service
+semantics before inclusion). Result: 0 critical / 0 high / **5 medium** /
+20 low / 2 info. The mediums are four monitoring gaps (no RDS alarm for the
+fail-closed spend store; no automated `failed_translations` detection; the
+Firehose→S3 activity-archive leg unmonitored; portal audit writes fail open
+unalarmed) plus `mirror-collector.sh` missing the arch pin/assert its sibling
+has. Doc drift found+fixed in the same change: stack-04 portal SG added to
+`network-access-controls.md`'s tables; the two spend-admin keys added to
+om-runbooks §7's secrets inventory. Remediation sequence in that doc's §6;
+the living review doc stays the fix log — new findings live in the
+resubmission doc, not the A–E batches.
+
 **Fixed 2026-07-24 (committed, NOT yet deployed): client usage metrics were
 silently dropped at prometheus translation — delta temporality.** With the
 sidecar finally reachable, `otelcol_*` landed in AMP but zero `claude_code_*`
@@ -346,6 +361,7 @@ entry in the security-review fix log.
 | `docs/ato/conops.md` | ATO Concept of Operations: users/roles, operational scenarios, modes, accepted risks (references architecture, doesn't duplicate) |
 | `docs/ato/diagrams/generate.py` | **source of the diagrams** — edit the script, re-run, commit both |
 | `docs/ato/security-review-2026-07.md` | finding-by-finding status; the source of truth for what's done |
+| `docs/ato/security-review-2026-07-resubmission.md` | point-in-time assessment for the ATO resubmission (methodology, accepted risks, confirmed findings, verification ledger); in the PDF set |
 | `docs/operations/greenfield-deployment.md` | **the reusable deploy runbook**: empty VPC → client authenticated, incl. the org-prerequisite request phase |
 | `docs/operations/test-run-runbook.md` | the dated first test-run log (2026-07) — historical checklist the greenfield runbook was distilled from |
 | `docs/operations/om-runbooks.md` | steady-state O&M runbooks (cert/secret rotation, CA refresh, updates, backup/restore, alarms, teardown) |

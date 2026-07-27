@@ -46,14 +46,15 @@ Reading tips:
 
 | SG | Stack | Attached to | Ingress | Egress |
 |---|---|---|---|---|
-| `alb` | 02 | internal ALB | 443 from `ClientIngressCidr` | 8080→`svc`; 3000→`grafana` (03) |
+| `alb` | 02 | internal ALB | 443 from `ClientIngressCidr`; 443 from `portal` (04, only when the admin page is enabled — the portal task is then an ALB *client*) | 8080→`svc`; 3000→`grafana` (03); 8080→`portal` (04) |
 | `svc` | 02 | gateway tasks (incl. the co-resident **ADOT collector sidecar**) | 8080 from `alb` | 443 anywhere; proxy port (optional); 443→`amp-endpoint` (03) |
 | `db-client` | 01 | gateway tasks, db-admin Lambdas | — | 5432→`db` |
 | `db` | 01 | RDS instance | 5432 from `db-client` | — |
 | `db-admin` | 02 | bootstrap + rotation Lambdas | — | 443 anywhere |
-| `endpoint` | 02 | all 02 interface endpoints | 443 from `svc`, `db-admin`, `grafana` (03), admin host (param) | — |
+| `endpoint` | 02 | all 02 interface endpoints | 443 from `svc`, `db-admin`, `grafana` (03), `portal` (04, when 02 created the shared endpoints), admin host (param) | — |
 | `grafana` | 03 | Grafana task | 3000 from `alb` | 443 anywhere |
 | `amp-endpoint` | 03 | aps-workspaces endpoint | 443 from `svc` (gateway sidecar), `grafana` | — |
+| `portal` | 04 | download-portal tasks | 8080 from `alb` | 443 anywhere (Okta, S3, CloudWatch); proxy port (optional) |
 
 There is **no `collector` security group**: the ADOT collector is a
 co-resident sidecar inside the gateway task, reached over loopback
@@ -62,13 +63,16 @@ SG rule (this eliminated the former plaintext gateway→collector hop — securi
 review C2, resolved 2026-07-22). The sidecar's remote-write to AMP rides the
 gateway `svc` SG.
 
-Cross-stack rule writers (03 and the admin-host parameter modify imported 02
-SGs as separate `SecurityGroup{In,E}gress` resources): `AlbToGrafanaEgress`,
+Cross-stack rule writers (03, 04 and the admin-host parameter modify imported
+02 SGs as separate `SecurityGroup{In,E}gress` resources): `AlbToGrafanaEgress`,
 `GrafanaToEndpointsIngress`, `GatewayToAmpEndpointEgress` (the sidecar's
 remote-write path, which replaced the former `GatewayToCollectorEgress` /
-`CollectorToEndpointsIngress`), `AdminToEndpointsIngress`. Deploy order (02
-before 03) and a matching `CREATE_SUPPORTING_ENDPOINTS` across both deploys
-are what make these land correctly.
+`CollectorToEndpointsIngress`), `AdminToEndpointsIngress`; from 04:
+`AlbToPortalEgress`, `PortalToAlbIngress` (only when the spend-cap admin page
+is enabled), `PortalToEndpointsIngress` (only when 02 created the shared
+endpoints). Deploy order (02 before 03/04) and a matching
+`CREATE_SUPPORTING_ENDPOINTS` across the deploys are what make these land
+correctly.
 
 ## 3. The layers — what each control stops that the others can't
 
