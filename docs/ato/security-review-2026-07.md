@@ -7,7 +7,8 @@
 
 **What this is.** A client-configurable, code-driven deployment of Anthropic's
 self-hosted Claude apps gateway for Claude Code in AWS GovCloud `us-gov-west-1`,
-Bedrock inference (Opus 4.8 + Sonnet 4.5), Okta OIDC, offline Windows rollout,
+Bedrock inference (Opus 4.8 + Sonnet 5 + Sonnet 4.5 in the haiku role), Okta
+OIDC, offline Windows rollout,
 and an optional usage/cost observability stack. Full architecture and rationale
 are in `README.md` (Design decisions, VPC endpoints, Usage & cost observability
 sections). Repo: `github.com/EntropyZero/claude-gateway-in-govcloud`, branch
@@ -114,6 +115,33 @@ least-privilege application user whose secret is rotated by the stack's
 own Lambda, with the service roll built into the rotation itself; the
 master secret became break-glass and its rotation affects no running
 task. See the C-batch header below for the item-by-item mapping.
+
+**Sonnet 5 added; model set is now THREE models (2026-07-27, committed NOT
+yet deployed).** Claude Sonnet 5 became available in GovCloud Bedrock and was
+enabled in the account (operator confirmation), so the served set changed from
+two models to three roles: Opus 4.8 (`claude-opus-4-8`, unchanged, still the
+client default), **Sonnet 5** (`claude-sonnet-5` — `SonnetModelId` /
+`SonnetBedrockModelId` defaults now `us-gov.anthropic.claude-sonnet-5`), and
+Sonnet 4.5 moved to the small/fast "haiku" role via new parameters
+`HaikuModelId` / `HaikuBedrockModelId` (deploy.env `HAIKU_MODEL_ID` /
+`HAIKU_BEDROCK_MODEL_ID`); the managed catch-all's
+`env.ANTHROPIC_DEFAULT_HAIKU_MODEL` now renders the `HaikuModelId` parameter
+(deploy-time `!Sub`; was the Sonnet ID). `availableModels` carries all three; the task-role IAM policy and
+the bedrock-runtime endpoint policy each enumerate the three inference
+profiles + three derived foundation models (the exact-model scoping posture is
+unchanged, just widened to the third parameter pair). `deploy-gateway.sh`
+gained a fail-closed duplicate-ID guard: a pre-Sonnet-5 `deploy.env` still
+carrying `SONNET_MODEL_ID=claude-sonnet-4-5` would otherwise collide with the
+new haiku default and render two identical gateway `models:` entries.
+Structural tests updated (three-entry allowlist, haiku override ∈ allowlist,
+new gates: `models:` has exactly the three role entries; both Bedrock scoping
+layers enumerate all three). No new `cli:` keys were introduced, so no
+throwaway-Postgres boot check was needed. **[NEEDS DEPLOY CONFIRMATION]:**
+the Sonnet 5 profile ID `us-gov.anthropic.claude-sonnet-5` is pattern-derived
+(un-dated format, same as Opus 4.8), NOT yet read off the Bedrock console —
+run `aws bedrock list-inference-profiles --region us-gov-west-1` before the
+02 re-run, then confirm `/model` shows exactly the three IDs and a background
+(small-model) call resolves to Sonnet 4.5.
 
 **Grafana 11.5.1 → 13.1.1 (2026-07-25, committed NOT yet deployed).** 11.x
 left security support 2026-06-15 (11.5.1 also predates the 11.5.3/11.5.5 CVE
@@ -695,8 +723,9 @@ Fix (committed, not yet deployed):
 - `GATEWAY_MANAGED_B64` is now **always** rendered — it previously vanished
   whenever `ManagedCliGroups` was unset, which would have left the allowlist
   unpushed on any deployment not using Okta group lockdown.
-- Policy 0 carries `cli.availableModels: [<OpusModelId>, <SonnetModelId>]` +
-  `cli.enforceAvailableModels: true` and has **no `match:`**. `match` is
+- Policy 0 carries `cli.availableModels: [<OpusModelId>, <SonnetModelId>,
+  <HaikuModelId>]` (the third ID joined the list with the 2026-07 Sonnet 5
+  rollout) + `cli.enforceAvailableModels: true` and has **no `match:`**. `match` is
   optional (verified), so this applies to every authenticated user and requires
   **no Okta groups claim** — deliberately decoupled from `MANAGED_CLI_GROUPS`,
   since a model allowlist must not depend on group membership.
@@ -751,7 +780,8 @@ in`. Moot for this deployment (Claude Code CLI only), but it would matter if
 Claude Desktop ever came into scope.
 
 **Needs live confirmation:** (a) that after the `02` re-run the picker actually
-shows only the two models end-to-end; (b) background/small-fast model behavior.
+shows only the three configured models end-to-end; (b) background/small-fast
+model behavior.
 On (b) the evidence is deliberately left **open**: subagent, plan-mode and
 explicit-selection paths all degrade to a permitted model (warn, not error), but
 `getSmallFastModel()` has a branch that returns the default Haiku model
@@ -764,7 +794,8 @@ what enables the unchecked branch in the first place. Resolve by observation on
 the test run. **Update 2026-07-24: resolved by construction — the mitigation is
 now applied (via the current var name `ANTHROPIC_DEFAULT_HAIKU_MODEL`) after
 binary verification showed the unchecked branch returns the configured value
-verbatim, so pinning it to the served Sonnet ID makes the branch harmless. See
+verbatim, so pinning it to a gateway-served model ID (now `<HaikuModelId>` —
+Sonnet 4.5 in the haiku role) makes the branch harmless. See
 the "Managed policy additions" entry below.**
 
 **Managed policy additions: web/MCP tool denies + small/fast-model override
@@ -788,7 +819,10 @@ confirmation).** Two keys added to the same catch-all `cli:` policy in
   custom alike, which was judged too broad. Remaining web path: `Bash`
   (`curl`/`wget`), bounded by the client-side Zscaler policy; a
   `Bash(curl *)`-style deny was considered and not applied.
-- `env.ANTHROPIC_DEFAULT_HAIKU_MODEL: <SonnetModelId>` — **this closes the
+- `env.ANTHROPIC_DEFAULT_HAIKU_MODEL: <HaikuModelId>` (Sonnet 4.5, which
+  fills the haiku role; originally `<SonnetModelId>` — the same physical
+  model — until the 2026-07 Sonnet 5 rollout added the dedicated
+  `HaikuModelId` parameter) — **this closes the
   question the model-allowlist entry above deliberately left open** (the
   `getSmallFastModel()` unchecked branch). Binary verification against the
   mirrored 2.1.211 build shows the env-var path returns the configured value
@@ -796,7 +830,7 @@ confirmation).** Two keys added to the same catch-all `cli:` policy in
   allowlist check), so the previously-feared failure mode — the unchecked
   branch requesting an unserved Haiku model — is now harmless *by
   construction*: the branch is indeed unchecked, but the value it returns is
-  the gateway-served Sonnet ID (the same `<SonnetModelId>` as
+  a gateway-served ID (`<HaikuModelId>`, also present in
   `availableModels`, NOT the Bedrock profile ID — the gateway's `models:`
   block does the Bedrock mapping). Without the override, background calls
   request a Haiku-family model that neither GovCloud nor this gateway has.
@@ -819,8 +853,8 @@ list and the small-model value (red-tested by mutating each).
 should run against the actually-deployed gateway version before the `02`
 re-run. **Needs live confirmation:** WebFetch/WebSearch/MCP tools absent from
 a client's tool list after a settings fetch; background/small-model calls
-succeeding against the Sonnet ID; the picker's cosmetic haiku entry (or its
-absence).
+succeeding against the haiku-role ID (Sonnet 4.5); the picker's cosmetic haiku
+entry (or its absence).
 
 **CMK-encrypted AMP needs caller-side KMS on both the read and write paths
 (2026-07-23, LIVE-PROVEN).** First live use of the observability stack surfaced
@@ -1263,7 +1297,7 @@ the gateway segment.
 >   ddl + connection logging; log_parameter off to keep user content out.
 > - C5 → policies on ecr.api/ecr.dkr/logs/secretsmanager/aps endpoints and
 >   the S3 gateway endpoint (this-account + ECR starport layer bucket).
-> - C6 → IAM + endpoint policy scoped to exactly the two configured models
+> - C6 → IAM + endpoint policy scoped to exactly the three configured models
 >   (profile IDs + derived foundation-model IDs; region * kept for geo
 >   profile fan-out).
 > - C10 → explicit egress on every SG (inline lists remove default

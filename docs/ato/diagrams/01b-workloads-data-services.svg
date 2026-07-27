@@ -35,14 +35,14 @@
 <text x="206.0" y="491" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >streams installer ZIP at /portal</text>
 <rect x="76" y="560" width="584" height="80" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="368.0" y="581" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Interface VPC endpoints — each with a resource policy</text>
-<text x="368.0" y="597" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bedrock-runtime (2 approved models only) · ecr.api · ecr.dkr · logs</text>
+<text x="368.0" y="597" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bedrock-runtime (3 approved models only) · ecr.api · ecr.dkr · logs</text>
 <text x="368.0" y="611" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint</text>
 <rect x="780" y="96" width="680" height="570" rx="12" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.5"/>
 <text x="796" y="122" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#6D28D9" font-weight="bold" text-anchor="start" letter-spacing="0.06em">AWS REGIONAL SERVICES</text>
 <text x="796" y="139" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="start" >reached via the endpoints / AWS backbone</text>
 <rect x="810" y="150" width="300" height="66" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
 <text x="960.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Amazon Bedrock</text>
-<text x="960.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Claude Opus 4.8 · Sonnet 4.5</text>
+<text x="960.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Claude Opus 4.8 · Sonnet 5 · Sonnet 4.5</text>
 <text x="960.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >us-gov inference profiles only</text>
 <rect x="810" y="240" width="300" height="56" rx="8" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.4"/>
 <text x="960.0" y="261" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Managed Prometheus (AMP)</text>
@@ -77,7 +77,7 @@
 <text x="1293.0" y="484" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >CMK · 365 d · flag for SIEM</text>
 <path d="M280 140 L280 86 L1040 86 L1040 150" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="424.1" y="76" width="431.8" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="640" y="89.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >inference — SigV4 via bedrock-runtime endpoint · 2 approved models</text>
+<text x="640" y="89.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >inference — SigV4 via bedrock-runtime endpoint · 3 approved models</text>
 <path d="M660 188 L772 188 L772 255 L810 255" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="651.3" y="166" width="129.39999999999998" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="716" y="179.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >SigV4 remote_write</text>

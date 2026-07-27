@@ -61,8 +61,10 @@ laptops without a public internet dependency on the AI provider.
 
 - **Not public-facing.** The ALB is internal; there is no public ingress path
   (`architecture.md` §1, "No public ingress").
-- **Not a general AI gateway.** Exactly two Bedrock models are exposed — Opus
-  4.8 and Sonnet 4.5 — enforced at the application, IAM, and VPC-endpoint layers
+- **Not a general AI gateway.** Exactly three Bedrock models are exposed —
+  Opus 4.8 (the client default), Sonnet 5, and Sonnet 4.5 (serving the
+  small/fast "haiku" role; GovCloud has no Haiku-family model) — enforced at
+  the application, IAM, and VPC-endpoint layers
   (`cloudformation/02-gateway.yaml` `models:` block; `architecture.md` §10 note
   5).
 - **Not dependent on Anthropic-hosted infrastructure at runtime.** The client
@@ -96,7 +98,7 @@ At a glance (full detail in `architecture.md` §1–§2):
   **internal ALB** over TLS via **Zscaler ZPA**. The ALB re-encrypts to the
   **ECS Fargate gateway** tasks (per-task TLS), which authenticate the user
   against **Okta OIDC** and proxy inference to **Bedrock** over a private
-  interface endpoint whose policy admits only the two approved models.
+  interface endpoint whose policy admits only the three approved models.
 - **Session and spend state** lives in **RDS PostgreSQL 16**; the gateway
   connects as a least-privilege application role, never the RDS master user.
 - **Usage telemetry** (tokens, cost, model, and stamped user identity) flows
@@ -141,9 +143,11 @@ holds the RDS master credential.
 - Are gated at sign-in by **allowed email domain**
   (`allowed_email_domains` in `cloudformation/02-gateway.yaml`, from the
   `ALLOWED_EMAIL_DOMAINS` parameter). A `managed.policies` block is now
-  **always rendered**, but it carries only a **client model allowlist**
-  (`availableModels`) scoped to all users via a catch-all policy that needs no
-  group claim — a UX/model-selection control, not access control. Okta **group**
+  **always rendered**, carrying the **client model allowlist**
+  (`availableModels`), the web/MCP tool denies, and the small/fast-model and
+  update-lockdown env overrides, scoped to all users via a catch-all policy
+  that needs no group claim — client-configuration controls, not access
+  control. Okta **group**
   claims remain **not yet enforced** as gateway access control: the `groups`
   scope is now requested unconditionally, but for **spend caps** (per-group cost
   limits resolve against the groups claim), not for access control. The former
@@ -316,7 +320,8 @@ Steady-state request path (`architecture.md` §2, hop table):
 
 Laptop `claude` → **ZPA** (TCP 443, no inspection) → **internal ALB** (TLS,
 FIPS policy) → **gateway task** (ALB re-encrypts to per-task TLS on 8080) →
-**Bedrock** (TLS + SigV4 over the interface endpoint, two approved models only).
+**Bedrock** (TLS + SigV4 over the interface endpoint, three approved models
+only).
 Session and spend state is read and written in **RDS** over `verify-full` TLS,
 with the gateway authenticating as the least-privilege application role
 (`gateway_app` / `gateway_app_clone`), never the master user (`architecture.md`
@@ -496,7 +501,7 @@ at rest (bar the ALB-logs bucket, an ELB platform limitation); TLS in transit on
 every network hop (the one former exception — the gateway→collector telemetry
 leg — is now a loopback sidecar with no network transmission, below); RDS
 `verify-full`; pgaudit;
-VPC-endpoint and IAM policies scoped to the two approved models and this
+VPC-endpoint and IAM policies scoped to the three approved models and this
 account's exact ARNs; explicit (no default-allow) security-group egress; and a
 least-privilege application DB user with self-rolling rotation. Full batch status
 (A deploy-breakers, B ZPA/landing-zone prerequisites, C FedRAMP hardening C1–C11,
@@ -528,12 +533,19 @@ D correctness, C12 least-privilege DB user) is in `security-review-2026-07.md`.
 
 ### 8.1 Assumptions and constraints
 
-- **GovCloud model availability.** Only **Opus 4.8**
-  (`us-gov.anthropic.claude-opus-4-8`) and **Sonnet 4.5**
-  (`us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`) are available in
-  `us-gov-west-1`; Sonnet 4.6 / Sonnet 5 are not. Model IDs must be verified
-  against the Bedrock console before changing defaults
-  (`scripts/deploy.env.example`; CLAUDE.md "GovCloud model availability").
+- **GovCloud model availability.** The three configured models are **Opus
+  4.8** (`us-gov.anthropic.claude-opus-4-8`), **Sonnet 5**
+  (`us-gov.anthropic.claude-sonnet-5`), and **Sonnet 4.5**
+  (`us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`) in `us-gov-west-1`.
+  Sonnet 5 became available in GovCloud Bedrock in 2026-07 and is now the
+  configured Sonnet-tier default; its inference-profile ID above is
+  pattern-derived (un-dated format, like Opus 4.8) and **must be confirmed
+  against the Bedrock console** (`aws bedrock list-inference-profiles
+  --region us-gov-west-1`) before deploy. Sonnet 4.6 was never offered in
+  GovCloud, and no Haiku-family model is (Sonnet 4.5 fills the small/fast
+  role). Model IDs must always be verified against the Bedrock console before
+  changing defaults (`scripts/deploy.env.example`; CLAUDE.md "GovCloud model
+  availability").
 - **Template, not a deployment.** No organization-specific value is hardcoded;
   each is a CloudFormation parameter or a `deploy.env` variable
   (`.claude/rules/security.md`).

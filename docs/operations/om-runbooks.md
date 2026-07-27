@@ -593,13 +593,19 @@ rolls of Grafana and the collector sidecar; gateway image builds + deploys are
 task-definition revision**, done by re-running `deploy-gateway.sh`, not
 `deploy-observability.sh`.
 
-*Model changes (`OPUS_MODEL_ID` / `SONNET_MODEL_ID`) are a special case:* these
-parameters drive three things at once — the Bedrock routing, the scoped IAM /
-endpoint policies, and the **client model allowlist the gateway pushes via
+*Model changes (`OPUS_MODEL_ID` / `SONNET_MODEL_ID` / `HAIKU_MODEL_ID` and
+their `*_BEDROCK_MODEL_ID` pairs) are a special case:* these parameters drive
+three things at once — the Bedrock routing, the scoped IAM / endpoint
+policies, and the **client model allowlist the gateway pushes via
 `/managed/settings`**. Changing them therefore changes what every developer's
-`/model` picker offers. Re-run `deploy-gateway.sh`; connected clients pick the
-new allowlist up on their next settings fetch (re-login if it lags). Verify with
-`/model` on a real client before calling it done.
+`/model` picker offers; the pushed `ANTHROPIC_DEFAULT_HAIKU_MODEL`
+(background/small-model) override follows `HAIKU_MODEL_ID`. The three
+gateway-facing IDs must be distinct — `deploy-gateway.sh` fails fatal on
+duplicates before deploying (the usual hit: a pre-Sonnet-5 `deploy.env` whose
+`SONNET_MODEL_ID` is still `claude-sonnet-4-5`, colliding with the
+`HAIKU_MODEL_ID` default). Re-run `deploy-gateway.sh`; connected clients pick
+the new allowlist up on their next settings fetch (re-login if it lags).
+Verify with `/model` on a real client before calling it done.
 
 *Preconditions:* Build host with Docker; `KMS_KEY_ARN` set; the relevant stack
 already deployed. **Rebuild and push the image BEFORE the stack update that

@@ -8,7 +8,8 @@ then the doc it points you at for whatever you're doing.
 A **client-configurable, code-driven** deployment of Anthropic's self-hosted
 Claude apps gateway for Claude Code, targeting **AWS GovCloud
 `us-gov-west-1`**: internal ALB + ECS Fargate gateway, RDS PostgreSQL store,
-Bedrock inference (Opus 4.8 / Sonnet 4.5 via `us-gov` inference profiles),
+Bedrock inference (Opus 4.8 / Sonnet 5 / Sonnet 4.5 via `us-gov` inference
+profiles),
 Okta OIDC, an offline Windows client rollout, and an optional usage/cost
 observability stack (AMP + ADOT collector + Grafana). End users are on
 Zscaler-secured Windows laptops (ZPA) in an AWS Landing Zone (Transit
@@ -239,7 +240,9 @@ removed from the model's context entirely; `mcp__*` = every MCP tool; managed
 scope, so not user-overridable — WebFetch fetches locally on the client and
 would only fail slowly here; WebSearch is server-side and Bedrock doesn't
 expose it, so that deny is tidiness) and
-`env.ANTHROPIC_DEFAULT_HAIKU_MODEL: <SonnetModelId>` —
+`env.ANTHROPIC_DEFAULT_HAIKU_MODEL: <SonnetModelId>` (since the 2026-07-27
+Sonnet 5 rollout this renders `<HaikuModelId>` — Sonnet 4.5 in the dedicated
+haiku slot) —
 without it the client's background/small-model calls request a Haiku-family
 model that neither GovCloud nor this gateway has, so they fail
 (`ANTHROPIC_SMALL_FAST_MODEL` is the deprecated name for the same knob).
@@ -273,6 +276,25 @@ AMP now holds 20 `otelcol_*` series; alarm is OK. Still pending: fail-closed
 stop-on-broken-config, shutdown flush, alarm OK→ALARM→OK cycle (now cheap to
 test — stop the sidecar). Full proof in the 2026-07-23 fix-log entries of
 `docs/ato/security-review-2026-07.md`.
+
+**Added 2026-07-27 (committed, NOT yet deployed): Sonnet 5 — three-model
+menu; Sonnet 4.5 moves to the haiku slot.** Sonnet 5 became available in
+GovCloud Bedrock and is enabled in the account, so the served set is now
+three roles: Opus 4.8 (unchanged, still the client default), Sonnet 5
+(`SonnetModelId`/`SonnetBedrockModelId` defaults → `claude-sonnet-5` /
+`us-gov.anthropic.claude-sonnet-5`), and Sonnet 4.5 in the small/fast slot
+via NEW params `HaikuModelId`/`HaikuBedrockModelId` (deploy.env
+`HAIKU_MODEL_ID`/`HAIKU_BEDROCK_MODEL_ID`) — `ANTHROPIC_DEFAULT_HAIKU_MODEL`
+now follows `HaikuModelId`. `availableModels` carries all three; IAM +
+endpoint policies enumerate all three profile/foundation-model pairs; no new
+`cli:` keys (no boot-check needed). `deploy-gateway.sh` REFUSES duplicate
+gateway-facing IDs — a pre-Sonnet-5 deploy.env still setting
+`SONNET_MODEL_ID=claude-sonnet-4-5` collides with the haiku default; update
+deploy.env per the example, don't override the guard. **CAVEAT: the Sonnet 5
+profile ID is pattern-derived (un-dated, like Opus 4.8), NOT yet confirmed
+via `aws bedrock list-inference-profiles`** — confirm before the 02 re-run,
+then check `/model` shows exactly three entries and background calls resolve
+to Sonnet 4.5. Full entry in the security-review fix log.
 
 ## Repo map
 
@@ -363,9 +385,13 @@ FQDN / cert / Zscaler entry (path-based at `/portal`). Teardown is the reverse
 ## Durable context that isn't obvious from the code
 
 - **GovCloud model availability:** Opus 4.8 (`us-gov.anthropic.claude-opus-4-8`,
-  un-dated ID) and Sonnet 4.5 (`us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`,
-  dated). Sonnet 4.6 / Sonnet 5 are NOT in GovCloud. Verify model IDs against
-  the Bedrock console before changing defaults.
+  un-dated ID), Sonnet 5 (available since 2026-07; configured as
+  `us-gov.anthropic.claude-sonnet-5`, un-dated — pattern-derived, NOT yet read
+  off the Bedrock console), and Sonnet 4.5
+  (`us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`, dated). Sonnet 4.6 was
+  never offered in GovCloud. Verify model IDs against the Bedrock console
+  (`aws bedrock list-inference-profiles --region us-gov-west-1`) before
+  changing defaults or deploying.
 - **User decisions (2026-07-15):** precompiled native `claude` binary only (no
   npm distribution); Grafana auth = Okta SSO; Object Lock deferred.
 - **Landing zone:** hub-and-spoke with Transit Gateway (not peering); central

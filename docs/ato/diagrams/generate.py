@@ -165,7 +165,7 @@ def d1():
            ["Okta OIDC + group authz (PKCE)", "TLS listener :8080, per-task cert"],
            border=GREEN)
     s.node(470, 646, 570, 90, "Interface VPC endpoints — each with a resource policy",
-           ["bedrock-runtime (2 approved models only) · ecr.api · ecr.dkr · logs",
+           ["bedrock-runtime (3 approved models only) · ecr.api · ecr.dkr · logs",
             "secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint"],
            border=GREEN)
     s.node(470, 760, 570, 76, "KMS CMK  alias/<prefix>",
@@ -178,7 +178,7 @@ def d1():
     s.node(1148, 152, 288, 56, "Managed Prometheus (AMP)",
            ["usage/cost metrics · CMK"], border=VIOLET)
     s.node(1148, 228, 288, 66, "Amazon Bedrock",
-           ["Claude Opus 4.8 · Sonnet 4.5", "us-gov profiles · endpoint policy: 2 models"],
+           ["Claude Opus 4.8 · Sonnet 5 · Sonnet 4.5", "us-gov profiles · endpoint policy: 3 models"],
            border=VIOLET)
     s.node(1148, 314, 288, 48, "Secrets Manager (CMK)", [], border=VIOLET)
     s.node(1148, 382, 288, 56, "CloudWatch Logs → Firehose",
@@ -246,7 +246,7 @@ def d1():
     s.chip(700, 878, "proxy path when mandated", AMBER)
 
     s.text(36, 916, "Boundary facts: no public ingress (internal ALB behind ZPA); "
-           "no public egress from the inference path (Bedrock endpoint, 2-model policy); "
+           "no public egress from the inference path (Bedrock endpoint, 3-model policy); "
            "clients never contact Anthropic (mirrored, verified binaries; updates disabled).",
            size=11.5, color=SLATE)
     s.write("01-system-architecture.svg")
@@ -271,7 +271,7 @@ def d2():
          "TLS :5432 — sslmode=verify-full, RDS CA bundle baked into the image",
          "RDS PostgreSQL", GREEN, False),
         (5, "Gateway task", GREEN,
-         "TLS :443 + SigV4 — via bedrock-runtime endpoint, 2 approved models only",
+         "TLS :443 + SigV4 — via bedrock-runtime endpoint, 3 approved models only",
          "Amazon Bedrock", VIOLET, False),
         (6, "Gateway task", GREEN,
          "LOOPBACK 127.0.0.1:4318 OTLP — co-resident sidecar, never on the network",
@@ -715,14 +715,14 @@ def d1b():
            ["reached via the internal ALB", "streams installer ZIP at /portal"],
            border=GREEN)
     s.node(76, 560, 584, 80, "Interface VPC endpoints — each with a resource policy",
-           ["bedrock-runtime (2 approved models only) · ecr.api · ecr.dkr · logs",
+           ["bedrock-runtime (3 approved models only) · ecr.api · ecr.dkr · logs",
             "secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint"],
            border=GREEN)
 
     s.zone(780, 96, 680, 570, "AWS regional services", VIOLET, VIOLET_T,
            "reached via the endpoints / AWS backbone")
     s.node(810, 150, 300, 66, "Amazon Bedrock",
-           ["Claude Opus 4.8 · Sonnet 4.5", "us-gov inference profiles only"],
+           ["Claude Opus 4.8 · Sonnet 5 · Sonnet 4.5", "us-gov inference profiles only"],
            border=VIOLET)
     s.node(810, 240, 300, 56, "Managed Prometheus (AMP)",
            ["usage/cost metrics · CMK · 150 d"], border=VIOLET)
@@ -747,7 +747,7 @@ def d1b():
     # inference (corridor above both zones, entering Bedrock's top edge
     # to the right of the zone labels)
     s.arrow([(280, 140), (280, 86), (1040, 86), (1040, 150)])
-    s.chip(640, 86, "inference — SigV4 via bedrock-runtime endpoint · 2 approved models", VIOLET)
+    s.chip(640, 86, "inference — SigV4 via bedrock-runtime endpoint · 3 approved models", VIOLET)
     # telemetry sidecar -> AMP (remote_write) and -> CloudWatch (activity stream)
     s.arrow([(660, 188), (772, 188), (772, 255), (810, 255)])
     s.chip(716, 176, "SigV4 remote_write", VIOLET)
@@ -1046,7 +1046,7 @@ def d9():
            "Non-SG enforcement points elsewhere in the deployment", [],
            border=VIOLET)
     for i, ln in enumerate([
-            "bedrock-runtime endpoint policy: pinned to the TWO configured "
+            "bedrock-runtime endpoint policy: pinned to the THREE configured "
             "model IDs + their inference profiles (not anthropic.*)   |   "
             "ecs endpoint: NO policy (GovCloud unsupported) - IAM-side "
             "scoping covers it",

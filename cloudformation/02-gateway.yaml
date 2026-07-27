@@ -432,17 +432,36 @@ Parameters:
 
   SonnetModelId:
     Type: String
-    Default: claude-sonnet-4-5
+    Default: claude-sonnet-5
     Description: Sonnet model ID presented to Claude Code clients through the gateway.
 
   SonnetBedrockModelId:
     Type: String
-    Default: us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0
+    Default: us-gov.anthropic.claude-sonnet-5
     Description: >-
       Bedrock model / inference-profile ID the gateway invokes for Sonnet.
-      Default is the GovCloud geo inference profile for Claude Sonnet 4.5 —
-      the newest Sonnet available in GovCloud (Sonnet 4.6 and Sonnet 5 are
-      not offered there); note older models keep the dated -v1:0 ID format.
+      Default is the GovCloud geo inference profile for Claude Sonnet 5
+      (un-dated ID format, like Opus 4.8). Verify against the Bedrock
+      console before deploying:
+      aws bedrock list-inference-profiles --region us-gov-west-1.
+
+  HaikuModelId:
+    Type: String
+    Default: claude-sonnet-4-5
+    Description: >-
+      Small/fast ("haiku"-role) model ID presented to Claude Code clients.
+      GovCloud has no Haiku-family model, so Claude Sonnet 4.5 serves the
+      role; the managed settings point ANTHROPIC_DEFAULT_HAIKU_MODEL here.
+      Must differ from OpusModelId and SonnetModelId (duplicate gateway
+      model IDs are rejected by deploy-gateway.sh).
+
+  HaikuBedrockModelId:
+    Type: String
+    Default: us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0
+    Description: >-
+      Bedrock model / inference-profile ID the gateway invokes for the
+      small/fast model. Default is the GovCloud geo inference profile for
+      Claude Sonnet 4.5 (older models keep the dated -v1:0 ID format).
       Verify against the Bedrock console.
 
 # Fargate only accepts specific CPU/memory pairings; an invalid combo
@@ -860,7 +879,7 @@ Resources:
                 Action:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
-                # Exactly the two configured models, not anthropic.* - the
+                # Exactly the three configured models, not anthropic.* - the
                 # inference profiles in-region, plus their underlying
                 # foundation models (profile ID minus the 'us-gov.' geo
                 # prefix). Foundation-model region stays * because geo
@@ -869,12 +888,16 @@ Resources:
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${OpusBedrockModelId}'
                   - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${SonnetBedrockModelId}'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${HaikuBedrockModelId}'
                   - !Sub
                     - 'arn:${AWS::Partition}:bedrock:*::foundation-model/${Model}'
                     - Model: !Join ['', !Split ['us-gov.', !Ref OpusBedrockModelId]]
                   - !Sub
                     - 'arn:${AWS::Partition}:bedrock:*::foundation-model/${Model}'
                     - Model: !Join ['', !Split ['us-gov.', !Ref SonnetBedrockModelId]]
+                  - !Sub
+                    - 'arn:${AWS::Partition}:bedrock:*::foundation-model/${Model}'
+                    - Model: !Join ['', !Split ['us-gov.', !Ref HaikuBedrockModelId]]
         # Telemetry sidecar credentials (only when enabled): the co-resident
         # collector runs under THIS task role and writes to AMP + the activity
         # log group. Ported from 03's former CollectorTaskRole. The activity
@@ -1048,8 +1071,11 @@ Resources:
                     # GovCloud serves Claude through us-gov.* inference profiles.
                     # If the built-in catalog does not resolve them on your gateway
                     # version, disable it and map models explicitly. Developers see
-                    # both entries in the Claude Code model picker; the mapping is
-                    # parameterized (OpusModelId/SonnetModelId + Bedrock IDs).
+                    # all three entries in the Claude Code model picker; the mapping
+                    # is parameterized (OpusModelId/SonnetModelId/HaikuModelId +
+                    # Bedrock IDs). Opus stays the client's default model; the Haiku
+                    # slot (Sonnet 4.5 - GovCloud has no Haiku) also backs the
+                    # ANTHROPIC_DEFAULT_HAIKU_MODEL override in the managed block.
                     # upstream_model is an OBJECT keyed by the upstream's name -
                     # the single bedrock upstream above has no `name:`, so it keys
                     # on its provider string, `bedrock`. A bare string fails schema
@@ -1062,6 +1088,9 @@ Resources:
                       - id: ${SonnetModelId}
                         upstream_model:
                           bedrock: ${SonnetBedrockModelId}
+                      - id: ${HaikuModelId}
+                        upstream_model:
+                          bedrock: ${HaikuBedrockModelId}
 
                     # --- Cost controls (per-user / per-group spend caps) ------
                     # The `admin:` block is the MASTER SWITCH: the gateway only
@@ -1115,7 +1144,7 @@ Resources:
                     #       cli:
                     #         env: { DISABLE_UPDATES: "1" }
                     #     - cli:                       # no `match:` = catch-all, MUST BE LAST
-                    #         availableModels: [claude-opus-4-8, claude-sonnet-4-5]
+                    #         availableModels: [claude-opus-4-8, claude-sonnet-5, claude-sonnet-4-5]
                     # ORDER IS LOAD-BEARING. Selection is FIRST-MATCH-WINS over a SINGLE
                     # policy - a catch-all is normalized to `match: {}` and matches
                     # everyone, so any policy after it is dead config. The gateway warns
@@ -1198,12 +1227,13 @@ Resources:
             # groups claim required:
             #
             #  * availableModels / enforceAvailableModels - constrains the client's
-            #    `/model` picker to the two configured models. Without it the client
-            #    shows its OWN built-in menu, none of whose entries the gateway
-            #    serves, so every pick fails upstream as unauthorized. `models:`
-            #    above governs only what the GATEWAY SERVES; it does not reach into
-            #    the picker. `enforceAvailableModels` extends the allowlist to the
-            #    "Default" selection so Default can't resolve to an unserved model.
+            #    `/model` picker to the three configured models. Without it the
+            #    client shows its OWN built-in menu, none of whose entries the
+            #    gateway serves, so every pick fails upstream as unauthorized.
+            #    `models:` above governs only what the GATEWAY SERVES; it does not
+            #    reach into the picker. `enforceAvailableModels` extends the
+            #    allowlist to the "Default" selection so Default can't resolve to
+            #    an unserved model (the client's Default resolves to Opus).
             #    IDs match the `models:` entries above by construction.
             #  * env - the update lockdown, the server-side twin of the installer's
             #    -DisableUpdates. This USED to be scoped to `MANAGED_CLI_GROUPS`
@@ -1221,11 +1251,12 @@ Resources:
             #    cannot be re-allowed at another scope, so none of this is
             #    user-overridable. Subagents (Agent) stay allowed by decision.
             #  * ANTHROPIC_DEFAULT_HAIKU_MODEL - points the client's small/fast
-            #    background model at the configured Sonnet ID. Without it the
-            #    client asks for a Haiku-family model that does not exist in
-            #    GovCloud and that this gateway does not serve, so background
-            #    calls fail. (ANTHROPIC_SMALL_FAST_MODEL is the deprecated name
-            #    for the same knob; this one is current as of 2.1.x.)
+            #    background model at the configured haiku-role ID (Sonnet 4.5;
+            #    GovCloud has no Haiku family). Without it the client asks for a
+            #    Haiku-family model that does not exist in GovCloud and that this
+            #    gateway does not serve, so background calls fail.
+            #    (ANTHROPIC_SMALL_FAST_MODEL is the deprecated name for the same
+            #    knob; this one is current as of 2.1.x.)
             #  * OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative -
             #    REQUIRED for usage metrics to reach AMP. Clients export DELTA
             #    sums by default, and the sidecar's prometheusremotewrite exporter
@@ -1251,7 +1282,7 @@ Resources:
                   managed:
                     policies:
                       - cli:
-                          availableModels: ['${OpusModelId}', '${SonnetModelId}']
+                          availableModels: ['${OpusModelId}', '${SonnetModelId}', '${HaikuModelId}']
                           enforceAvailableModels: true
                           permissions:
                             deny: ['WebFetch', 'WebSearch', 'mcp__*']
@@ -1259,7 +1290,7 @@ Resources:
                             DISABLE_UPDATES: "1"
                             DISABLE_AUTOUPDATER: "1"
                             # no Haiku in GovCloud - see the comment above
-                            ANTHROPIC_DEFAULT_HAIKU_MODEL: '${SonnetModelId}'
+                            ANTHROPIC_DEFAULT_HAIKU_MODEL: '${HaikuModelId}'
                             # delta sums are silently dropped by the sidecar's
                             # prometheus translation - see the comment above
                             OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "cumulative"
@@ -1752,16 +1783,20 @@ Resources:
             Action:
               - bedrock:InvokeModel
               - bedrock:InvokeModelWithResponseStream
-            # Mirrors the task-role scoping: the two configured models only.
+            # Mirrors the task-role scoping: the three configured models only.
             Resource:
               - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${OpusBedrockModelId}'
               - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${SonnetBedrockModelId}'
+              - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${HaikuBedrockModelId}'
               - !Sub
                 - 'arn:${AWS::Partition}:bedrock:*::foundation-model/${Model}'
                 - Model: !Join ['', !Split ['us-gov.', !Ref OpusBedrockModelId]]
               - !Sub
                 - 'arn:${AWS::Partition}:bedrock:*::foundation-model/${Model}'
                 - Model: !Join ['', !Split ['us-gov.', !Ref SonnetBedrockModelId]]
+              - !Sub
+                - 'arn:${AWS::Partition}:bedrock:*::foundation-model/${Model}'
+                - Model: !Join ['', !Split ['us-gov.', !Ref HaikuBedrockModelId]]
 
   # Endpoints Fargate itself depends on when the private subnets have no NAT:
   # image pull (ecr.api + ecr.dkr + S3 for layer blobs), awslogs (logs), and

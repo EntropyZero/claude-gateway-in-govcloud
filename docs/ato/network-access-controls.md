@@ -85,7 +85,7 @@ Endpoint/resource policies in force:
 
 | Where | Policy scope |
 |---|---|
-| `bedrock-runtime` endpoint | the **two configured model IDs** + their inference profiles — not `anthropic.*` |
+| `bedrock-runtime` endpoint | the **three configured model IDs** + their inference profiles — not `anthropic.*` |
 | `ecr.api` / `ecr.dkr` endpoints | auth token (no-resource) + this account's repositories |
 | `logs` endpoint | this account's log groups |
 | `secretsmanager` endpoint | this deployment's secret ARNs + `GetRandomPassword` |
@@ -96,7 +96,7 @@ Endpoint/resource policies in force:
 
 IAM and KMS (layers 4–5) are inventoried in `architecture.md` §6 — the short
 version: execution roles enumerate exact secret ARNs, the task role holds
-`bedrock:InvokeModel*` on exactly the two models, and the single CMK's key
+`bedrock:InvokeModel*` on exactly the three models, and the single CMK's key
 policy names its grantees.
 
 ---
