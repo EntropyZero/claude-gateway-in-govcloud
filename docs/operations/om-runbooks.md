@@ -1126,6 +1126,46 @@ and either way it says nothing about whether ingestion is working.
 > Prometheus-2-lineage (window boundaries closed both ends vs 3.x left-open);
 > the validated expressions do not depend on boundary inclusivity.
 
+> **Cumulative panels: pre-range "ghost" sessions excluded (2026-07-27).**
+> Live 1/2/3-day screenshots showed the sliding-lookback caveat above is
+> worse than "sessions overlapping the range START": a session that ENDED
+> BEFORE the range start still appears at its FULL value at the left edge of
+> the cumulative curves whenever it falls within one range-width before the
+> range start (`(start - range, start)`) - its samples sit inside the
+> per-plot-point `[$__range]` lookback while the `offset $__range` baseline
+> window is empty, so `or 0` counts the whole counter. Mid-graph it decays as
+> the shifted baseline window slides through the session's climb, then goes
+> absent - the "drop-off" an operator sees at exactly one window width (a
+> 07/25 session ghosted the 2-day view; the 1-day and 3-day views of the same
+> data were clean). Tiles (instant queries) were always correct. Fix: every
+> cumulative time-series expression is now gated per-session on having at
+> least one sample INSIDE the visible range -
+> `(... existing per-session rise ...) and
+> count_over_time(m{...}[$__range] @ end())` - the `@ end()`-anchored window
+> is exactly the visible range regardless of plot step, so fully-pre-range
+> sessions vanish from every step while range-start-spanning sessions (which
+> do have in-range samples) keep their documented mid-graph decline. The
+> `and` matches on the full label set; both sides are range functions over
+> the same selector so the sets align, and `__name__` is dropped on both.
+> Instant tiles and the top-users table are untouched: at instant eval the
+> lookback already equals the visible range, so the gate is a no-op there
+> (asserted, not assumed). Validated against a real Prometheus (3.7-lineage)
+> with a synthetic 5-session TSDB (ghost, freeze-and-hold, single-sample,
+> spanning-range-start, >1h-gap-resume; 16 assertions): the old expression
+> reproduces the screenshot ghost, the new one drops it at every step, all
+> other session accounting is value-identical, and right edge == tiles still
+> holds. Cost note: the gate adds a third full-range range-vector per plot
+> step on AMP (same `maxDataPoints: 200` cap applies). LIVE CHECK NEEDED: the
+> `@` modifier is standard PromQL (on by default upstream since 2.33,
+> Jan 2022) but is UNVERIFIED against AMP's Cortex-lineage engine from this
+> host - if AMP lacks it, the panels fail LOUDLY with a parse error (not
+> silently wrong data); if that happens, drop the `and count_over_time(...)`
+> gate clause to roll back to the previous (ghosting but correct-at-the-
+> right-edge) behavior. Deploy as above: bump GRAFANA_IMAGE_TAG, rebuild +
+> push, re-run 03. On the live run: pick a range width that puts a finished
+> session just before the range start (the failing 2-day view) and confirm
+> the curve no longer shows it while the tile total is unchanged.
+
 > **Session labels (2026-07-24).** `session.id` is KEPT as a metric label. It
 > was previously deleted for cardinality, but each session's counters start at
 > 0, so concurrent sessions from the same user+model interleaved onto one
@@ -1246,16 +1286,63 @@ already off, so it is safe to leave standing in deploy.env).
 > treat access like the activity archive: IAM-only, SIEM-flagged, no
 > ad-hoc grants.
 
+*KMS prerequisite (do this first — the enable fails without it):* Bedrock
+delivers to the SSE-KMS bucket only if the CMK's **key policy** grants
+`bedrock.amazonaws.com` `kms:GenerateDataKey` (statement
+`BedrockInvocationLogsWrite` in `01-database.yaml`). When it is missing, the
+enable call fails at the very end with the **misleading**
+`Failed to validate permissions for bucket ... verify the S3 bucket policy`
+(the denial is at KMS, not S3 — hit live 2026-07-27;
+`deploy-observability.sh` now preflights this and fails fast). How the
+statement gets onto the key depends on who manages it:
+
+- **Stack-managed key** (01 created it and still owns it — `KmsKeyArn`
+  parameter on the deployed stack is empty): re-run
+  `scripts/deploy-database.sh`; the key-policy update is in-place.
+- **Bring-your-own or stack-detached key** (the stack's `KmsKeyArn`
+  parameter holds an ARN — including deployments bitten by the
+  parameter-feedback detach, see §11a): apply the statement out-of-band.
+  Get → append → put preserves every existing statement:
+
+```bash
+ACCT="$(aws sts get-caller-identity --query Account --output text)"
+PARTITION="$(cut -d: -f2 <<<"$KMS_KEY_ARN")"   # aws | aws-us-gov
+TMP="$(mktemp)"
+aws kms get-key-policy --key-id "$KMS_KEY_ARN" --policy-name default \
+  --region "$AWS_REGION" --query Policy --output text > "$TMP"
+python3 - "$TMP" "$ACCT" "$AWS_REGION" "$PARTITION" <<'EOF'
+import json, sys
+path, acct, region, partition = sys.argv[1:5]
+p = json.load(open(path))
+if any(s.get("Sid") == "BedrockInvocationLogsWrite" for s in p["Statement"]):
+    sys.exit("already present - nothing to do")
+p["Statement"].append({
+  "Sid": "BedrockInvocationLogsWrite", "Effect": "Allow",
+  "Principal": {"Service": "bedrock.amazonaws.com"},
+  "Action": "kms:GenerateDataKey", "Resource": "*",
+  "Condition": {"StringEquals": {"aws:SourceAccount": acct},
+                "ArnLike": {"aws:SourceArn": f"arn:{partition}:bedrock:{region}:{acct}:*"}}})
+json.dump(p, open(path, "w"), indent=2)
+EOF
+aws kms put-key-policy --key-id "$KMS_KEY_ARN" --policy-name default \
+  --policy "file://$TMP" --region "$AWS_REGION"
+rm -f "$TMP"
+```
+
+  If the key is centrally managed by the landing zone and the deploy role
+  lacks `kms:PutKeyPolicy`, this becomes a request to the key admins — send
+  them the statement (exact shape: `BedrockInvocationLogsWrite` in
+  `01-database.yaml`, partition included).
+
 *Enable:*
 ```bash
-# 1. CMK grant for Bedrock's delivery (in-place key-policy update).
-#    Bring-your-own-key deployments instead add kms:GenerateDataKey for
-#    bedrock.amazonaws.com (SourceAccount/SourceArn-scoped) to their key.
-scripts/deploy-database.sh
+# 1. KMS prerequisite above (stack-managed key: scripts/deploy-database.sh;
+#    BYO/detached key: the out-of-band statement).
 # 2. Destinations + the account-level switch (operator needs
 #    bedrock:PutModelInvocationLoggingConfiguration,
 #    bedrock:GetModelInvocationLoggingConfiguration - the script reads the
-#    config back after applying - and iam:PassRole on the delivery role):
+#    config back after applying - iam:PassRole on the delivery role, and
+#    kms:GetKeyPolicy for the preflight):
 BEDROCK_PROMPT_LOGGING=true   # in deploy.env
 scripts/deploy-observability.sh
 ```
@@ -1277,13 +1364,151 @@ in the stack with their data; retention/lifecycle keeps aging data out.
 Re-enabling later is just `=true` and a re-run — nothing is created or
 deleted, so the cycle is clean in both directions.
 
-*Notes & pitfalls:* Enabling in 03 without the 01 re-run leaves Bedrock
-unable to write the SSE-KMS bucket (delivery fails against the CMK). The
-CloudWatch leg only ever shows bodies ≤100 KB — an "empty-looking" log entry
-with an S3 reference is normal for large Claude Code contexts, not a fault.
-Setting `BEDROCK_PROMPT_LOGGING=false` disables invocation logging for the
-**whole account+region** — coordinate if anything else in the account relies
-on it.
+*Notes & pitfalls:* Enabling without the KMS prerequisite leaves Bedrock
+unable to write the SSE-KMS bucket — and the error blames the S3 bucket
+policy (see the prerequisite above). A 01 re-run only updates the key policy
+when the stack still **owns** the key: check
+`aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name
+"$DB_STACK_NAME" --query
+"Stacks[0].Parameters[?ParameterKey=='KmsKeyArn'].ParameterValue" --output
+text` — empty means stack-managed, an ARN means BYO **or** a detached key
+(§11a). The CloudWatch leg only ever shows bodies ≤100 KB — an
+"empty-looking" log entry with an S3 reference is normal for large Claude
+Code contexts, not a fault. Setting `BEDROCK_PROMPT_LOGGING=false` disables
+invocation logging for the **whole account+region** — coordinate if anything
+else in the account relies on it.
+
+---
+
+## 11a. Re-adopting a stack-detached CMK into stack 01 (resource import)
+
+*Trigger / Frequency:* One-time repair, only for deployments whose 01 stack
+**created** the CMK but later detached it. Before the 2026-07-27
+`deploy-database.sh` fix, the script persisted the created key's ARN into
+`deploy.env` `KMS_KEY_ARN` and then fed it back as the `KmsKeyArn` parameter
+on the next re-run — CloudFormation read that as "bring-your-own", dropped
+the (Retain'd) `KmsKey` from the stack, **deleted the `alias/<prefix>`
+alias**, and every later `KeyPolicy` change in the template silently applied
+to nothing. Status: **[NEEDS TEST-RUN CONFIRMATION]** — the procedure is
+doc-verified against the CloudFormation resource-import guide; a GovCloud
+run has not exercised it.
+
+*Am I affected?* All three of these hold:
+
+```bash
+# 1. the stack's parameter is non-empty (BYO mode) ...
+aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name "$DB_STACK_NAME" \
+  --query "Stacks[0].Parameters[?ParameterKey=='KmsKeyArn'].ParameterValue" --output text
+# 2. ... but the key it names was created by this stack ...
+aws kms describe-key --key-id "$KMS_KEY_ARN" --region "$AWS_REGION" \
+  --query 'KeyMetadata.Description' --output text
+#    -> "<prefix> - data-at-rest key (RDS, secrets, logs, archives, AMP)"
+#    If this is a landing-zone/central key instead: STOP - you are true BYO;
+#    manage the key policy out-of-band (§11) and do not import.
+# 3. ... and the stack no longer holds the KMS resources:
+aws cloudformation describe-stack-resources --region "$AWS_REGION" --stack-name "$DB_STACK_NAME" \
+  --query "StackResources[?LogicalResourceId=='KmsKey' || LogicalResourceId=='KmsKeyAlias'].LogicalResourceId"
+#    -> []
+```
+
+*Prerequisites:* the 2026-07-27 fix must be deployed to the **repo copy on
+the deploy host** (the ownership-preserving `deploy-database.sh` and the
+`DeletionPolicy: Retain` on `KmsKeyAlias` — import requires a DeletionPolicy
+on every imported resource). Without the script fix, the next routine 01
+re-run detaches the key again.
+
+*Procedure:*
+
+```bash
+KEY_ID="$(aws kms describe-key --key-id "$KMS_KEY_ARN" --region "$AWS_REGION" \
+  --query KeyMetadata.KeyId --output text)"
+
+# 1. Recreate the alias (deleted at detach; import can only adopt resources
+#    that exist). AlreadyExistsException just means it survived - fine.
+aws kms create-alias --alias-name "alias/${NAME_PREFIX}" \
+  --target-key-id "$KEY_ID" --region "$AWS_REGION"
+
+# 2. Confirm the region supports importing both types (GovCloud feature
+#    sets lag; both should appear, with KeyId / AliasName identifiers).
+#    CAVEAT (unconfirmed): how get-template-summary treats Condition'd
+#    resources is undocumented - an empty result may mean condition
+#    filtering rather than "unsupported in region". Treat empty as
+#    inconclusive and let step 3's create-change-set be the real probe
+#    (it fails cleanly if the type isn't importable).
+aws cloudformation get-template-summary --region "$AWS_REGION" \
+  --template-body file://cloudformation/01-database.yaml \
+  --query "ResourceIdentifierSummaries[?ResourceType=='AWS::KMS::Key' || ResourceType=='AWS::KMS::Alias']"
+
+# 3. IMPORT changeset: current template, every parameter at its current
+#    value EXCEPT KmsKeyArn='' (flips CreateKmsKey true so the template
+#    renders the two resources being imported). Safe by construction: the
+#    template resolves the key ARN identically both ways, so no OTHER
+#    resource may change - and CloudFormation REJECTS an import changeset
+#    that tries.
+aws cloudformation create-change-set \
+  --region "$AWS_REGION" \
+  --stack-name "$DB_STACK_NAME" \
+  --change-set-name kms-reimport \
+  --change-set-type IMPORT \
+  --template-body file://cloudformation/01-database.yaml \
+  --parameters \
+    ParameterKey=NamePrefix,UsePreviousValue=true \
+    ParameterKey=VpcId,UsePreviousValue=true \
+    ParameterKey=PrivateSubnetIds,UsePreviousValue=true \
+    ParameterKey=DBInstanceClass,UsePreviousValue=true \
+    ParameterKey=DBEngineVersion,UsePreviousValue=true \
+    ParameterKey=DBAllocatedStorage,UsePreviousValue=true \
+    ParameterKey=MultiAZ,UsePreviousValue=true \
+    ParameterKey=BackupRetentionDays,UsePreviousValue=true \
+    ParameterKey=PgauditLogClasses,UsePreviousValue=true \
+    ParameterKey=PgauditLogRetentionDays,UsePreviousValue=true \
+    ParameterKey=KmsKeyArn,ParameterValue= \
+  --resources-to-import "[
+    {\"ResourceType\":\"AWS::KMS::Key\",\"LogicalResourceId\":\"KmsKey\",\"ResourceIdentifier\":{\"KeyId\":\"${KEY_ID}\"}},
+    {\"ResourceType\":\"AWS::KMS::Alias\",\"LogicalResourceId\":\"KmsKeyAlias\",\"ResourceIdentifier\":{\"AliasName\":\"alias/${NAME_PREFIX}\"}}
+  ]"
+
+# 4. Inspect BEFORE executing - EXACTLY two rows, both action "Import"
+#    (KmsKey, KmsKeyAlias). Anything else: delete-change-set, investigate.
+aws cloudformation describe-change-set --region "$AWS_REGION" \
+  --stack-name "$DB_STACK_NAME" --change-set-name kms-reimport \
+  --query 'Changes[].[ResourceChange.Action,ResourceChange.LogicalResourceId]' --output table
+
+# 5. Execute and wait for IMPORT_COMPLETE.
+aws cloudformation execute-change-set --region "$AWS_REGION" \
+  --stack-name "$DB_STACK_NAME" --change-set-name kms-reimport
+aws cloudformation wait stack-import-complete --region "$AWS_REGION" \
+  --stack-name "$DB_STACK_NAME"
+
+# 6. Detect drift: import records the IMPORTED TEMPLATE's properties as the
+#    resource's expected state WITHOUT comparing or applying them, so the
+#    key's ACTUAL policy still holds whatever out-of-band state it had. A
+#    same-template deploy-database.sh after import is a NO-OP ("no changes
+#    to deploy") - it does NOT re-apply KeyPolicy; CloudFormation converges
+#    the policy only on the NEXT update whose template actually changes a
+#    KmsKey property. Run drift detection (the AWS-recommended post-import
+#    step) to see exactly where the real key differs from the template:
+aws cloudformation detect-stack-drift --region "$AWS_REGION" --stack-name "$DB_STACK_NAME"
+# ... then describe-stack-resource-drifts for KmsKey once detection completes.
+
+# 7. Confirm the Bedrock statement is on the REAL key (put there by §11's
+#    out-of-band step - NOT by CloudFormation; see above):
+aws kms get-key-policy --key-id "$KEY_ID" --policy-name default \
+  --region "$AWS_REGION" --query Policy --output text | grep -c BedrockInvocationLogsWrite   # -> 1
+# One normal deploy proves the fixed script preserves ownership (a no-op
+# update that leaves the KmsKeyArn parameter empty):
+scripts/deploy-database.sh
+```
+
+> ⚠️ **The template becomes the source of truth again on the next real
+> `KeyPolicy` change — not at import time.** Import doesn't touch the key's
+> actual policy, and a same-template update is a no-op; but the next
+> template edit that alters `KmsKey` (e.g. a future key-policy statement)
+> replaces the FULL policy, silently removing any out-of-band statement not
+> in `01-database.yaml`. `BedrockInvocationLogsWrite` is safe (it ships in
+> the template); anything key admins added while the key was detached must
+> be folded into the template's `KeyPolicy` or expect it gone on that
+> update. Check with step 6's drift results before moving on.
 
 ---
 
@@ -1433,7 +1658,13 @@ aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-nam
 
 - **KMS CMK** (`KmsKey`, 01) — `Retain`. Everything at rest was encrypted with
   it; retained so retained data stays readable. Schedule key deletion manually
-  only after all encrypted artifacts are gone.
+  only after all encrypted artifacts are gone. **Redeploy consequence:**
+  `deploy.env` still holds this key's ARN in `KMS_KEY_ARN` (persisted by
+  `deploy-database.sh`), and a fresh deploy would consume it as
+  **bring-your-own** — 01 would reference the retained key but never manage
+  its policy again (`deploy-database.sh` warns loudly on this path). Decide
+  deliberately: clear `KMS_KEY_ARN` so the new stack creates and manages a
+  new key, or keep it and own the key policy out-of-band from then on.
 - **ALB access-logs bucket** (`AlbLogsBucket`, 02) — `Retain`.
 - **Activity-archive bucket** (`ActivityArchiveBucket`, 03) — `Retain`
   (CMK-encrypted).

@@ -35,6 +35,40 @@ case "$BEDROCK_PROMPT_LOGGING" in
   *) echo "FATAL: BEDROCK_PROMPT_LOGGING must be '', 'true' or 'false' (got '$BEDROCK_PROMPT_LOGGING')" >&2; exit 1 ;;
 esac
 
+# Preflight, so this fails FAST and with the real cause: enabling makes
+# Bedrock test-write the SSE-KMS bucket, which needs kms:GenerateDataKey for
+# bedrock.amazonaws.com ON THE KEY POLICY (a service principal cannot use a
+# key via IAM policies). When KMS denies it, Bedrock reports the MISLEADING
+# "Failed to validate permissions for bucket ... verify the S3 bucket policy"
+# at the very end of the run (hit live 2026-07-27). This grep is a heuristic
+# fail-fast, not the authoritative check - the put itself still validates.
+if [ "$BEDROCK_PROMPT_LOGGING" = "true" ]; then
+  require_vars KMS_KEY_ARN
+  if KEY_POLICY="$(aws kms get-key-policy --key-id "$KMS_KEY_ARN" \
+        --policy-name default --region "$AWS_REGION" \
+        --query Policy --output text 2>&1)"; then
+    if ! grep -q 'bedrock\.amazonaws\.com' <<<"$KEY_POLICY" \
+       || ! grep -q 'GenerateDataKey' <<<"$KEY_POLICY"; then
+      cat >&2 <<EOF
+FATAL: the CMK's key policy (${KMS_KEY_ARN}) has no bedrock.amazonaws.com /
+kms:GenerateDataKey statement, so Bedrock cannot deliver prompt logs to the
+SSE-KMS bucket and enabling would fail at the end with the misleading
+"Failed to validate permissions for bucket".
+  - Stack-managed key (01 created it and still owns it): re-run
+    scripts/deploy-database.sh - the statement (BedrockInvocationLogsWrite)
+    ships in 01-database.yaml.
+  - Bring-your-own or stack-detached key: apply the statement out-of-band -
+    exact commands in docs/operations/om-runbooks.md §11 (Bedrock prompt
+    logging), "KMS prerequisite".
+EOF
+      exit 1
+    fi
+  else
+    printf '%s\n' "$KEY_POLICY" >&2
+    log "WARNING: cannot read the CMK key policy (kms:GetKeyPolicy) - skipping the Bedrock KMS preflight; the put below still validates"
+  fi
+fi
+
 if [ "$BEDROCK_PROMPT_LOGGING" = "false" ]; then
   # get-then-delete: only touch the account config if one exists, so a
   # standing "false" in deploy.env doesn't make every unrelated 03 re-run
