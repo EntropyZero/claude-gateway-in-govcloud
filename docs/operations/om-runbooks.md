@@ -717,6 +717,8 @@ master path.
 | `${NAME_PREFIX}/jwt-secret` (session signing) | 02 | **Not rotated automatically** (`GenerateSecretString` at create) | Manual — see below |
 | `${NAME_PREFIX}/grafana-oidc-client-secret` | 03 | **Manual** | `scripts/set-grafana-oidc-secret.sh` (runbook 2) |
 | `${NAME_PREFIX}/grafana-admin-password` | 03 | **Not rotated** (break-glass; login form disabled) | Regenerate manually (below) |
+| `${NAME_PREFIX}/spend-admin-write-key` | 02 | **Not rotated automatically** (`GenerateSecretString` at create) | Manual — procedure in `cost-controls.md` §7 "Key rotation" (file-based write, then force a gateway deployment) |
+| `${NAME_PREFIX}/spend-admin-read-key` | 02 | **Not rotated automatically** (`GenerateSecretString` at create) | Same as the write key (`cost-controls.md` §7) |
 | `${NAME_PREFIX}/portal-oidc-client-secret` | 04 | **Manual** | `scripts/set-portal-oidc-secret.sh` (runbook 2) |
 | `${NAME_PREFIX}/portal-session-secret` (cookie signing) | 04 | **Not rotated automatically** (`GenerateSecretString` at create) | Same file-based pattern as the JWT secret (below), then roll `$NAME_PREFIX-portal`; rotation invalidates portal sessions (users just re-login) |
 

@@ -116,6 +116,24 @@ own Lambda, with the service roll built into the rotation itself; the
 master secret became break-glass and its rotation affects no running
 task. See the C-batch header below for the item-by-item mapping.
 
+**Resubmission assessment published (2026-07-27).** A fresh point-in-time
+security review of the whole posture at commit `a3ba69f` — for the ATO
+**resubmission** package — now lives at
+[`security-review-2026-07-resubmission.md`](security-review-2026-07-resubmission.md)
+(also added to the PDF set). Method: 8-dimension multi-agent review, every
+finding adversarially verified (code re-read + web-checked service semantics)
+before inclusion. Result: **0 critical / 0 high / 5 medium / 20 low / 2 info**
+confirmed findings (mediums: four monitoring/alarm-coverage gaps + the
+`mirror-collector.sh` arch-pin gap), 4 refuted claims recorded in its
+appendix B, and 4 doc-drift items — the stack-04 portal SG was missing from
+`network-access-controls.md`'s tables (ALB row, portal row, endpoint row,
+cross-stack writers) and the two spend-admin keys were missing from
+om-runbooks §7's secrets inventory — **all five fixed in the same change**.
+This doc remains the running fix log / finding-status source of truth; the
+resubmission doc is the submission snapshot. New findings from that review are
+tracked THERE (its §6 remediation sequence), not re-numbered into the batches
+below.
+
 **Deploy-breaker found live: 01 detached its own CMK on the first re-run, so
 key-policy updates silently applied to nothing (2026-07-27, ROOT-CAUSED LIVE;
 fix committed, repair NOT yet run).** Enabling Bedrock prompt logging failed
