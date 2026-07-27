@@ -116,6 +116,46 @@ own Lambda, with the service roll built into the rotation itself; the
 master secret became break-glass and its rotation affects no running
 task. See the C-batch header below for the item-by-item mapping.
 
+**Deploy-breaker found live: 01 detached its own CMK on the first re-run, so
+key-policy updates silently applied to nothing (2026-07-27, ROOT-CAUSED LIVE;
+fix committed, repair NOT yet run).** Enabling Bedrock prompt logging failed
+at `PutModelInvocationLoggingConfiguration` with `Failed to validate
+permissions for bucket ... verify the S3 bucket policy` — the bucket policy
+was correct; the denial was at **KMS** (Bedrock's enable-time test write
+needs `kms:GenerateDataKey` for `bedrock.amazonaws.com` on the **key
+policy**, and Bedrock's error text blames S3 regardless). The statement was
+missing because repeated 01 re-runs never applied it: `deploy-database.sh`
+persists the stack-created key's ARN into `deploy.env` `KMS_KEY_ARN` (for
+ECR/mirroring/02/03) and then fed it back as the `KmsKeyArn` **parameter**,
+which the template reads as bring-your-own — on the first re-run
+CloudFormation dropped the Retain'd `KmsKey` from the stack, deleted
+`alias/<prefix>`, and every subsequent template `KeyPolicy` change (the
+Bedrock statement was the first since) applied to nothing. Every deployment
+that followed the runbooks is affected — the persistence step is mandatory
+there. Fixes (committed): (1) `resolve_kms_param` in `common.sh` — an
+existing stack keeps its own recorded `KmsKeyArn` parameter; deploy.env
+cannot flip ownership; `ALLOW_KMS_PARAM_CHANGE=1` is the named override;
+unexpected describe-stacks failures are fatal rather than ownership-flipping
+(bats-covered). (2) `deploy-observability.sh` preflights the key policy for
+the Bedrock statement when `BEDROCK_PROMPT_LOGGING=true` and fails fast with
+the real cause + fix pointers (heuristic grep; the put stays authoritative).
+(3) `KmsKeyAlias` gains `DeletionPolicy: Retain` (parity with the key +
+resource-import prerequisite). Repair for already-detached deployments:
+out-of-band `BedrockInvocationLogsWrite` via get→append→put (unblocks prompt
+logging immediately), then optionally re-adopt the key via a CloudFormation
+IMPORT changeset — full procedure in om-runbooks **§11a**, safe by
+construction (the template resolves the key ARN identically in both modes,
+so the changeset may contain nothing but the two imports; inspect before
+executing). Import does NOT apply template properties: the real key policy
+keeps its out-of-band state, a same-template re-run is a no-op, and
+CloudFormation converges (full-policy replacement, removing statements not
+in the template) only on the next update that actually changes a `KmsKey`
+property — the runbook prescribes post-import drift detection and warns
+accordingly (adversarial-review catch: an earlier draft claimed the first
+re-run converges). **[NEEDS TEST-RUN CONFIRMATION]:** the import round-trip
+in GovCloud (incl. `UsePreviousValue` on an IMPORT changeset, undocumented
+combination), and the deferred-convergence behavior just described.
+
 **Portal image build: extra trust anchors are now split one-cert-per-file
 (2026-07-27, found during the live test run).** The portal build staged the
 concatenated `EXTRA_CA_CERT_PATH` + `GATEWAY_CA_BUNDLE` bundle as a single

@@ -127,6 +127,24 @@ throwaway Postgres). **Next step: confirm the deployed gateway image contains th
 an older image ignores the env var SILENTLY - rebuilding with a bumped tag if
 not; then re-run `deploy-gateway.sh` and confirm `/model` in a live session.**
 
+**Fixed 2026-07-27 (committed; live repair NOT yet run): 01 DETACHED its own
+CMK on the first re-run — key-policy updates silently applied to nothing.**
+Found live enabling prompt logging: `PutModelInvocationLoggingConfiguration`
+failed blaming the S3 bucket policy, but the denial was at KMS — the CMK
+never got the Bedrock `GenerateDataKey` statement because
+`deploy-database.sh` fed the PERSISTED key ARN back as the `KmsKeyArn`
+parameter, flipping the stack to BYO mode on its first re-run
+(CloudFormation dropped the Retain'd key, deleted `alias/<prefix>`; every
+runbook-following deployment is affected). Fixes: `resolve_kms_param`
+(common.sh, bats-covered) — an existing stack keeps its own recorded
+parameter, `ALLOW_KMS_PARAM_CHANGE=1` overrides, unexpected lookup errors
+are fatal; a KMS preflight in `deploy-observability.sh` (fail-fast with the
+real cause); `KmsKeyAlias` DeletionPolicy Retain. Live repair (om-runbooks
+§11a): out-of-band `BedrockInvocationLogsWrite` now, optional CMK re-adoption
+via CloudFormation IMPORT changeset later — both need test-run confirmation.
+Bedrock's misleading bucket error + the KMS prerequisite are documented in
+§11.
+
 **Added 2026-07-25 (committed, NOT yet deployed): Bedrock prompt logging,
 opt-in.** Bedrock model invocation logging = verbatim prompts+responses of
 EVERY bedrock-runtime call in the ACCOUNT+REGION (not just this gateway's),

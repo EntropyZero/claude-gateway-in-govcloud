@@ -113,6 +113,79 @@ stack_output() {
     --output text
 }
 
+# stack_param STACK-NAME PARAMETER-KEY - the deployed stack's CURRENT value
+# for a parameter (empty string prints as an empty line). Fails when the
+# stack does not exist; callers decide what that means.
+stack_param() {
+  aws cloudformation describe-stacks \
+    --region "$AWS_REGION" \
+    --stack-name "$1" \
+    --query "Stacks[0].Parameters[?ParameterKey=='$2'].ParameterValue" \
+    --output text
+}
+
+# resolve_kms_param STACK-NAME - print the KmsKeyArn value to deploy 01 with.
+# That parameter is key-OWNERSHIP state, not just a value: '' means "this
+# stack created and manages the CMK (CreateKmsKey condition)", an ARN means
+# bring-your-own. deploy-database.sh persists the created key's ARN into
+# deploy.env KMS_KEY_ARN for the OTHER consumers (ECR repo encryption,
+# mirroring, 02/03) - so feeding KMS_KEY_ARN back to the stack parameter
+# would flip a created-key deployment into BYO mode on its first re-run:
+# CloudFormation abandons the Retain'd key (and deletes its alias), and
+# every later KeyPolicy change in the template silently applies to nothing
+# (hit live 2026-07-27: the Bedrock prompt-logging statement never landed).
+# An existing stack therefore keeps ITS OWN recorded parameter;
+# ALLOW_KMS_PARAM_CHANGE=1 is the named override (key adoption/change is a
+# teardown-scale migration - see the template's KmsKeyArn description).
+# An unexpected describe-stacks failure is FATAL rather than a fallback to
+# deploy.env: a transient API error must not flip key ownership.
+resolve_kms_param() {
+  local stack="$1" current err errf
+  # stderr must NOT bleed into the captured value: the CLI emits benign
+  # warnings (urllib3/botocore deprecations) on SUCCESSFUL calls, and a
+  # polluted value here is exactly an ownership flip. Capture it separately.
+  errf="$(mktemp)"
+  if current="$(stack_param "$stack" KmsKeyArn 2>"$errf")"; then
+    rm -f "$errf"
+    # 'None' = JMESPath null (a stack without Parameters); anything else
+    # non-ARN is pollution. Refuse rather than deploy a garbage parameter.
+    case "$current" in
+      ''|arn:*) ;;
+      *) echo "FATAL: unexpected KmsKeyArn value '${current}' on stack ${stack} - refusing to guess key ownership" >&2
+         return 1 ;;
+    esac
+    if [ "$current" != "${KMS_KEY_ARN:-}" ]; then
+      if [ "${ALLOW_KMS_PARAM_CHANGE:-}" = "1" ]; then
+        log "ALLOW_KMS_PARAM_CHANGE=1: overriding the stack's KmsKeyArn ('${current:-<empty = stack-managed key>}' -> '${KMS_KEY_ARN:-}')" >&2
+        printf '%s' "${KMS_KEY_ARN:-}"
+        return 0
+      fi
+      log "Existing stack keeps its KmsKeyArn parameter ('${current:-<empty = stack-managed key>}'); deploy.env KMS_KEY_ARN differs and is NOT passed (ALLOW_KMS_PARAM_CHANGE=1 to force)" >&2
+    fi
+    printf '%s' "$current"
+  else
+    err="$(cat "$errf")"; rm -f "$errf"
+    # The exact string the AWS CLI's own `cloudformation deploy` matches on
+    # (awscli deployer.py) - a de facto stable contract. The tighter pattern
+    # avoids false-matching unrelated errors like S3's "Access Key Id ...
+    # does not exist in our records" (which must stay FATAL).
+    if grep -q 'Stack with id .* does not exist' <<<"$err"; then
+      # First deploy of this stack: deploy.env decides ('' = create a key).
+      # Loudly so: after a TEARDOWN, deploy.env still holds the persisted
+      # ARN of the Retain'd stack-created key, and passing it here rebuilds
+      # the detached-BYO posture (template KeyPolicy managed by nobody).
+      if [ -n "${KMS_KEY_ARN:-}" ]; then
+        log "No existing ${stack} stack: deploying in BRING-YOUR-OWN key mode with KMS_KEY_ARN - 01 will NOT manage this key's policy. If 01 should create and manage the key (fresh redeploy after teardown), clear KMS_KEY_ARN in deploy.env first." >&2
+      fi
+      printf '%s' "${KMS_KEY_ARN:-}"
+    else
+      printf '%s\n' "$err" >&2
+      echo "FATAL: could not read ${stack}'s KmsKeyArn parameter - refusing to guess key ownership" >&2
+      return 1
+    fi
+  fi
+}
+
 # account_id - caller's AWS account (for deriving ECR URIs)
 account_id() {
   aws sts get-caller-identity --query Account --output text

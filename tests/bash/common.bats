@@ -275,3 +275,107 @@ srcf() { run bash -c "DEPLOY_ENV_FILE='$ENVFILE' COMMON_SH_OPTIONAL_ENV=1 source
   src "split_image_ref 'docker.io/library/python:3.12-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000'"
   [ "$output" = "docker.io/library/python 3.12-slim" ]
 }
+
+# ---- stack_param / resolve_kms_param ---------------------------------------
+# aws is stubbed via PATH: STUB_KMS_ERR simulates a describe-stacks failure
+# (text on stderr, exit 254, like the real CLI); otherwise STUB_KMS_PARAM is
+# printed the way `--output text` renders a parameter value (empty string =
+# empty line = stack-managed key).
+
+make_aws_stub() {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat >"$BATS_TEST_TMPDIR/bin/aws" <<'EOF'
+#!/usr/bin/env bash
+# STUB_KMS_WARN simulates the benign stderr the real CLI emits on SUCCESSFUL
+# calls (urllib3/botocore deprecation warnings)
+[ -n "${STUB_KMS_WARN:-}" ] && echo "$STUB_KMS_WARN" >&2
+if [ -n "${STUB_KMS_ERR:-}" ]; then echo "$STUB_KMS_ERR" >&2; exit 254; fi
+printf '%s\n' "${STUB_KMS_PARAM:-}"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/aws"
+}
+
+# run an expression with the aws stub first in PATH. Isolation matters: the
+# invoking shell may export ALLOW_KMS_PARAM_CHANGE / KMS_KEY_ARN (an operator
+# running make test mid-procedure) - unset them so each test builds its own
+# environment; DEPLOY_ENV_FILE is pinned to a nonexistent path so a real
+# deploy.env is never sourced.
+stub() { run bash -c "export PATH='$BATS_TEST_TMPDIR/bin':\$PATH AWS_REGION=r DEPLOY_ENV_FILE='$BATS_TEST_TMPDIR/no-such-deploy.env'; COMMON_SH_OPTIONAL_ENV=1 source '$COMMON'; unset ALLOW_KMS_PARAM_CHANGE KMS_KEY_ARN STUB_KMS_PARAM STUB_KMS_ERR STUB_KMS_WARN; $1"; }
+
+@test "stack_param: prints the deployed parameter value" {
+  make_aws_stub
+  stub "export STUB_KMS_PARAM='arn:aws-us-gov:kms:r:1:key/k'; stack_param db KmsKeyArn"
+  [ "$status" -eq 0 ]
+  [ "$output" = "arn:aws-us-gov:kms:r:1:key/k" ]
+}
+
+@test "resolve_kms_param: first deploy (no stack) uses deploy.env KMS_KEY_ARN" {
+  make_aws_stub
+  stub "export STUB_KMS_ERR='An error occurred (ValidationError): Stack with id db does not exist'
+        export KMS_KEY_ARN='arn:byo'; resolve_kms_param db 2>/dev/null"
+  [ "$status" -eq 0 ]
+  [ "$output" = "arn:byo" ]
+}
+
+@test "resolve_kms_param: existing stack-managed key is preserved (persisted output must not flip ownership)" {
+  make_aws_stub
+  stub "export STUB_KMS_PARAM=''; export KMS_KEY_ARN='arn:persisted-output'
+        resolve_kms_param db 2>/dev/null"
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+}
+
+@test "resolve_kms_param: warns when preserving a stack value that differs from deploy.env" {
+  make_aws_stub
+  stub "export STUB_KMS_PARAM=''; export KMS_KEY_ARN='arn:persisted-output'
+        resolve_kms_param db 2>&1 >/dev/null"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"is NOT passed"* ]]
+}
+
+@test "resolve_kms_param: matching stack and deploy.env values pass through silently" {
+  make_aws_stub
+  stub "export STUB_KMS_PARAM='arn:same'; export KMS_KEY_ARN='arn:same'; resolve_kms_param db"
+  [ "$status" -eq 0 ]
+  [ "$output" = "arn:same" ]
+}
+
+@test "resolve_kms_param: ALLOW_KMS_PARAM_CHANGE=1 is the named override" {
+  make_aws_stub
+  stub "export STUB_KMS_PARAM='arn:old'; export KMS_KEY_ARN='arn:new'
+        export ALLOW_KMS_PARAM_CHANGE=1; resolve_kms_param db 2>/dev/null"
+  [ "$status" -eq 0 ]
+  [ "$output" = "arn:new" ]
+}
+
+@test "resolve_kms_param: unexpected describe failure is fatal, not a fallback" {
+  make_aws_stub
+  stub "export STUB_KMS_ERR='An error occurred (AccessDenied) when calling DescribeStacks'
+        export KMS_KEY_ARN='arn:byo'; resolve_kms_param db"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"refusing to guess key ownership"* ]]
+}
+
+@test "resolve_kms_param: benign CLI stderr warnings do not pollute the value (success path)" {
+  make_aws_stub
+  stub "export STUB_KMS_WARN='NotOpenSSLWarning: urllib3 v2 only supports OpenSSL'
+        export STUB_KMS_PARAM=''; resolve_kms_param db 2>/dev/null"
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+}
+
+@test "resolve_kms_param: non-ARN garbage value (incl. 'None') is fatal, never deployed" {
+  make_aws_stub
+  stub "export STUB_KMS_PARAM='None'; resolve_kms_param db"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"refusing to guess key ownership"* ]]
+}
+
+@test "resolve_kms_param: teardown+redeploy with a stale persisted ARN warns about BYO mode" {
+  make_aws_stub
+  stub "export STUB_KMS_ERR='An error occurred (ValidationError): Stack with id db does not exist'
+        export KMS_KEY_ARN='arn:stale-persisted'; resolve_kms_param db 2>&1"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"BRING-YOUR-OWN"* ]]
+  [[ "$output" == *"arn:stale-persisted"* ]]
+}
