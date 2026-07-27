@@ -238,3 +238,40 @@ srcf() { run bash -c "DEPLOY_ENV_FILE='$ENVFILE' COMMON_SH_OPTIONAL_ENV=1 source
   [[ "$output" == *"sha256 mismatch"* ]]
   [[ "$output" == *"egress host"* ]]
 }
+
+# ---- split_image_ref (base-image mirroring) -------------------------------
+
+@test "split_image_ref: plain repo:tag" {
+  src "split_image_ref 'grafana/grafana:13.1.1'"
+  [ "$output" = "grafana/grafana 13.1.1" ]
+}
+
+@test "split_image_ref: registry path with tag" {
+  src "split_image_ref 'public.ecr.aws/lambda/python:3.12'"
+  [ "$output" = "public.ecr.aws/lambda/python 3.12" ]
+}
+
+@test "split_image_ref: bare name defaults to latest" {
+  src "split_image_ref 'amazonlinux'"
+  [ "$output" = "amazonlinux latest" ]
+}
+
+@test "split_image_ref: registry port without tag is not a tag" {
+  src "split_image_ref 'localhost:5000/foo'"
+  [ "$output" = "localhost:5000/foo latest" ]
+}
+
+@test "split_image_ref: registry port AND tag" {
+  src "split_image_ref 'localhost:5000/foo:1.2'"
+  [ "$output" = "localhost:5000/foo 1.2" ]
+}
+
+@test "split_image_ref: digest suffix is stripped, tag defaults" {
+  src "split_image_ref 'python@sha256:0000000000000000000000000000000000000000000000000000000000000000'"
+  [ "$output" = "python latest" ]
+}
+
+@test "split_image_ref: tag plus digest keeps the tag" {
+  src "split_image_ref 'docker.io/library/python:3.12-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000'"
+  [ "$output" = "docker.io/library/python 3.12-slim" ]
+}

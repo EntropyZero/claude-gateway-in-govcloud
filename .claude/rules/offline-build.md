@@ -27,7 +27,9 @@
   upstream at build time.** In the target profile every base-image default
   that points at Docker Hub or `public.ecr.aws` must be overridden
   (`GATEWAY_BASE_IMAGE`, `LAMBDA_BASE_IMAGE`, `GRAFANA_BASE_IMAGE`,
-  `PORTAL_BASE_IMAGE`) to a digest-pinned copy in the deployment's own ECR,
-  and `mirror-collector.sh` (docker pull from `public.ecr.aws` + push to ECR)
-  runs from a host that reaches both. Upstream defaults exist for dev
-  convenience only — document the override next to any new base image.
+  `PORTAL_BASE_IMAGE`) to a digest-pinned copy in the deployment's own ECR —
+  `scripts/mirror/mirror-base-images.sh` does that mirroring (all four, and
+  persists the vars into deploy.env). Like `mirror-collector.sh` (docker
+  pull from `public.ecr.aws` + push to ECR), it runs from a host that
+  reaches both the upstream registries and AWS. Upstream defaults exist for
+  dev convenience only — document the override next to any new base image.

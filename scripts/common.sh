@@ -87,6 +87,23 @@ verify_sha256() {
   fi
 }
 
+# split_image_ref REF - print "<repository> <tag>" for a docker image
+# reference. Strips any @sha256:... digest suffix; the tag defaults to
+# 'latest' when the ref carries none. A colon in the LAST path segment is a
+# tag; a colon in an earlier segment is a registry port (localhost:5000/foo).
+split_image_ref() {
+  local ref_no_digest="${1%%@*}" last_part tag repo
+  last_part="${ref_no_digest##*/}"
+  if [ "${last_part#*:}" != "$last_part" ]; then
+    tag="${last_part##*:}"
+    repo="${ref_no_digest%":${tag}"}"
+  else
+    tag="latest"
+    repo="$ref_no_digest"
+  fi
+  printf '%s %s\n' "$repo" "$tag"
+}
+
 # stack_output STACK-NAME OUTPUT-KEY
 stack_output() {
   aws cloudformation describe-stacks \

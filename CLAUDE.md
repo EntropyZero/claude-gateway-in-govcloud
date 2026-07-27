@@ -165,6 +165,26 @@ needs live: Okta login on 13.1 (expect one-time re-login for all users) and
 the Fargate task-role credential path from the plugin subprocess. Full entry
 in the security-review fix log.
 
+**Added 2026-07-27 (committed): `scripts/mirror/mirror-base-images.sh` — one
+script mirrors all four container base images into ECR, digest-pinned.**
+Pulls (pinned `--platform linux/amd64` + post-pull arch assert — every
+consumer is X86_64), pushes into per-base CMK+IMMUTABLE repos
+(`<prefix>-base-{gateway,lambda,grafana,portal}`), and persists digest-pinned
+`GATEWAY/LAMBDA/GRAFANA/PORTAL_BASE_IMAGE` into `deploy.env`, which the
+build scripts consume. Local tags are `<upstream-tag>-<12-hex digest>` so
+floating upstream tags never collide with immutable repos and re-runs are
+idempotent (same content → same tag → push skipped). Fails closed without
+`KMS_KEY_ARN` (ECR encryption is creation-fixed; `ALLOW_NONCMK_BASE_REPOS=1`
+is the named override). Same dual-reach host profile as
+`mirror-collector.sh`; `set_env_var` persists locally, so runbooks + the
+script's own output say to copy the `*_BASE_IMAGE` lines over when hosts
+differ. **A pinned `*_BASE_IMAGE` beats the build script's version-derived
+default — Grafana version bumps now start with
+`GRAFANA_VERSION=<new> mirror-base-images.sh grafana`** (om-runbooks update
+section). New `split_image_ref` helper in common.sh (bats-covered).
+Runtime-UNVERIFIED against real registries: exercised only with stubbed
+docker/aws; the first target-profile run proves it.
+
 **Added 2026-07-26 (committed, NOT yet deployed): dashboard cumulative
 panels — stale clients no longer fall off the graphs; Sessions/Active-users
 tiles were silently broken.** The trailing-1h time-series drained a session's

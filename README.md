@@ -125,11 +125,13 @@ that flow between the CloudFormation stacks (security-group IDs, the DB
 endpoint, the ALB listener) travel as stack exports and never touch
 `deploy.env`.
 
-**Controlled-network image builds.** The three images build with **no
+**Controlled-network image builds.** The images build with **no
 package-repo access at all** — no `deb.debian.org`, no Amazon Linux repos, no
-PyPI, no Alpine CDN. Only the base images are pulled, which you mirror into
-your registry (`GATEWAY_BASE_IMAGE`, `GRAFANA_BASE_IMAGE`, `LAMBDA_BASE_IMAGE`,
-and the ADOT `COLLECTOR_IMAGE`, each pinnable by digest). How each avoids a
+PyPI, no Alpine CDN. Only the base images are pulled — mirrored into your own
+ECR, digest-pinned, by `scripts/mirror/mirror-base-images.sh` (persists
+`GATEWAY_BASE_IMAGE`, `LAMBDA_BASE_IMAGE`, `GRAFANA_BASE_IMAGE`,
+`PORTAL_BASE_IMAGE`; the ADOT `COLLECTOR_IMAGE` is mirrored the same way by
+`scripts/mirror/mirror-collector.sh`). How each avoids a
 build-time install:
 - **Gateway** — Amazon Linux 2023 (glibc, matches the `claude` binary). The
   base already ships the public CA bundle; the listener TLS cert is generated
@@ -548,7 +550,8 @@ sections, cumulative-over-range (sessions hold their contribution to the
 right edge) and trailing-1h burn rate — cost by team, cost center, and
 Okta group, tokens by model and type, and lines-of-code/commit panels. The ADOT collector (required) is mirrored into
 ECR and digest-pinned by `scripts/mirror/mirror-collector.sh` (sets
-`COLLECTOR_IMAGE`); mirror the Grafana base (`GRAFANA_BASE_IMAGE`) too. Amazon Managed Grafana exists in GovCloud but has no
+`COLLECTOR_IMAGE`); the Grafana base comes from
+`scripts/mirror/mirror-base-images.sh` (`GRAFANA_BASE_IMAGE`). Amazon Managed Grafana exists in GovCloud but has no
 CloudFormation support, so the stack self-hosts Grafana OSS on the existing
 ECS cluster to stay fully code-driven — swap to AMG manually if preferred,
 pointing it at the same AMP workspace.
