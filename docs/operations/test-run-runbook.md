@@ -210,17 +210,25 @@ so the ECR repos built next are born CMK-encrypted.
 ./scripts/mirror/mirror-grafana-plugin.sh                  # AMP datasource plugin (pin: grafana-plugin.pin)
 ./scripts/mirror/mirror-rds-ca-bundle.sh                   # RDS CA trust bundle
 
-# 3b. BUILD MACHINE — gateway image (stages claude from mirror/2.1.207/,
+# 3b. Base images — mirror all four into ECR, digest-pinned; persists the
+#     GATEWAY/LAMBDA/GRAFANA/PORTAL_BASE_IMAGE vars the builds below consume.
+#     Needs BOTH upstream-registry reach (Docker Hub + public.ecr.aws) and
+#     AWS creds — run it where both are available. If that host is not the
+#     build machine, copy the four persisted *_BASE_IMAGE lines into the
+#     build machine's scripts/deploy.env (set_env_var writes only locally).
+./scripts/mirror/mirror-base-images.sh
+
+# 3c. BUILD MACHINE — gateway image (stages claude from mirror/2.1.207/,
 #     re-verified against the mirror's CHECKSUMS.txt)
 ./scripts/build-and-push-image.sh                  # persists IMAGE_URI
 
-# 3c. DB admin Lambda image (bootstrap + rotation)
+# 3d. DB admin Lambda image (bootstrap + rotation)
 ./scripts/build-and-push-dbadmin.sh                # persists DBADMIN_IMAGE (+ lambda ECR pull policy)
 
-# 3d. Grafana image (bakes in the mirrored AMP plugin)
+# 3e. Grafana image (bakes in the mirrored AMP plugin)
 ./scripts/build-and-push-grafana.sh                # persists GRAFANA_IMAGE
 
-# 3e. ADOT collector — mirror a pinned upstream image into ECR.
+# 3f. ADOT collector — mirror a pinned upstream image into ECR.
 #     Set ADOT_VERSION to the release you want; the script pulls it,
 #     pushes to your ECR (CMK-encrypted, immutable), and PERSISTS a
 #     digest-pinned COLLECTOR_IMAGE into deploy.env automatically.
@@ -228,14 +236,15 @@ so the ECR repos built next are born CMK-encrypted.
 #     are available.
 ADOT_VERSION=v0.43.0 ./scripts/mirror/mirror-collector.sh
 
-# 3f. Download-portal image (only if deploying the optional portal, step 9b)
+# 3g. Download-portal image (only if deploying the optional portal, step 9b)
 ./scripts/build-and-push-portal.sh                 # persists PORTAL_IMAGE
 ```
-🔎 After this, `deploy.env` has all four image vars set by the scripts —
-`IMAGE_URI`, `DBADMIN_IMAGE`, `GRAFANA_IMAGE`, and a digest-pinned
-`COLLECTOR_IMAGE` (`<acct>.dkr.ecr.<region>.amazonaws.com/claude-gw-adot@sha256:…`).
+🔎 After this, `deploy.env` has every image var set by the scripts —
+`IMAGE_URI`, `DBADMIN_IMAGE`, `GRAFANA_IMAGE`, a digest-pinned
+`COLLECTOR_IMAGE` (`<acct>.dkr.ecr.<region>.amazonaws.com/claude-gw-adot@sha256:…`),
+and the four digest-pinned `*_BASE_IMAGE` vars from step 3b.
 You do **not** edit `deploy.env` by hand for any of them. Confirm with:
-`grep -E 'IMAGE_URI|DBADMIN_IMAGE|GRAFANA_IMAGE|COLLECTOR_IMAGE' scripts/deploy.env`
+`grep -E 'IMAGE_URI|DBADMIN_IMAGE|GRAFANA_IMAGE|COLLECTOR_IMAGE|BASE_IMAGE' scripts/deploy.env`
 
 ---
 
@@ -473,7 +482,7 @@ outbound over the **same** server-side egress path (+ SSL-inspection exemption)
 the gateway already requires — same prerequisite, so OIDC can't be verified
 live until that lands.
 
-Prereqs: portal image built (step 3f), and the Okta app has the
+Prereqs: portal image built (step 3g), and the Okta app has the
 `https://<FQDN>/portal/oauth/callback` redirect URI + the `<ACCESS_GROUP>`
 group populated (see `docs/requests/okta-request-email.md`). **Critically, the app must
 have a groups claim configured** on the authorization server (ID token, matches
@@ -557,11 +566,14 @@ against the manifest SHA-256 before upload.
 ./scripts/mirror/mirror-claude-release.sh 2.1.207
 ./scripts/mirror/mirror-grafana-plugin.sh
 ./scripts/mirror/mirror-rds-ca-bundle.sh
-# -- copy mirror/ to the build machine; everything below runs there --
+# -- dual-reach host (upstream registries + AWS creds; see steps 3b/3f) --
+./scripts/mirror/mirror-base-images.sh   # digest-pins *_BASE_IMAGE
+#   ... mirror ADOT collector, set COLLECTOR_IMAGE (step 3f) ...
+# -- copy mirror/ (and, if hosts differ, the persisted *_BASE_IMAGE +
+#    COLLECTOR_IMAGE deploy.env lines) to the build machine; everything below runs there --
 ./scripts/build-and-push-image.sh
 ./scripts/build-and-push-dbadmin.sh
 ./scripts/build-and-push-grafana.sh
-#   ... mirror ADOT collector, set COLLECTOR_IMAGE (step 3e) ...
 ./scripts/deploy-gateway.sh          # watch: bootstrap, target health, first rotation
 #   ... create CNAME, Zscaler bypass ...
 ./scripts/verify-gateway.sh

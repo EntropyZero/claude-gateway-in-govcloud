@@ -32,6 +32,7 @@ for the full runbook.
 | `import-enterprise-cert.sh` | Generate a CSR / import the signed enterprise cert into ACM for the ALB (runs without `deploy.env` for PKI workstations) |
 | `deploy-database.sh` | Stack 01: RDS PostgreSQL + the KMS CMK (created first so ECR repos are born encrypted) |
 | `mirror/mirror-claude-release.sh` + `mirror/mirror-rds-ca-bundle.sh` | Egress host: verify + stage the pinned Claude Code release and the RDS CA trust bundle into `mirror/`, then copy `mirror/` to the build machine |
+| `mirror/mirror-base-images.sh` | Mirror the four container **base** images into ECR, digest-pinned into `deploy.env` (`*_BASE_IMAGE`) — run before the builds below; dual-reach like `mirror/mirror-collector.sh` |
 | `build-and-push-image.sh` | Gateway image (stages `claude` from `mirror/<version>/`, re-verified against `CHECKSUMS.txt`, + `mirror/rds-ca-bundle.pem`) |
 | `build-and-push-dbadmin.sh` | DB bootstrap/rotation Lambda image (vendored wheels + `mirror/rds-ca-bundle.pem` — no egress) |
 | `build-and-push-grafana.sh` | Provisioned Grafana image (dashboard + AMP SigV4 plugin baked in from `mirror/grafana-plugins/`, re-verified against `mirror/grafana-plugin.pin`) |
@@ -69,7 +70,8 @@ egress-capable host; everything downstream is offline.
 | Script | Mirrors |
 |---|---|
 | `mirror/mirror-claude-release.sh` | Claude Code native binaries (GPG-verified manifest, SHA-256 per platform) → `mirror/<version>/` (gitignored staging) |
-| `mirror/mirror-collector.sh` | ADOT collector image → your ECR, digest-pinned into `deploy.env` (`COLLECTOR_IMAGE`). The one mirror step needing **both** upstream-registry reach (`public.ecr.aws`) and AWS creds — run it where both are available |
+| `mirror/mirror-base-images.sh` | The four container **base** images (gateway, db-admin Lambda, Grafana, portal) → your ECR under `<prefix>-base-*` repos, digest-pinned into `deploy.env` (`GATEWAY_BASE_IMAGE`, `LAMBDA_BASE_IMAGE`, `GRAFANA_BASE_IMAGE`, `PORTAL_BASE_IMAGE`, consumed by the `build-and-push-*.sh` scripts). Needs **both** upstream-registry reach (Docker Hub + `public.ecr.aws`) and AWS creds — run it where both are available |
+| `mirror/mirror-collector.sh` | ADOT collector image → your ECR, digest-pinned into `deploy.env` (`COLLECTOR_IMAGE`). Same dual-reach profile as `mirror-base-images.sh`: needs **both** upstream-registry reach (`public.ecr.aws`) and AWS creds — run it where both are available |
 | `mirror/mirror-grafana-plugin.sh` | Grafana AMP datasource plugin (SigV4 auth; not bundled upstream) → `mirror/grafana-plugins/` (gitignored staging); version+sha256 pinned in `mirror/grafana-plugin.pin`, which `build-and-push-grafana.sh` re-verifies against when it bakes the transferred artifact into the image |
 | `mirror/mirror-rds-ca-bundle.sh` | RDS CA trust bundle (GovCloud truststore; `RDS_CA_BUNDLE_URL` overrides for commercial regions) → `mirror/rds-ca-bundle.pem`, baked into the gateway + db-admin images by their build scripts |
 | `mirror/mirror-python-deps.sh` | Python wheels: regenerates the **committed** `docker/portal/vendor/` and `docker/db-admin/vendor/` sets from each image's `requirements.txt`, and (`--tools`) stages operator-tooling wheels into `vendor/tools/` (gitignored) |

@@ -609,9 +609,22 @@ expects it** (`.claude/rules/scripts.md`).
 
 - **Gateway:** `IMAGE_TAG=<new> ./scripts/build-and-push-image.sh` →
   `./scripts/deploy-gateway.sh`.
+- **Base images (all four):** `./scripts/mirror/mirror-base-images.sh
+  [gateway|lambda|grafana|portal ...]` on the dual-reach host (upstream
+  registries + AWS creds) re-mirrors and re-pins the `*_BASE_IMAGE` vars →
+  copy the updated lines into the build machine's `deploy.env` if the hosts
+  differ → rebuild the consuming image(s) with bumped tags → deploy. A
+  digest-pinned `*_BASE_IMAGE` in `deploy.env` **always wins over the build
+  script's version-derived default** — see the Grafana note below.
 - **Grafana:** `GRAFANA_IMAGE_TAG=<new> ./scripts/build-and-push-grafana.sh` →
-  `./scripts/deploy-observability.sh`. Notes for version bumps (learned on
-  the 11.5.1 → 13.1.1 upgrade, 2026-07-25): the OSS image is
+  `./scripts/deploy-observability.sh`. **Version bumps in the target profile
+  start with the base re-mirror:** once `mirror-base-images.sh` has pinned
+  `GRAFANA_BASE_IMAGE` in `deploy.env`, the build ignores `GRAFANA_VERSION`
+  for the base — bumping only the tag would rebuild the OLD Grafana under a
+  NEW name. Run `GRAFANA_VERSION=<new>
+  ./scripts/mirror/mirror-base-images.sh grafana` first (and carry the
+  updated `GRAFANA_BASE_IMAGE` line over), then build. Notes for version
+  bumps (learned on the 11.5.1 → 13.1.1 upgrade, 2026-07-25): the OSS image is
   `grafana/grafana` (the `grafana/grafana-oss` Docker Hub repo froze at
   12.4); the build script also stages the `grafana-amazonprometheus-datasource`
   plugin into the image (SigV4 left the core prometheus datasource in 13.1
