@@ -506,7 +506,7 @@ offline image builds are **[VERIFIED-LIVE]**.
 
 5. **Forcing the upgrade (optional).** The installer is user-scope only and has
    no settings-push mode; a client-side version floor is a **managed setting**,
-   delivered by GPO/MDM (see [`client-config.md`](client-config.md) §2). To
+   delivered by GPO/MDM (see [`client-config.md`](client-config.md) §8). To
    raise the floor, bump `requiredMinimumVersion` in the managed-settings JSON
    the GPO already delivers (default floor is `2.1.195`, the gateway's minimum):
 
@@ -538,7 +538,7 @@ offline image builds are **[VERIFIED-LIVE]**.
 *Rollback / recovery:* Redeploy the previous `IMAGE_URI` (old immutable tag
 still in ECR) via `deploy.env` + `deploy-gateway.sh`; lower
 `requiredMinimumVersion` back in the GPO managed-settings JSON if you raised the
-floor ([`client-config.md`](client-config.md) §2). Portal: set
+floor ([`client-config.md`](client-config.md) §8). Portal: set
 `PORTAL_RELEASE_VERSION` back to the prior version and re-run
 `deploy-download-portal.sh` (earlier `releases/<version>/` prefixes stay in the
 artifacts bucket). Keep the prior `mirror/<version>/` directory until the new
@@ -574,7 +574,7 @@ release is confirmed across the fleet.
   `%ProgramData%` at v2.1.75; admin-write-only = tamper-resistant;
   **[BINARY-VERIFIED]** against the mirrored 2.1.211 binary). A developer **with
   local admin** can self-serve the entry once. Full AD-admin steps are in
-  [`client-config.md`](client-config.md) §2; the AD/GPO request template is
+  [`client-config.md`](client-config.md) §8; the AD/GPO request template is
   [`ad-request-email.md`](../requests/ad-request-email.md). The **binary install stays
   no-admin either way** — only the login config needs the managed setting.
 - Never bypass GPG verification as a matter of routine; `ALLOW_UNVERIFIED_MANIFEST=1`
@@ -1341,11 +1341,11 @@ if ($j.PSObject.Properties.Name -contains 'hasCompletedOnboarding') {
 $j | ConvertTo-Json -Depth 100 | Set-Content $p -Encoding utf8
 ```
 Then open a **new** terminal, run `claude`, and run `/login` — the locked
-"Cloud gateway" screen appears with the URL pre-filled (§1.2 of
+"Cloud gateway" screen appears with the URL pre-filled (§3 of
 [`client-config.md`](client-config.md)).
 
 *Verification:* `claude` starts to a prompt instead of exiting; `/login`
-completes the Okta round-trip; `/model` lists only the two served models
+completes the Okta round-trip; `/model` lists only the three served models
 (runbook 6 / the test-run checklist).
 
 *Notes & pitfalls:*

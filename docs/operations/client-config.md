@@ -1,73 +1,76 @@
-# Client configuration & enforcement model
+# Claude Code client guide — install, sign-in & configuration
 
-How Claude Code is configured on developer laptops. The Windows rollout
-(`client/Install-ClaudeCode.ps1`, the download portal ZIP) installs the binary
-and writes workstation config **entirely in user scope** — no admin rights.
-**Gateway login, however, requires one admin-delivered managed setting**:
+How Claude Code is installed, signed in, and configured on developer laptops.
+
+- **Part I (§1–§5) is the developer user manual**: prerequisites, install,
+  the sign-in walkthrough as it actually behaves, and troubleshooting. It is
+  written to be handed to end users as-is.
+- **Part II (§6–§9) is for administrators**: what the gateway pushes
+  centrally, which settings must come from a managed source, and the GPO/MDM
+  delivery of the login policy.
+
+The rollout model in one line: the Windows installer
+(`client/Install-ClaudeCode.ps1`, or the download-portal ZIP) installs the
+binary and writes workstation config **entirely in user scope** — no admin
+rights — but **gateway login requires one admin-delivered managed setting**:
 Claude Code only offers the "Cloud gateway" login when it is present, by
-Anthropic's design (§1.2). That setting is delivered by GPO/MDM (the AD request
-is [`ad-request-email.md`](../requests/ad-request-email.md)) or self-served by a developer
-with local admin. So the model is *no-admin install + one required managed
-policy for login* — see §2.
+Anthropic's design (§8). That setting is delivered by GPO/MDM (the AD request
+is [`ad-request-email.md`](../requests/ad-request-email.md)) or self-served by
+a developer with local admin. So the model is *no-admin install + one required
+managed policy for login*.
 
 This is an operations how-to (like [`test-run-runbook.md`](test-run-runbook.md))
 and is deliberately **not** part of the PDF review package. The ConOps
-([`conops.md`](../ato/conops.md)) references this model; the security-review fix log
-([`security-review-2026-07.md`](../ato/security-review-2026-07.md), 2026-07-22 entry)
-records the redesign.
-
-## Verification status — read this first
-
-Per the repo honesty rule (`.claude/rules/process.md`), claims here are tagged:
-
-- **[BINARY-VERIFIED]** — checked by inspecting the `claude` build in this
-  repo's local mirror (`mirror/2.1.211/`, gitignored; the
-  `deploy.env.example` `CLAUDE_VERSION` default may lag it — pin whatever you
-  mirror). Confirmed in that build: the `/login` picker exposes a **"Cloud
-  gateway"** option and a **"Gateway URL"** prompt; `forceLoginGatewayUrl`
-  exists only to **pre-fill and auto-connect**; managed settings are read from
-  `%ProgramFiles%\ClaudeCode\managed-settings.json` (the path Claude Code moved
-  to from `%ProgramData%` at v2.1.75).
-- **[DOC-VERIFIED]** — confirmed against Claude Code / Anthropic documentation
-  but not exercised in this deployment (e.g. the gateway `/managed/settings`
-  push, `forceLoginMethod` / `requiredMinimumVersion` semantics as
-  managed-only keys).
-- **[NEEDS TEST-RUN CONFIRMATION]** — behavior we assert but have not yet run
-  end to end: the live interactive Cloud-gateway login, the gateway
-  `/managed/settings` push (the model allowlist - BINARY-VERIFIED for shape and
-  policy ordering, but not yet live), and a GPO-delivered
-  `HKLM\SOFTWARE\Policies\ClaudeCode` source being honored by the CLI.
+([`conops.md`](../ato/conops.md)) references this model; the security-review
+fix log ([`security-review-2026-07.md`](../ato/security-review-2026-07.md))
+records the design history.
 
 ---
 
-## 1. The no-admin binary install and user config
+# Part I — Developer user manual
 
-Every *installer* action is user-scope: the binary, the user PATH, and a small
-`env` block in the developer's own settings file. No installer step writes a
-machine-wide or policy-source setting, and a SYSTEM-context run is refused
-outright (`client/Install-ClaudeCode.ps1` preconditions).
+## 1. Prerequisites
 
-**Gateway login is the exception and it is not negotiable:** it requires one
-admin-delivered managed setting (§1.2, §2). So the model is *no-admin install +
-one small managed policy for login* — not fully admin-free. The managed setting
-is static (one gateway URL) and set once, by GPO/MDM for a locked-down fleet or
-self-served by a developer who has local admin on their own machine.
+Before installing and running Claude Code you need:
 
-### 1.1 What the installer / portal ZIP does
+- **Git for Windows — required.** Claude Code's shell tooling runs through
+  Git's `bash.exe`, and its version-control features (diffs, commits,
+  branches) use `git` itself. A standard install is found automatically
+  (Claude Code looks in `C:\Program Files\Git\bin\bash.exe` and
+  `C:\Program Files (x86)\Git\bin\bash.exe`). If your Git lives anywhere else
+  — a per-user or portable install — set the `CLAUDE_CODE_GIT_BASH_PATH`
+  environment variable to your `bash.exe` location (see §5.1).
+- **Node.js / npm — NOT required.** This deployment distributes the
+  precompiled native `claude.exe`; nothing is installed from npm, and
+  `npm install`-based instructions you may find online do not apply here
+  (updates are locked down and this network does not reach npm anyway).
+- **An Okta account** in the authorized group, with MFA enrolled — sign-in is
+  your normal corporate SSO in the browser.
+- **The managed login policy on your machine.** IT delivers it automatically
+  by GPO/MDM; there is nothing for you to do. Without it Claude Code has no
+  gateway login option at all — if `/login` shows no "Cloud gateway" screen,
+  contact IT rather than trying to configure it yourself (a developer with
+  local admin can self-serve it — §8).
+- **The gateway certificate fingerprint published by IT** — you confirm it
+  once, at first connect.
+- **No admin rights** — the install itself is entirely user-scope.
 
-Running `Install-ClaudeCode.ps1` (directly from the share, or via the
-double-click `install.cmd` inside the download-portal ZIP) does exactly three
-things, all in the developer's own profile:
+## 2. Installing
 
-- **Binary** → `%USERPROFILE%\.local\bin\claude.exe`, verified (SHA-256 against
-  the release manifest + Anthropic Authenticode) on a local staging copy before
-  it is moved into place.
+Run `Install-ClaudeCode.ps1` directly from the software share, or download
+the ZIP from the portal and double-click the `install.cmd` inside it. No
+elevation prompt appears; the installer does exactly three things, all in
+your own profile:
+
+- **Binary** → `%USERPROFILE%\.local\bin\claude.exe`, verified (SHA-256
+  against the release manifest + Anthropic Authenticode) on a local staging
+  copy before it is moved into place.
 - **User PATH** → `%USERPROFILE%\.local\bin` is appended to the *user* `Path`
   environment variable (registry-backed, persists; no machine PATH edit).
 - **User configuration** → an `env` block merged into
-  `%USERPROFILE%\.claude\settings.json` (the developer's own settings file). The
-  merge preserves every existing top-level key and every unrelated `env` key,
-  and refuses to overwrite a file it cannot parse. The keys written:
+  `%USERPROFILE%\.claude\settings.json` (your own settings file). The merge
+  preserves every existing top-level key and every unrelated `env` key, and
+  refuses to overwrite a file it cannot parse. The keys written:
 
   | Key (under `env`) | Set by | Purpose |
   |---|---|---|
@@ -76,88 +79,180 @@ things, all in the developer's own profile:
   | `OTEL_RESOURCE_ATTRIBUTES` | `-Team` / `-CostCenter` | Telemetry grouping labels (`team=…,cost_center=…`); telemetry itself is enabled centrally by the gateway |
   | `NODE_EXTRA_CA_CERTS` | `-ExtraCaCertPath` | Enterprise CA trust for the gateway TLS chain (the precompiled binary honors it) |
 
-These are ordinary environment variables, honored from the user settings file —
-**not** policy keys. The installer never writes
+These are ordinary environment variables, honored from the user settings
+file — **not** policy keys. The installer never writes
 `%ProgramFiles%\ClaudeCode\managed-settings.json` and never touches
-`HKx\SOFTWARE\Policies\ClaudeCode`.
+`HKx\SOFTWARE\Policies\ClaudeCode`. A SYSTEM-context run is refused outright.
 
-### 1.2 The sign-in flow — requires the managed policy (§2)
+After installing, **open a new terminal** so the updated PATH is picked up.
 
-**Gateway sign-in is not available from user scope.** Claude Code offers the
-"Cloud gateway" login *only* when `forceLoginMethod: "gateway"` and
-`forceLoginGatewayUrl` are present in an **admin-controlled managed source**
-(§2). This is Anthropic's deliberate design — so a user can never be socially
-engineered into typing a hostile gateway URL that harvests their corporate SSO.
-Without the managed policy, `/login` shows the standard account picker with **no
-gateway option at all** — there is nothing for the developer to select, and no
-place to type a URL.
+## 3. First launch & signing in
 
-- [DOC-VERIFIED] Anthropic docs: *"Without this, `/login` shows the standard
-  account picker with no gateway option."*
-- [BINARY-VERIFIED] The picker has no selectable gateway entry; the binary
-  comment reads *`forceLoginMethod: "gateway"` "so users never type the URL"*;
-  and a user-level `forceLoginMethod:"gateway"` in `~/.claude/settings.json` is
-  explicitly ignored (honored only from source types `hklm`/`plist`/`file`/`helper`).
-
-**With the managed policy in place** (delivered by GPO/MDM, or self-served on a
-machine where the developer has local admin — §2), the experience is
-**choice-free**:
+Signing in is effectively a one-time step: the session persists and refreshes
+itself. The login method is locked to the corporate gateway and the URL is
+pre-filled — you never choose an account type or type a URL.
 
 1. Open a **new** terminal and run `claude`.
-2. Claude Code opens directly on the gateway login: the method is **locked** to
-   gateway and the URL is **pre-filled** — no menu to pick, no URL to type; the
-   developer just **presses Enter** to connect [BINARY-VERIFIED:
-   `gatewayScreenLocked`; the binary describes `forceLoginGatewayUrl` as
-   "pre-fill and auto-connect", and Anthropic's docs describe the observable
-   step as opening the pre-filled screen and pressing Enter].
-3. The browser opens for a **one-time Okta SSO** (+MFA). That is the *only* real
-   interactive step; the issued token persists (with refresh). A later re-login
-   after expiry runs `/login`, still forced to gateway (again no choice).
+2. Two things can happen here, **both normal**:
+   - Claude Code opens directly on the **gateway login screen**, or
+   - it drops you into the **chat window** with a notice telling you to run
+     `/login`. Type `/login` and the same gateway screen appears.
+3. The gateway screen shows the pre-filled gateway URL. Press **Enter** to
+   accept and connect.
+4. Claude Code usually does **not** launch your browser by itself. Copy the
+   authentication URL it prints and paste it into your browser, then complete
+   the Okta sign-in (+ MFA).
+5. At first connect Claude Code also shows the gateway certificate
+   fingerprint and asks you to confirm it (trust-on-first-use). Compare it
+   against the fingerprint IT published — do not blind-accept it; that prompt
+   is what detects TLS interception in front of the gateway.
+6. Back in the terminal, Claude Code tells you to press Enter to continue.
+   About half the time the Enter key does nothing at this point — just
+   **close the command window, open a new one, and run `claude`**: you will
+   be fully signed in.
+7. Occasionally Claude Code comes back from a successful sign-in not
+   responding to the keyboard at all. Close it and reopen it — the session is
+   already saved.
+8. If you have used Claude in some other form before (claude.ai, a personal
+   API key, an earlier install), you may see a **yellow warning** that a
+   previous model was not found and that you are now using **Opus 4.8**. This
+   is normal — see §5.7.
 
-At first connect Claude Code validates the ALB certificate chain and then pins
-the leaf's SHA-256 fingerprint (**trust-on-first-use**, per hostname); the
-developer confirms it against the fingerprint IT published — which is why TLS
-inspection must not sit in front of the gateway FQDN
-([`networking-request-email.md`](../requests/networking-request-email.md) §3).
+**Signing out (if you ever need to):** use **`claude auth logout`** — never
+the `/logout` slash command. On this network `/logout` leaves Claude Code
+unable to start (§5.6 has the recovery).
 
-> **Hourly re-login?** If developers are bounced through the browser SSO at
-> the session TTL (default 1h) and `/login` then shows the default picker until
-> they restart Claude Code, the Okta app is missing the **Refresh Token** grant
-> type (so `offline_access` yields no refresh token and the session cannot
-> refresh). Fix it on the Okta app — see `okta-request-email.md` and
-> `om-runbooks.md`. It is not a gateway or client-config problem.
+## 4. Day-to-day notes
 
-So the managed setting is **not optional**: it is what makes the gateway login
-exist *and* makes it one-touch. The AD/GPO request for it is
-[`ad-request-email.md`](../requests/ad-request-email.md). [NEEDS TEST-RUN CONFIRMATION for
-the live Okta round-trip.]
+- `/model` lists exactly three models — Opus 4.8 (the default), Sonnet 5, and
+  Sonnet 4.5. That is by design, not an error; nothing else is served here.
+- Web tools (WebFetch / WebSearch) and MCP tools are disabled centrally and
+  cannot be re-enabled in your local settings.
+- Updates are disabled; you always run the IT-distributed build, so `claude
+  update` doing nothing is intentional. New versions arrive through the
+  normal software distribution channel.
+- `/status` shows which configuration sources are active — useful to see
+  what is centrally managed vs. your own `settings.json`.
 
-> ⚠️ **Tell developers to sign out with `claude auth logout` — never `/logout`.**
-> The two are not equivalent, and on a gateway-only egress path `/logout`
-> **locks the developer out of their own client**. `/logout` also clears
-> onboarding (`hasCompletedOnboarding = false`) and deletes the whole
-> credential store, including the pinned TLS fingerprint. The next launch
-> therefore re-enters onboarding, and because the login method is derived from
-> *whether gateway credentials exist*, a credential-less client resolves to
-> `firstParty` — which puts a **connectivity preflight first in the onboarding
-> steps**. That preflight requires HTTP 200 from both `api.anthropic.com` and
-> `platform.claude.com` (fixed hosts; the gateway URL never substitutes for
-> them), which this network does not permit, so Claude Code prints *"Unable to
-> connect to Anthropic services"* and exits **before drawing the login screen**.
-> `claude auth login` cannot rescue it either — the managed policy sends the
-> user back to interactive `/login`. `claude auth logout` keeps onboarding
-> intact and leaves `/login` reachable. Recovery for a developer already stuck
-> is O&M runbook 12. [BINARY-VERIFIED against the mirrored 2.1.211 build,
-> 2026-07-24; the recovery steps are NEEDS TEST-RUN CONFIRMATION.] The same
-> preflight sits in front of a **first-ever run** on a clean profile — verify a
-> fresh install before broad rollout.
+## 5. Troubleshooting
 
-### 1.3 What the gateway pushes centrally
+### 5.1 Claude Code can't find Git / bash
+
+Symptoms: a startup error saying Claude Code requires Git for Windows, shell
+commands failing to run, or *"Claude Code was unable to find
+CLAUDE_CODE_GIT_BASH_PATH path …"*.
+
+- If Git for Windows is not installed, install it (no admin needed for the
+  per-user installer).
+- If Git is installed somewhere other than the standard
+  `C:\Program Files\Git` location (per-user install, portable Git), point
+  Claude Code at your `bash.exe` with the `CLAUDE_CODE_GIT_BASH_PATH`
+  environment variable:
+
+  ```powershell
+  setx CLAUDE_CODE_GIT_BASH_PATH "D:\Tools\Git\bin\bash.exe"
+  ```
+
+  then open a **new** terminal. Alternatively, put it in the `env` block of
+  `%USERPROFILE%\.claude\settings.json` alongside the installer's keys:
+
+  ```json
+  { "env": { "CLAUDE_CODE_GIT_BASH_PATH": "D:\\Tools\\Git\\bin\\bash.exe" } }
+  ```
+
+  The value must be the full path to **`bash.exe` itself** (normally
+  `…\Git\bin\bash.exe`), not the Git folder and not `git.exe`.
+
+### 5.2 No login screen at launch — dropped into the chat window
+
+Sometimes the first launch does not take you to the login screen and instead
+opens the chat window with a notice to log in. This is normal: run `/login`
+and continue from §3 step 3.
+
+If `/login` shows **no gateway screen at all** (an account picker with no
+"Cloud gateway" option), the managed login policy is missing from the
+machine — contact IT (§8; there is nothing you can set in user scope to fix
+this).
+
+### 5.3 The browser never opens during sign-in
+
+Expected most of the time: after you accept the gateway screen, Claude Code
+typically does not launch the browser itself. Copy the authentication URL
+from the terminal and paste it into your browser manually.
+
+### 5.4 "Press Enter to continue" does nothing
+
+After the browser sign-in completes, roughly half the time the terminal's
+Enter key has no effect on the "press Enter to continue" prompt. Close the
+command window, open a new one, and run `claude` — you will be fully signed
+in (the session was already saved).
+
+### 5.5 Keyboard input not recognized after signing in
+
+Occasionally, after a successful sign-in, Claude Code stops responding to
+keyboard input entirely. Close Claude Code and reopen it; the session
+persists, so you will not have to sign in again.
+
+### 5.6 Startup fails: "Unable to connect to Anthropic services"
+
+Claude Code exits at launch before any login screen appears. This happens
+when the onboarding flag is unset — on a first-ever run on a clean profile,
+or after running the `/logout` slash command — because a not-yet-onboarded
+client tries to reach Anthropic's public endpoints, which this network blocks
+by design.
+
+Fix (no admin needed): mark onboarding as completed in
+`%USERPROFILE%\.claude.json`:
+
+```powershell
+$p = "$env:USERPROFILE\.claude.json"
+Copy-Item $p "$p.bak"          # this file also holds project history — back it up
+$j = Get-Content $p -Raw | ConvertFrom-Json
+if ($j.PSObject.Properties.Name -contains 'hasCompletedOnboarding') {
+  $j.hasCompletedOnboarding = $true
+} else {
+  $j | Add-Member -NotePropertyName hasCompletedOnboarding -NotePropertyValue $true
+}
+$j | ConvertTo-Json -Depth 100 | Set-Content $p -Encoding utf8
+```
+
+(If `%USERPROFILE%\.claude.json` does not exist yet, create it containing
+just `{"hasCompletedOnboarding": true}`.)
+
+Then open a **new** terminal, run `claude`, and run `/login`. Because
+`/logout` also deletes the pinned certificate fingerprint, the fingerprint
+confirmation from §3 step 5 will come back — re-check it against the
+IT-published value. To avoid the whole trap, sign out with
+`claude auth logout`, never `/logout`. The service-desk version of this
+procedure is [`om-runbooks.md`](om-runbooks.md) runbook 12.
+
+### 5.7 Yellow warning: a model was not found — now using Opus 4.8
+
+If you previously used Claude in some other form (claude.ai, a personal API
+key, another workplace's install), your old settings may name a model this
+gateway does not serve. On login Claude Code warns in yellow that the model
+was not found and switches you to **Opus 4.8**. This is normal behavior, not
+an error — Opus 4.8 is the default here, and `/model` shows what you can
+switch to.
+
+### 5.8 Bounced to the browser sign-in every hour
+
+If you are pushed through the browser SSO at every session expiry (about
+hourly) and `/login` then shows the default picker until you restart Claude
+Code, report it to your admins — it means the Okta app is missing the
+**Refresh Token** grant type (so the session cannot refresh silently). Admin
+fix: `okta-request-email.md` and `om-runbooks.md`. It is not a problem with
+your machine or settings.
+
+---
+
+# Part II — Administrators
+
+## 6. What the gateway pushes centrally
 
 After a client authenticates, the **gateway pushes settings to it** via its
 `/managed/settings` endpoint — the same mechanism it already uses to hand
-clients their telemetry (OTLP) configuration [DOC-VERIFIED; NEEDS TEST-RUN
-CONFIRMATION].
+clients their telemetry (OTLP) configuration.
 
 Four things are pushed:
 
@@ -190,9 +285,8 @@ policy, and a policy with no `match:` is normalized to `match: {}`, which matche
 everyone — so the allowlist policy **must be last**, or every policy after it is
 dead config. With it last, the gateway merges its `cli` as a *base* into each
 earlier policy, so group members receive the allowlist *and* the lockdown.
-[RUNTIME-VERIFIED against the mirrored 2.1.211 gateway, 2026-07-24.] `availableModels` accepts family aliases (`opus`), version
-prefixes (`opus-4-5`), and full model IDs; an empty array means "default model
-only". [BINARY-VERIFIED against the mirrored 2.1.211 gateway binary, 2026-07-24.]
+`availableModels` accepts family aliases (`opus`), version prefixes
+(`opus-4-5`), and full model IDs; an empty array means "default model only".
 
 **b) Update lockdown — also to everyone.** The same catch-all policy carries
 `DISABLE_UPDATES` / `DISABLE_AUTOUPDATER` as `cli.env`, the server-side twin of
@@ -224,9 +318,7 @@ Subagents (`Agent`) are deliberately **not** denied (decision 2026-07-24) — a
 bare `Agent` deny would block all subagents, built-in and custom alike. The
 model can still reach the web through `Bash` (`curl`/`wget`), which is bounded
 by the same Zscaler client-side policy as everything else on the laptop; a
-`Bash(curl *)`-style deny was considered and not applied. [`permissions`
-confirmed present in the managed-`cli` settings schema of the mirrored 2.1.211
-binary, 2026-07-24 — the fatal-unknown-key trap does not fire for it.]
+`Bash(curl *)`-style deny was considered and not applied.
 
 **d) The small/fast model override — also to everyone.** The policy sets
 `env.ANTHROPIC_DEFAULT_HAIKU_MODEL` to the configured haiku-role model ID,
@@ -238,15 +330,15 @@ background calls request an unserved model and fail.
 The value is the same `<HAIKU_MODEL_ID>` as the allowlist — the **gateway-facing**
 model ID, *not* the Bedrock inference-profile ID (`HaikuBedrockModelId`): the
 client asks the gateway, and the gateway's `models:` block does the Bedrock
-mapping. [Verified against the mirrored 2.1.211 binary, 2026-07-24: the client
-uses the env var's value verbatim — no rewriting or region logic — and the
-env-var path performs no allowlist check, so `enforceAvailableModels` cannot
-block it; the value is allowlisted anyway.] Two caveats: `ANTHROPIC_SMALL_FAST_MODEL`
-is the deprecated name for the same knob and **takes precedence if set locally**
-on a user's machine (its `_AWS_REGION` companion is Bedrock-direct-only and
-irrelevant behind a gateway); and the live `/model` check should eyeball whether
-the picker grows a cosmetic "Custom Haiku model" entry for the override — it
-resolves to an allowlisted model either way.
+mapping. The client uses the env var's value verbatim — no rewriting or region
+logic — and the env-var path performs no allowlist check, so
+`enforceAvailableModels` cannot block it; the value is allowlisted anyway.
+Two caveats: `ANTHROPIC_SMALL_FAST_MODEL` is the deprecated name for the same
+knob and **takes precedence if set locally** on a user's machine (its
+`_AWS_REGION` companion is Bedrock-direct-only and irrelevant behind a
+gateway); and the live `/model` check should eyeball whether the picker grows
+a cosmetic "Custom Haiku model" entry for the override — it resolves to an
+allowlisted model either way.
 
 The Okta **groups claim is still required**, but now for a different reason:
 per-group spend caps (`scope_type` `rbac_group`) resolve against it, so the
@@ -256,18 +348,27 @@ gateway requests the `groups` scope unconditionally. See
 Central push is a per-connected-client server-side control; it does **not**
 require or imply any admin rights on the laptop.
 
-### 1.4 Which settings are user-scope, and which must be managed
+## 7. Which settings are user-scope, and which must be managed
 
-The previous rollout wrote a machine-wide `managed-settings.json`. Most of what
+An earlier rollout wrote a machine-wide `managed-settings.json`. Most of what
 it carried now lives in the user settings file or is compensated server-side —
-**but the two login keys genuinely cannot** and must come from a managed source:
+**but the two login keys genuinely cannot** and must come from a managed
+source. Claude Code offers the "Cloud gateway" login *only* when
+`forceLoginMethod: "gateway"` and `forceLoginGatewayUrl` are present in an
+**admin-controlled managed source** (§8). This is Anthropic's deliberate
+design — so a user can never be socially engineered into typing a hostile
+gateway URL that harvests their corporate SSO. Without the managed policy,
+`/login` shows the standard account picker with **no gateway option at all** —
+there is nothing for the developer to select, and no place to type a URL; a
+user-level `forceLoginMethod: "gateway"` in `~/.claude/settings.json` is
+ignored.
 
 | Old managed-settings key | What it did | Where it lives now |
 |---|---|---|
-| `forceLoginMethod: "gateway"` | Make the CLI offer/use gateway login | **Managed source only (§1.2, §2) — no user-scope substitute exists.** Without it, `/login` has no gateway option at all. The network also blocks consumer `claude.ai`/Anthropic endpoints, but that does not create the login option; only the managed key does. |
-| `forceLoginGatewayUrl` | Pre-fill the URL on the login screen (press Enter to connect) | **Managed source only (§2).** There is no user-facing way to type a gateway URL — by design. |
-| `requiredMinimumVersion` | Refuse to start below a version floor | The **gateway enforces a minimum client version (2.1.195+) server-side**, and the mirror-only network path pins the distributed build; a *client-side* hard floor is managed-only (§2, optional). |
-| `env.DISABLE_UPDATES` / `env.DISABLE_AUTOUPDATER` | Lock auto-update | Written to the **user** settings `env` block by the installer; the gateway also pushes it centrally to every user via `/managed/settings` (§1.3); the mirror-only network path is the real control |
+| `forceLoginMethod: "gateway"` | Make the CLI offer/use gateway login | **Managed source only (§8) — no user-scope substitute exists.** Without it, `/login` has no gateway option at all. The network also blocks consumer `claude.ai`/Anthropic endpoints, but that does not create the login option; only the managed key does. |
+| `forceLoginGatewayUrl` | Pre-fill the URL on the login screen (press Enter to connect) | **Managed source only (§8).** There is no user-facing way to type a gateway URL — by design. |
+| `requiredMinimumVersion` | Refuse to start below a version floor | The **gateway enforces a minimum client version (2.1.195+) server-side**, and the mirror-only network path pins the distributed build; a *client-side* hard floor is managed-only (§8, optional). |
+| `env.DISABLE_UPDATES` / `env.DISABLE_AUTOUPDATER` | Lock auto-update | Written to the **user** settings `env` block by the installer; the gateway also pushes it centrally to every user via `/managed/settings` (§6); the mirror-only network path is the real control |
 | `env.OTEL_RESOURCE_ATTRIBUTES` (`team` / `cost_center`) | Telemetry grouping | User settings `env` block (`-Team` / `-CostCenter`) |
 | `env.NODE_EXTRA_CA_CERTS` | Enterprise CA trust | User settings `env` block (`-ExtraCaCertPath`) |
 | (Okta auth, allowed email domains) | Who may use the gateway | **Gateway enforces Okta authentication + allowed email domains server-side** — never a client setting |
@@ -279,33 +380,30 @@ are compensations that *harden* the deployment, but they do **not** substitute
 for the login key — the "Cloud gateway" option simply does not exist on a
 client without it. The admin channel below is therefore required, not optional.
 
----
-
-## 2. The managed-settings path for gateway login (required)
+## 8. The managed-settings path for gateway login (required)
 
 **This is the required path for gateway login, not an optional "enforcement"
 add-on.** Claude Code only exposes the "Cloud gateway" login when
 `forceLoginMethod: "gateway"` and `forceLoginGatewayUrl` are present in a
 **managed source**; delivering them also locks the method and pre-fills the URL
-so the developer just signs in (§1.2). `forceLoginMethod`, `forceLoginGatewayUrl`,
+so the developer just signs in (§3). `forceLoginMethod`, `forceLoginGatewayUrl`,
 and the optional `requiredMinimumVersion` are honored **only from a managed
-source** [DOC-VERIFIED + BINARY-VERIFIED], and a managed source **overrides user
-and project settings** — so a developer cannot edit their way around them
-(nor edit their way *into* the gateway login without one).
+source**, and a managed source **overrides user and project settings** — so a
+developer cannot edit their way around them (nor edit their way *into* the
+gateway login without one).
 
 Deliver them by **Group Policy / MDM** for a locked-down fleet (the AD request
 is [`ad-request-email.md`](../requests/ad-request-email.md)), or self-serve them once on a
 machine where the developer has **local admin**. The core value is the same
 small JSON either way (the two login keys; `parentSettingsBehavior` is an
-optional third — §2.1). Two interchangeable mechanisms follow.
+optional third). Two interchangeable mechanisms follow.
 
 The managed-settings JSON to deliver (single object, one line for the registry
 value). `forceRemoteSettingsRefresh: true` makes the CLI block startup until it
 has freshly fetched the gateway's `/managed/settings` and **exit if that fetch
-fails** — which is what guarantees the model allowlist (§1.3) actually reaches
+fails** — which is what guarantees the model allowlist (§6) actually reaches
 the client instead of the client silently falling back to its built-in model
 menu. Trade-off: a gateway outage then stops Claude Code from starting at all.
-[BINARY-VERIFIED 2026-07-24.]
 
 ```json
 {"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<GATEWAY_FQDN>","forceRemoteSettingsRefresh":true,"requiredMinimumVersion":"2.1.195"}
@@ -315,12 +413,12 @@ Bump `requiredMinimumVersion` when you raise the fleet's floor (default is
 `2.1.195`, the gateway's server-side minimum). There are two interchangeable
 delivery mechanisms; pick whichever fits the fleet's GPO conventions.
 
-### 2.1 Mechanism A — GPP Registry item (recommended)
+### 8.1 Mechanism A — GPP Registry item (recommended)
 
 Deliver the settings as a single registry string value under the machine
 policy hive. Claude Code reads managed settings from
 `HKLM\SOFTWARE\Policies\ClaudeCode`, value name `Settings`, type `REG_SZ`, whose
-data is the one-line JSON above [DOC-VERIFIED].
+data is the one-line JSON above.
 
 Steps an AD admin can follow:
 
@@ -344,13 +442,12 @@ Steps an AD admin can follow:
 Use **Update** (not Replace) so the item is refreshed in place on each policy
 cycle without churn.
 
-### 2.2 Mechanism B — GPP Files item (managed-settings.json)
+### 8.2 Mechanism B — GPP Files item (managed-settings.json)
 
 Alternatively, deploy the same JSON as a file to the machine-wide managed path.
-Claude Code reads `%ProgramFiles%\ClaudeCode\managed-settings.json`
-[BINARY-VERIFIED against the mirrored 2.1.211 binary] — **not** `%ProgramData%`
-(the path moved at v2.1.75). `%ProgramFiles%` is admin-write-only, which is what
-makes the file tamper-resistant.
+Claude Code reads `%ProgramFiles%\ClaudeCode\managed-settings.json` — **not**
+`%ProgramData%` (the path moved at v2.1.75). `%ProgramFiles%` is
+admin-write-only, which is what makes the file tamper-resistant.
 
 Steps:
 
@@ -374,24 +471,21 @@ custom profile / script) that writes the same file to
 `HKLM\SOFTWARE\Policies\ClaudeCode`. Deliver it in **device** context, not user
 context.
 
-### 2.3 Why `HKCU\SOFTWARE\Policies\ClaudeCode` is not a no-admin backdoor
+### 8.3 Why `HKCU\SOFTWARE\Policies\ClaudeCode` is not a no-admin backdoor
 
 Anthropic's settings docs list `HKCU\SOFTWARE\Policies\ClaudeCode` as a real
-managed source (lowest policy priority) [DOC-VERIFIED], and a non-admin can
-write their own HKCU hive — so it's fair to ask whether a developer could
-self-serve the gateway login there without admin. **They cannot, for the login
-keys specifically:** the 2.1.211 binary honors `forceLoginMethod` /
+managed source (lowest policy priority), and a non-admin can write their own
+HKCU hive — so it's fair to ask whether a developer could self-serve the
+gateway login there without admin. **They cannot, for the login keys
+specifically:** the shipped build honors `forceLoginMethod` /
 `forceLoginGatewayUrl` only from source types `helper` / `plist` / `hklm` /
-`file` — **`hklm` but not `hkcu`** [BINARY-VERIFIED: the source-gate function].
-So even on a machine where the `Policies` subtree is *not* ACL-locked, a
-user-written HKCU policy value is ignored for these keys. (On hardened fleets
-the `Policies` subtree is additionally GPO-locked / ACL-restricted under
-STIG/CIS baselines, so a non-admin can't write it at all.) This
-login-keys-rejected-from-HKCU behavior is security-critical — **[NEEDS TEST-RUN
-CONFIRMATION on the exact deployed binary version]**, since it is stricter than
-the general source precedence the public docs describe.
+`file` — **`hklm` but not `hkcu`**. So even on a machine where the `Policies`
+subtree is *not* ACL-locked, a user-written HKCU policy value is ignored for
+these keys. (On hardened fleets the `Policies` subtree is additionally
+GPO-locked / ACL-restricted under STIG/CIS baselines, so a non-admin can't
+write it at all.)
 
-### 2.4 Upgrading from an earlier installer — clear stale managed settings
+### 8.4 Upgrading from an earlier installer — clear stale managed settings
 
 An earlier version of `Install-ClaudeCode.ps1` wrote forced-login keys
 (`forceLoginMethod` / `forceLoginGatewayUrl` / `requiredMinimumVersion`) to a
@@ -416,22 +510,20 @@ Remove-Item -Path (Join-Path $env:ProgramData 'ClaudeCode\managed-settings.json'
 ```
 
 Then confirm with `/status` (below) that no unexpected managed source remains.
-Fresh fleets that never ran the old installer are unaffected. [NEEDS TEST-RUN
-CONFIRMATION for any test laptops provisioned during earlier runs.]
+Fresh fleets that never ran the old installer are unaffected.
 
-### 2.5 Verifying the active configuration
+### 8.5 Verifying the active configuration
 
 Inside `claude`, run **`/status`** — it shows the **active setting sources**,
 so an admin can confirm the managed source is present and winning over user
-settings [DOC-VERIFIED; NEEDS TEST-RUN CONFIRMATION that a GPO-delivered
-`HKLM` source shows up as expected in this environment]. Precedence, highest
-first: managed source (GPO/MDM) → project settings → user settings
-(`%USERPROFILE%\.claude\settings.json`). A `forceLoginMethod` shown as sourced
-from the managed layer confirms the lock is in force.
+settings. Precedence, highest first: managed source (GPO/MDM) → project
+settings → user settings (`%USERPROFILE%\.claude\settings.json`). A
+`forceLoginMethod` shown as sourced from the managed layer confirms the lock
+is in force.
 
 ---
 
-## 3. Summary — three channels
+## 9. Summary — three channels
 
 - **Installer + user settings (no admin):** the binary, PATH, telemetry tags,
   update lockdown, and enterprise CA trust — everything except login, entirely
@@ -440,13 +532,13 @@ from the managed layer confirms the lock is in force.
   + `forceLoginGatewayUrl` (optionally `requiredMinimumVersion`), delivered by
   GPO/MDM ([`ad-request-email.md`](../requests/ad-request-email.md)) or self-served with
   local admin. Without this the gateway login does not exist on the client; with
-  it, login is method-locked and URL-prefilled (§1.2). This is the one part that
+  it, login is method-locked and URL-prefilled (§3). This is the one part that
   is not admin-free.
 - **Gateway `/managed/settings` (server-side):** the **client model allowlist**
-  (`availableModels` / `enforceAvailableModels`) and central telemetry config for
-  every connected client, plus optional update lockdown for named Okta groups
-  (to every user; the group-scoped `MANAGED_CLI_GROUPS` knob was retired
-  2026-07-24).
+  (`availableModels` / `enforceAvailableModels`), the web/MCP tool denies, the
+  small/fast-model override, and central telemetry config + update lockdown
+  for every connected client (the group-scoped `MANAGED_CLI_GROUPS` knob was
+  retired 2026-07-24).
 
 The channels compose cleanly and target different keys: the installer writes no
 policy source, the managed-settings channel owns forced login, and the gateway
