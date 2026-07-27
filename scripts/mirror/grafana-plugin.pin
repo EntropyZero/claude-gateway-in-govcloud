@@ -1,0 +1,13 @@
+# Single-source pin for the Grafana Amazon Managed Prometheus datasource
+# plugin (linux-amd64 — Fargate X86_64). Sourced by BOTH sides of the
+# transfer: scripts/mirror/mirror-grafana-plugin.sh (egress host: download +
+# verify + stage) and scripts/build-and-push-grafana.sh (offline build host:
+# verify the transferred artifact before baking it into the image).
+#
+# To bump: pick the version, then
+#   curl -s https://grafana.com/api/plugins/grafana-amazonprometheus-datasource/versions/<ver> \
+#     | jq -r '.packages["linux-amd64"].sha256'
+# and update VERSION and SHA256 together.
+AMP_PLUGIN_ID="grafana-amazonprometheus-datasource"
+AMP_PLUGIN_VERSION="3.1.0"
+AMP_PLUGIN_SHA256="0374c5d7680ed86b904709a86f78a07f41fb263a9098df5c42d2371b6ea5a829"

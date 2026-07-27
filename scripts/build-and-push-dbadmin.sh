@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Build the DB admin Lambda image (app-user bootstrap + secret rotation)
-# from docker/db-admin/ and push to ECR. pip needs NO egress (pg8000 installs
-# from the committed vendor/ wheels — refresh via
-# scripts/mirror/mirror-python-deps.sh db-admin); the only build-time egress
-# is fetching the RDS CA bundle below. For controlled networks, mirror the
-# Lambda Python base image first and pass LAMBDA_BASE_IMAGE pointing at it
-# (pin by digest).
+# from docker/db-admin/ and push to ECR. OFFLINE build host
+# (.claude/rules/offline-build.md): pip installs from the committed vendor/
+# wheels (refresh via scripts/mirror/mirror-python-deps.sh db-admin, on the
+# egress host), the RDS CA bundle comes pre-staged in the transferred
+# mirror/ directory, and in the target profile the Lambda Python base image
+# must come from your registry mirror (pass LAMBDA_BASE_IMAGE, pinned by
+# digest).
 source "$(dirname "$0")/common.sh"
 
 # The repo is tag-IMMUTABLE: bump DBADMIN_VERSION for every app.py change
@@ -15,10 +16,13 @@ DBADMIN_VERSION="${DBADMIN_VERSION:-1.0.0}"
 LAMBDA_BASE_IMAGE="${LAMBDA_BASE_IMAGE:-public.ecr.aws/lambda/python:3.12}"
 REPO_NAME="${DBADMIN_ECR_REPO_NAME:-claude-gw-dbadmin}"
 
-# Same trust bundle the gateway image uses (sslmode/context verify-full).
-RDS_CA_BUNDLE_URL="${RDS_CA_BUNDLE_URL:-https://truststore.pki.us-gov-west-1.rds.amazonaws.com/global/global-bundle.pem}"
-log "Fetching RDS CA trust bundle"
-curl -fsSL "$RDS_CA_BUNDLE_URL" -o "${REPO_ROOT}/docker/db-admin/rds-ca-bundle.pem"
+# Same trust bundle the gateway image uses (sslmode/context verify-full),
+# consumed from the transferred mirror/ — never fetched here (the truststore
+# is a public download endpoint this host cannot reach).
+RDS_CA_BUNDLE="${MIRROR_DIR:-${REPO_ROOT}/mirror}/rds-ca-bundle.pem"
+require_mirrored_file "$RDS_CA_BUNDLE" "scripts/mirror/mirror-rds-ca-bundle.sh"
+log "Staging RDS CA trust bundle from ${RDS_CA_BUNDLE}"
+cp "$RDS_CA_BUNDLE" "${REPO_ROOT}/docker/db-admin/rds-ca-bundle.pem"
 
 ensure_ecr_repo "$REPO_NAME" lambda
 REGISTRY="$(ecr_login)"

@@ -14,7 +14,7 @@
 #
 # Output layout (MIRROR_DIR, default ./mirror):
 #   mirror/<version>/manifest.json
-#   mirror/<version>/claude            (linux-x64 -> docker/claude for the image build)
+#   mirror/<version>/claude            (linux-x64 — build-and-push-image.sh stages it from the transferred mirror/)
 #   mirror/<version>/claude.exe        (win32-x64 -> Install-ClaudeCode.ps1 -BinaryPath)
 #   mirror/<version>/CHECKSUMS.txt     (per-platform sha256, from the manifest)
 #
@@ -124,7 +124,9 @@ cat <<EOF
 
 Mirrored to ${OUT}/
 Next:
-  - Container build: cp ${OUT}/claude <repo>/docker/claude && scripts/build-and-push-image.sh
+  - Copy the mirror/ directory to the build machine (it builds offline), then
+    run scripts/build-and-push-image.sh there — it stages + re-verifies
+    ${OUT}/claude itself
   - Windows rollout: stage ${OUT}/claude.exe + CHECKSUMS.txt on the file share;
     pass the win32-x64 checksum to Install-ClaudeCode.ps1 -Sha256
 EOF
