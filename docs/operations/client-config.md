@@ -162,10 +162,10 @@ CONFIRMATION].
 Four things are pushed:
 
 **a) The model allowlist — always, to every user.** The gateway pushes
-`availableModels: [<OPUS_MODEL_ID>, <SONNET_MODEL_ID>]` plus
+`availableModels: [<OPUS_MODEL_ID>, <SONNET_MODEL_ID>, <HAIKU_MODEL_ID>]` plus
 `enforceAvailableModels: true`, which is what constrains the `/model` picker to
-the two configured models. This policy carries **no `match:`**, so it applies to
-every authenticated user and needs no Okta groups claim.
+the three configured models. This policy carries **no `match:`**, so it applies
+to every authenticated user and needs no Okta groups claim.
 
 > **This is load-bearing, not cosmetic.** `models:` in the gateway config only
 > controls what the *gateway serves* — it does not reach into the client's
@@ -229,12 +229,14 @@ confirmed present in the managed-`cli` settings schema of the mirrored 2.1.211
 binary, 2026-07-24 — the fatal-unknown-key trap does not fire for it.]
 
 **d) The small/fast model override — also to everyone.** The policy sets
-`env.ANTHROPIC_DEFAULT_HAIKU_MODEL` to the configured Sonnet model ID. Claude
-Code uses a Haiku-family model for lightweight background tasks by default —
-but no Haiku model exists in GovCloud and this gateway does not serve one, so
-without the override those background calls request an unserved model and fail.
-The value is the same `<SONNET_MODEL_ID>` as the allowlist — the **gateway-facing**
-model ID, *not* the Bedrock inference-profile ID (`SonnetBedrockModelId`): the
+`env.ANTHROPIC_DEFAULT_HAIKU_MODEL` to the configured haiku-role model ID,
+`<HAIKU_MODEL_ID>` (Sonnet 4.5 by default — it moved into this slot when
+Sonnet 5 became the Sonnet tier). Claude Code uses a Haiku-family model for
+lightweight background tasks by default — but no Haiku model exists in
+GovCloud and this gateway does not serve one, so without the override those
+background calls request an unserved model and fail.
+The value is the same `<HAIKU_MODEL_ID>` as the allowlist — the **gateway-facing**
+model ID, *not* the Bedrock inference-profile ID (`HaikuBedrockModelId`): the
 client asks the gateway, and the gateway's `models:` block does the Bedrock
 mapping. [Verified against the mirrored 2.1.211 binary, 2026-07-24: the client
 uses the env var's value verbatim — no rewriting or region logic — and the

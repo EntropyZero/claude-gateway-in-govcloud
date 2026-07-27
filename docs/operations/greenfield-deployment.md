@@ -127,15 +127,19 @@ renewal owner.
 **Bedrock model access**
 - ☐ Enable Claude model access in the account, then confirm the exact
   GovCloud inference-profile IDs the defaults assume
-  (`us-gov.anthropic.claude-opus-4-8` — un-dated ID — and
-  `us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`):
+  (`us-gov.anthropic.claude-opus-4-8` — un-dated ID,
+  `us-gov.anthropic.claude-sonnet-5` — un-dated, and
+  `us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0` for the small/fast
+  role):
   ```bash
   aws bedrock list-inference-profiles --region us-gov-west-1 \
     --query "inferenceProfileSummaries[?contains(inferenceProfileId,'anthropic')].inferenceProfileId"
   ```
-  If they differ, set `OPUS_BEDROCK_MODEL_ID` / `SONNET_BEDROCK_MODEL_ID`
-  in `deploy.env`. Sonnet 4.6 / Sonnet 5 are **not** in GovCloud — do not
-  "upgrade" the defaults without checking this output.
+  If they differ, set `OPUS_BEDROCK_MODEL_ID` / `SONNET_BEDROCK_MODEL_ID` /
+  `HAIKU_BEDROCK_MODEL_ID` in `deploy.env`. Sonnet 5 became available in
+  GovCloud in 2026-07 and is the Sonnet-tier default; Sonnet 4.6 was never
+  offered in GovCloud — do not change the defaults without checking this
+  output.
 
 **deploy.env**
 - ☐ `cp scripts/deploy.env.example scripts/deploy.env` and fill (the
@@ -496,9 +500,10 @@ not production-ready. Where a check fails, start at
   fingerprint match → Bedrock completion (proven live 2026-07-24 on the
   test deployment; re-prove on each new environment).
 - ☐ **Model picker constrained**: in a logged-in session, `/model` lists
-  **only** `OPUS_MODEL_ID` and `SONNET_MODEL_ID` — not Claude Code's
-  built-in menu. Send a prompt on each; confirm background/small-fast tasks
-  also succeed (the Haiku-override push). If the built-in menu appears, the
+  **only** `OPUS_MODEL_ID`, `SONNET_MODEL_ID` and `HAIKU_MODEL_ID` (three
+  entries) — not Claude Code's built-in menu. Send a prompt on each; confirm
+  background/small-fast tasks also succeed (the Haiku-override push resolves
+  them to `HAIKU_MODEL_ID`). If the built-in menu appears, the
   gateway image predates the `GATEWAY_MANAGED_B64` stanza and ignores the
   env var silently — rebuild with a bumped tag
   ([`test-run-runbook.md`](test-run-runbook.md) §9).

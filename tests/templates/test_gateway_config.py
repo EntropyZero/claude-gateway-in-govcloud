@@ -180,7 +180,8 @@ def _managed_policies():
         yaml_lines.append(l[base_indent:])
     raw = "\n".join(yaml_lines)
     raw = raw.replace("${OpusModelId}", "claude-opus-4-8")
-    raw = raw.replace("${SonnetModelId}", "claude-sonnet-4-5")
+    raw = raw.replace("${SonnetModelId}", "claude-sonnet-5")
+    raw = raw.replace("${HaikuModelId}", "claude-sonnet-4-5")
     return yaml.safe_load(raw)["managed"]["policies"]
 
 
@@ -242,8 +243,15 @@ def test_model_allowlist_and_lockdown_reach_every_user():
         "the allowlist/lockdown policy must not be group-scoped - a `match:` "
         "here silently drops both for users outside those Okta groups"
     )
-    # keys live INSIDE `cli` (Claude Code settings.json keys), not on the policy
-    assert cli["availableModels"] == ["claude-opus-4-8", "claude-sonnet-4-5"]
+    # keys live INSIDE `cli` (Claude Code settings.json keys), not on the
+    # policy. Order matters for readers: Opus (the default) first, then the
+    # Sonnet tier, then the small/fast haiku-role model (Sonnet 4.5 - GovCloud
+    # has no Haiku family).
+    assert cli["availableModels"] == [
+        "claude-opus-4-8",
+        "claude-sonnet-5",
+        "claude-sonnet-4-5",
+    ]
     assert cli["enforceAvailableModels"] is True, (
         "without enforceAvailableModels the Default selection can still resolve "
         "to a model the gateway does not serve"
@@ -273,12 +281,12 @@ def test_webfetch_deny_and_small_model_override_reach_every_user():
       and Bedrock does not expose it anyway (defense-in-depth). `Agent`
       (subagents) is deliberately NOT denied (decision 2026-07-24); this gate
       pins the exact deny list so a silent widening or narrowing fails loudly.
-    - ANTHROPIC_DEFAULT_HAIKU_MODEL must be the GATEWAY-facing Sonnet ID (the
-      same value as the availableModels entry), NOT the Bedrock inference
-      profile ID - the client asks the gateway, and the gateway's `models:`
-      block does the Bedrock mapping. Without the override, background /
-      small-model calls request a Haiku-family model that neither GovCloud
-      nor this gateway serves.
+    - ANTHROPIC_DEFAULT_HAIKU_MODEL must be the GATEWAY-facing haiku-role ID
+      (HaikuModelId - Sonnet 4.5, the same value as its availableModels
+      entry), NOT the Bedrock inference profile ID - the client asks the
+      gateway, and the gateway's `models:` block does the Bedrock mapping.
+      Without the override, background / small-model calls request a
+      Haiku-family model that neither GovCloud nor this gateway serves.
     """
     cli = _managed_policies()[-1]["cli"]
     assert cli["permissions"]["deny"] == ["WebFetch", "WebSearch", "mcp__*"], (
@@ -286,8 +294,30 @@ def test_webfetch_deny_and_small_model_override_reach_every_user():
         "'mcp__*'] - Agent (subagents) stays allowed by decision (2026-07-24)"
     )
     assert cli["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "claude-sonnet-4-5", (
-        "small/fast model must be the gateway-served Sonnet ID (same as "
-        "availableModels), or background calls request an unserved model"
+        "small/fast model must be the gateway-served haiku-role ID "
+        "(HaikuModelId, same as its availableModels entry), or background "
+        "calls request an unserved model"
+    )
+    assert cli["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] in cli["availableModels"], (
+        "the haiku-role override must reference a model the allowlist carries"
+    )
+
+
+def test_managed_block_model_ids_are_parameterized_not_hardcoded():
+    """The managed block must reference the model CFN parameters via raw
+    ${...} Sub markers. _managed_policies() neutralizes those markers with
+    str.replace, so a regression that hardcodes a literal ID (violating the
+    no-hardcoded-values rule and silently diverging from an overridden
+    deploy.env) would parse identically and pass every other gate - only a
+    raw-text assertion can fail on it. (The models: block gets the same
+    protection from test_gateway_serves_exactly_three_models.)"""
+    block = _managed_b64_block()
+    assert (
+        "availableModels: ['${OpusModelId}', '${SonnetModelId}', '${HaikuModelId}']"
+        in block
+    ), "availableModels must be built from the three model CFN parameters"
+    assert "ANTHROPIC_DEFAULT_HAIKU_MODEL: '${HaikuModelId}'" in block, (
+        "the small/fast override must follow the HaikuModelId parameter"
     )
 
 
@@ -302,6 +332,49 @@ def test_available_models_is_never_at_policy_level():
         )
         assert "enforceAvailableModels" not in policy, (
             f"enforceAvailableModels at policy level is a BOOT FAILURE: {policy!r}"
+        )
+
+
+def test_gateway_serves_exactly_three_models():
+    """The gateway's `models:` list carries the three configured roles (Opus
+    default, Sonnet tier, small/fast haiku-role Sonnet 4.5). The pushed
+    availableModels allowlist repeats them by construction, so a menu entry
+    the gateway does not serve - the original live failure - can only appear
+    if these fall out of sync."""
+    doc = _load_gateway_config()
+    assert len(doc["models"]) == 3, (
+        f"expected 3 model entries (Opus/Sonnet/Haiku-role), got "
+        f"{len(doc['models'])}"
+    )
+    body = _extract_config_block()
+    for param in ("${OpusModelId}", "${SonnetModelId}", "${HaikuModelId}"):
+        assert f"- id: {param}" in body, f"models: is missing an entry for {param}"
+    for param in (
+        "${OpusBedrockModelId}",
+        "${SonnetBedrockModelId}",
+        "${HaikuBedrockModelId}",
+    ):
+        assert f"bedrock: {param}" in body, f"no Bedrock mapping for {param}"
+
+
+def test_bedrock_iam_and_endpoint_policies_cover_all_three_models():
+    """Both Bedrock scoping layers - the task-role policy and the
+    bedrock-runtime VPC endpoint policy - must enumerate every configured
+    model: its inference-profile ARN plus the derived foundation-model ARN
+    (profile ID minus the us-gov. geo prefix). Nothing else gates this
+    (no cfn-guard rule covers it), so an omitted model fails only at runtime
+    as an AccessDenied on invoke."""
+    text = _template_text()
+    for param in ("OpusBedrockModelId", "SonnetBedrockModelId", "HaikuBedrockModelId"):
+        profile_refs = text.count(f"inference-profile/${{{param}}}")
+        assert profile_refs == 2, (
+            f"{param}: expected the inference-profile ARN in BOTH the task-role "
+            f"policy and the endpoint policy, found {profile_refs}"
+        )
+        derived_refs = text.count(f"!Join ['', !Split ['us-gov.', !Ref {param}]]")
+        assert derived_refs == 2, (
+            f"{param}: expected the derived foundation-model ARN in BOTH "
+            f"policies, found {derived_refs}"
         )
 
 

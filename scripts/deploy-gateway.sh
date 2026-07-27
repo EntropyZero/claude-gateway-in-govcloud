@@ -28,6 +28,47 @@ if [ -n "${OBSERVABILITY_AMP_ENDPOINT:-}" ] && [ -z "${COLLECTOR_IMAGE:-}" ]; th
   exit 1
 fi
 
+# Model defaults - the SINGLE definition; the guard below and the
+# --parameter-overrides both consume these, so they cannot drift apart.
+# Keep in lockstep with the parameter defaults in 02-gateway.yaml.
+OPUS_MODEL_ID="${OPUS_MODEL_ID:-claude-opus-4-8}"
+OPUS_BEDROCK_MODEL_ID="${OPUS_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-opus-4-8}"
+SONNET_MODEL_ID="${SONNET_MODEL_ID:-claude-sonnet-5}"
+SONNET_BEDROCK_MODEL_ID="${SONNET_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-sonnet-5}"
+HAIKU_MODEL_ID="${HAIKU_MODEL_ID:-claude-sonnet-4-5}"
+HAIKU_BEDROCK_MODEL_ID="${HAIKU_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0}"
+
+# Both ID triples must be pairwise distinct. The gateway-facing IDs key the
+# gateway's `models:` list and the pushed `availableModels` allowlist; the
+# Bedrock IDs decide what each menu entry actually invokes - two gateway IDs
+# mapped to one Bedrock profile deploy fine and serve fine, but one picker
+# entry is silently MISLABELED (e.g. "claude-sonnet-5" invoking Sonnet 4.5).
+# The likely trigger is a deploy.env written before the Sonnet 5 rollout:
+# update BOTH SONNET_MODEL_ID and SONNET_BEDROCK_MODEL_ID per
+# deploy.env.example rather than overriding the HAIKU_* vars away.
+_dup_check() {  # <label> <a-name> <a-val> <b-name> <b-val> <c-name> <c-val>
+  local label="$1" an="$2" a="$3" bn="$4" b="$5" cn="$6" c="$7"
+  if [ "$a" = "$b" ] || [ "$a" = "$c" ] || [ "$b" = "$c" ]; then
+    echo "FATAL: duplicate ${label}:" >&2
+    echo "       ${an}='${a}'" >&2
+    echo "       ${bn}='${b}'" >&2
+    echo "       ${cn}='${c}'" >&2
+    echo "       Each must be distinct - see the Models section of deploy.env.example." >&2
+    echo "       A pre-Sonnet-5 deploy.env usually still sets SONNET_MODEL_ID=claude-sonnet-4-5" >&2
+    echo "       and SONNET_BEDROCK_MODEL_ID=us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0 -" >&2
+    echo "       update BOTH to the Sonnet 5 values." >&2
+    exit 1
+  fi
+}
+_dup_check "gateway-facing model IDs" \
+  OPUS_MODEL_ID "$OPUS_MODEL_ID" \
+  SONNET_MODEL_ID "$SONNET_MODEL_ID" \
+  HAIKU_MODEL_ID "$HAIKU_MODEL_ID"
+_dup_check "Bedrock model / inference-profile IDs" \
+  OPUS_BEDROCK_MODEL_ID "$OPUS_BEDROCK_MODEL_ID" \
+  SONNET_BEDROCK_MODEL_ID "$SONNET_BEDROCK_MODEL_ID" \
+  HAIKU_BEDROCK_MODEL_ID "$HAIKU_BEDROCK_MODEL_ID"
+
 ARTIFACTS_BUCKET="$(ensure_artifacts_bucket)"
 
 # On failure, KEEP successfully-created resources (the stack lands in
@@ -91,10 +132,12 @@ aws cloudformation deploy \
       "CollectorImage=${COLLECTOR_IMAGE:-}" \
       "TelemetryFailClosed=${TELEMETRY_FAIL_CLOSED:-true}" \
       "ForwardActivityLogs=${FORWARD_ACTIVITY_LOGS:-false}" \
-      "OpusModelId=${OPUS_MODEL_ID:-claude-opus-4-8}" \
-      "OpusBedrockModelId=${OPUS_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-opus-4-8}" \
-      "SonnetModelId=${SONNET_MODEL_ID:-claude-sonnet-4-5}" \
-      "SonnetBedrockModelId=${SONNET_BEDROCK_MODEL_ID:-us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0}" \
+      "OpusModelId=${OPUS_MODEL_ID}" \
+      "OpusBedrockModelId=${OPUS_BEDROCK_MODEL_ID}" \
+      "SonnetModelId=${SONNET_MODEL_ID}" \
+      "SonnetBedrockModelId=${SONNET_BEDROCK_MODEL_ID}" \
+      "HaikuModelId=${HAIKU_MODEL_ID}" \
+      "HaikuBedrockModelId=${HAIKU_BEDROCK_MODEL_ID}" \
       "SpendGroupLimitMode=${SPEND_GROUP_LIMIT_MODE:-min}" \
       "SpendBlockedMessage=${SPEND_BLOCKED_MESSAGE:-Contact the Claude Code platform team to request an increase.}" \
       "SpendAdminGroups=${SPEND_ADMIN_GROUPS:-}"

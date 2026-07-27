@@ -52,7 +52,7 @@ Key boundary statements for the reviewer:
 - **No public ingress.** The ALB is internal; reaching it requires the ZPA
   app segment (or VPN) and an allow-listed connector source CIDR.
 - **No public egress from the inference path.** Bedrock is reached via an
-  interface endpoint whose policy allows exactly the two approved models;
+  interface endpoint whose policy allows exactly the three approved models;
   WebSearch is disabled on gateway sessions.
 - **One public dependency:** the Okta issuer (OIDC has no VPC endpoint).
   Egress rides TGW central NAT or the mandated corporate proxy, port-scoped
@@ -76,7 +76,7 @@ Every hop, its port, protocol, and where the TLS session terminates.
 | 2 | ALB → gateway | 8080 | TLS | Per-task ephemeral cert (ALB does not validate targets; key never leaves task) |
 | 3 | ALB → Grafana | 3000 | TLS | Per-task ephemeral cert (same model) |
 | 4 | Gateway/Lambda → RDS | 5432 | TLS `verify-full` | RDS regional CA bundle baked into images; `rds.force_ssl=1` server-side |
-| 5 | Gateway → Bedrock | 443 | TLS + SigV4 | AWS cert; endpoint policy = 2 approved models only |
+| 5 | Gateway → Bedrock | 443 | TLS + SigV4 | AWS cert; endpoint policy = 3 approved models only |
 | 6 | Gateway → collector (sidecar) | 4317–4318 | Loopback — no network hop | Same Fargate task; the collector is a localhost sidecar with its receiver bound to `127.0.0.1`, so nothing off-task can reach it (see §10) |
 | 7–8 | Gateway sidecar / Grafana → AMP | 443 | TLS + SigV4 | AWS cert; endpoint policy = this workspace only |
 | 9–10 | Gateway/Grafana → Okta | 443 | TLS | Public CA; only internet-bound flow |

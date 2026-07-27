@@ -25,8 +25,9 @@
   - The gateway connects to Postgres as `gateway_app` / `gateway_app_clone`
     (assume a NOLOGIN owner role at login), **never** the RDS master user.
     The master secret is break-glass only; no task injects it.
-  - IAM and VPC-endpoint policies scope to exact resources: the two configured
-    Bedrock model IDs (not `anthropic.*`), this account's ARNs, this workspace.
+  - IAM and VPC-endpoint policies scope to exact resources: the configured
+    Bedrock model IDs — every one, no more (not `anthropic.*`) — this
+    account's ARNs, this workspace.
   - ECS execution roles read only their own secrets (+ `kms:Decrypt` on the CMK).
 
 - **Everything at rest uses the customer-managed KMS key** (created by the DB

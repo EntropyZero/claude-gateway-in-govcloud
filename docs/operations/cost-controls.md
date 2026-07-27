@@ -153,7 +153,7 @@ right now" from the burn-rate section.
 |---|---|
 | **Cost / Tokens / Sessions / Active users** (stat row) | Totals for the selected range; sessions/active-users counted by distinct `session_id` / `user_email` **with spend activity** (`claude_code_cost_usage` samples) |
 | **Cost by team / by cost center / by Okta group** (both sections) | Spend split along each org dimension — cumulative for trends, burn rate for right-now |
-| **Tokens by model** (both sections) | Model mix (e.g. Opus vs Sonnet) — a cheap lever when cost spikes |
+| **Tokens by model** (both sections) | Model mix across the three configured models (Opus vs Sonnet 5 vs the Sonnet 4.5 small/fast tier) — a cheap lever when cost spikes |
 | **Tokens by type** (both sections) | input / output / cache split: cache effectiveness and prompt-heavy workloads |
 | **Top users by cost (selected range)** | `topk(15)` table by `user_email` with team/cost-center — the candidates for a per-user cap |
 | **Lines of code changed / Commits created** (both sections) | Output-side context so cost is read against delivered work |

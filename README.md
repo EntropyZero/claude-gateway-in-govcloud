@@ -250,39 +250,51 @@ CONFIRMATION].
 
 ## Model configuration
 
-Developers get a **two-model menu** in Claude Code — Opus and Sonnet — each a
-pair of parameters (client-facing ID → GovCloud inference profile).
+Developers get a **three-model menu** in Claude Code — Opus (the default),
+Sonnet, and a small/fast "haiku"-role entry — each a pair of parameters
+(client-facing ID → GovCloud inference profile).
 
-It is a *menu* because the gateway pushes these two IDs to every client as an
-`availableModels` allowlist via `/managed/settings`; the `models:` block alone
-only governs what the gateway **serves**, leaving the client's own built-in
-menu in place (the bug fixed on 2026-07-24):
+It is a *menu* because the gateway pushes these three IDs to every client as
+an `availableModels` allowlist via `/managed/settings`; the `models:` block
+alone only governs what the gateway **serves**, leaving the client's own
+built-in menu in place (the bug fixed on 2026-07-24):
 
-| Menu ID (`*_MODEL_ID`) | Bedrock profile (`*_BEDROCK_MODEL_ID`) |
-|---|---|
-| `claude-opus-4-8` | `us-gov.anthropic.claude-opus-4-8` |
-| `claude-sonnet-4-5` | `us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0` |
+| Role | Menu ID (`*_MODEL_ID`) | Bedrock profile (`*_BEDROCK_MODEL_ID`) |
+|---|---|---|
+| Opus (client default) | `claude-opus-4-8` | `us-gov.anthropic.claude-opus-4-8` |
+| Sonnet | `claude-sonnet-5` | `us-gov.anthropic.claude-sonnet-5` |
+| Small/fast ("haiku" role) | `claude-sonnet-4-5` | `us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0` |
 
-These defaults are the newest of each tier available in GovCloud: Sonnet 4.6
-and Sonnet 5 are **not** offered in GovCloud regions, so Sonnet 4.5 (FedRAMP
-High / IL4-5 authorized) is the Sonnet entry. Note the ID-format difference —
-Opus 4.8 uses the new un-dated format while Sonnet 4.5 keeps the dated
-`-v1:0` suffix. `us-gov-west-1` also supports in-region invocation. Confirm
-what your account sees before first deploy:
+These defaults track GovCloud availability: Sonnet 5 became available in
+GovCloud Bedrock in 2026-07 and is now the Sonnet entry (Sonnet 4.6 was never
+offered in GovCloud regions). Sonnet 4.5 (FedRAMP High / IL4-5 authorized)
+moves to the small/fast role — GovCloud has no Haiku-family model, and the
+gateway points the client's `ANTHROPIC_DEFAULT_HAIKU_MODEL` at
+`HAIKU_MODEL_ID` so background/small-model calls resolve to it. Note the
+ID-format difference — Opus 4.8 and Sonnet 5 use the new un-dated format
+while Sonnet 4.5 keeps the dated `-v1:0` suffix. This repo is a client
+template — confirm what your account actually sees before first deploy
+(`us-gov-west-1` also supports in-region invocation):
 
 ```bash
 aws bedrock list-inference-profiles --region us-gov-west-1 \
   --query "inferenceProfileSummaries[?contains(inferenceProfileId,'anthropic')].inferenceProfileId"
 ```
 
-The task-role and VPC-endpoint IAM policies are scoped to **exactly the two
+The task-role and VPC-endpoint IAM policies are scoped to **exactly the three
 configured models** (derived from the `*_BEDROCK_MODEL_ID` parameters — the
 inference profiles plus their underlying foundation models), so nothing
-outside the approved pair is invokable even with the org credential.
+outside the approved set is invokable even with the org credential.
 Switching or adding models is still a parameter change only; the IAM policies
-**and the pushed client allowlist** follow the parameters. Changing them needs
-a `deploy-gateway.sh` re-run, and clients pick the new allowlist up on their
-next `/managed/settings` fetch.
+**and the pushed client allowlist** follow the parameters. The three
+gateway-facing `*_MODEL_ID` values must be distinct — `deploy-gateway.sh`
+refuses duplicates before deploying (a pre-Sonnet-5 `deploy.env` whose
+`SONNET_MODEL_ID` is still `claude-sonnet-4-5` would otherwise collide with
+the new `HAIKU_MODEL_ID` default; fix it by setting
+`SONNET_MODEL_ID=claude-sonnet-5` / `SONNET_BEDROCK_MODEL_ID` and adding the
+`HAIKU_MODEL_ID` / `HAIKU_BEDROCK_MODEL_ID` pair per `deploy.env.example`).
+Changing them needs a `deploy-gateway.sh` re-run, and clients pick the new
+allowlist up on their next `/managed/settings` fetch.
 
 ## VPC endpoints
 
@@ -571,9 +583,9 @@ obvious alternative?" question — revisit only with a concrete reason.
 | IdP | Okta OIDC. The gateway works with either the org server (`userinfo_fallback: true` fetches email/groups) or a custom auth server. Grafana works with either too via `OKTA_AUTH_SERVER_TYPE` (org → endpoints under `/oauth2/v1/...`, built-in `groups` scope; custom → `<issuer>/v1/...`). Redirect URIs `https://<GatewayFqdn>/oauth/callback` and `.../grafana/login/generic_oauth`. |
 | Store | RDS PostgreSQL 16 with `rds.force_ssl` + **pgaudit**, client-side `sslmode=verify-full` (RDS CA bundle baked into the image), and SG-to-SG access only. The gateway connects as a **least-privilege application user** (created by a bootstrap Lambda; owns only the gateway schema via a shared owner role — no CREATEROLE, no `rds_superuser`, cannot tamper with pgaudit). The RDS master secret is **break-glass only**, still auto-rotated by RDS. Multi-AZ is on by default because a lost store loses spend tracking and caps, not just re-logins. |
 | Encryption at rest | One customer-managed KMS key (created by the DB stack or bring-your-own via `KMS_KEY_ARN`) covers RDS, all secrets, CloudWatch log groups, the activity archive, and AMP. Exception: the ALB access-logs bucket stays SSE-S3 — ELB log delivery does not support KMS. |
-| Network egress | Every security group has explicit egress (no default allow-all); all VPC endpoints carry resource policies scoped to this account/workload. Bedrock IAM + endpoint policies allow exactly the two configured models. |
+| Network egress | Every security group has explicit egress (no default allow-all); all VPC endpoints carry resource policies scoped to this account/workload. Bedrock IAM + endpoint policies allow exactly the three configured models. |
 | Client install | Fully offline: pinned binary mirrored from Anthropic's release bucket and verified before distribution. **The binary install is no-admin**: per-user install + user-scope config (update lockdown `DISABLE_UPDATES=1`, telemetry tags) in `%USERPROFILE%\.claude\settings.json`. The gateway **login**, however, **requires** the managed keys `forceLoginMethod: "gateway"` + `forceLoginGatewayUrl` (honored only from a managed source — HKLM/`%ProgramFiles%` managed-settings.json/plist, never user settings), delivered by GPO/MDM (`docs/operations/client-config.md`, `docs/requests/ad-request-email.md`) or self-served with local admin. With it present, `/login` is locked to gateway with the URL pre-filled; the developer only completes a one-time Okta SSO. The gateway also pushes the lockdown centrally to every user. |
-| Guardrails | IAM task role **and** VPC-endpoint policy are independently scoped to **exactly the two configured models** (inference-profile IDs + their derived foundation-model IDs, from the `*_BEDROCK_MODEL_ID` parameters) — two separate controls on what the org credential can invoke, both following the parameters. |
+| Guardrails | IAM task role **and** VPC-endpoint policy are independently scoped to **exactly the three configured models** (inference-profile IDs + their derived foundation-model IDs, from the `*_BEDROCK_MODEL_ID` parameters) — two separate controls on what the org credential can invoke, both following the parameters. |
 
 ### Gotchas — do not re-litigate
 
@@ -699,8 +711,9 @@ and then works through:
 1. Register the Okta OIDC web app (redirect URI
    `https://<GatewayFqdn>/oauth/callback`); after stack deploy, set the real
    client secret with `scripts/set-okta-secret.sh`.
-2. Verify the GovCloud inference-profile IDs against the Bedrock console
-   (`aws bedrock list-inference-profiles --region us-gov-west-1`).
+2. Verify all three GovCloud inference-profile IDs against the Bedrock
+   console (`aws bedrock list-inference-profiles --region us-gov-west-1`) —
+   this repo is a template; confirm what your account sees.
 3. Issue and import the enterprise-CA certificate
    (`scripts/import-enterprise-cert.sh`). The stack alarms when
    `DaysToExpiry` ≤ 30 (imported ACM certs do not auto-renew) — set
