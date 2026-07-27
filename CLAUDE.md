@@ -206,6 +206,25 @@ caveats (range-start-spanning sessions, >1h export gaps): the 2026-07-26
 note in `docs/operations/om-runbooks.md`. Deploy: bump `GRAFANA_IMAGE_TAG`,
 rebuild+push, re-run 03; live checks are listed in the runbook entry.
 
+**Fixed 2026-07-27 (committed, NOT yet deployed): cumulative panels ghosted
+sessions that ended BEFORE the range start.** Live 1/2/3-day screenshots: a
+07/25 session showed at full value at the left edge of the 2-day view then
+"dropped off" mid-graph (1-day and 3-day were clean) — any session dying
+within one range-width before the range start sits inside the per-plot-point
+`[$__range]` lookback while its `offset $__range` baseline window is empty.
+Tiles were always right. Fix: all seven cumulative time-series are gated
+per-session on having a sample inside the VISIBLE range —
+`and count_over_time(m[$__range] @ end())` (the `@ end()` window == the
+visible range at every plot step). Tiles/table untouched (instant eval makes
+the gate a no-op — asserted). Re-validated on a real Prometheus (5-session
+synthetic TSDB, 16 assertions: old expr reproduces the screenshot ghost, new
+drops it, everything else value-identical, right edge == tiles). **The `@`
+modifier is standard PromQL but UNVERIFIED against AMP from this host — if
+unsupported, panels fail LOUDLY with a parse error; rollback = drop the
+gate clause.** Deploy: bump `GRAFANA_IMAGE_TAG`, rebuild+push, re-run 03;
+live check = re-open the previously-failing 2-day window. Full entry in the
+2026-07-27 om-runbooks note.
+
 **Fixed 2026-07-26 (committed): build scripts fetched from the internet on
 the OFFLINE build machine.** The real build/deploy host reaches only AWS
 service endpoints (new rule: `.claude/rules/offline-build.md`) — but
