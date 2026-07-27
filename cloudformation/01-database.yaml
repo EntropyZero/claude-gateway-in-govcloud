@@ -155,6 +155,11 @@ Resources:
   KmsKeyAlias:
     Type: AWS::KMS::Alias
     Condition: CreateKmsKey
+    # Retain mirrors the key itself, and resource IMPORT (om-runbooks §11a,
+    # re-adopting a stack-detached CMK) requires a DeletionPolicy on every
+    # imported resource.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       AliasName: !Sub 'alias/${NamePrefix}'
       TargetKeyId: !Ref KmsKey

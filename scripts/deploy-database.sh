@@ -11,12 +11,18 @@ require_vars VPC_ID PRIVATE_SUBNET_IDS
 #   aws rds describe-db-engine-versions --engine postgres --region "$AWS_REGION" \
 #     --query "DBEngineVersions[?starts_with(EngineVersion,'16.')].EngineVersion" --output text
 # Left unset, the template default applies.
+# KmsKeyArn: an existing stack's recorded parameter wins over deploy.env
+# (KMS_KEY_ARN holds the persisted STACK OUTPUT after the first deploy, and
+# passing it back would flip a stack-created key into unmanaged BYO mode) -
+# see resolve_kms_param in common.sh. ALLOW_KMS_PARAM_CHANGE=1 overrides.
+KMS_PARAM="$(resolve_kms_param "$DB_STACK_NAME")"
+
 PARAMS=(
   "NamePrefix=${NAME_PREFIX}"
   "VpcId=${VPC_ID}"
   "PrivateSubnetIds=${PRIVATE_SUBNET_IDS}"
   "PgauditLogClasses=${PGAUDIT_LOG_CLASSES:-ddl,role,write}"
-  "KmsKeyArn=${KMS_KEY_ARN:-}"
+  "KmsKeyArn=${KMS_PARAM}"
 )
 [ -n "${DB_ENGINE_VERSION:-}" ] && PARAMS+=("DBEngineVersion=${DB_ENGINE_VERSION}")
 
