@@ -6,12 +6,13 @@ things only a live run can validate actually work — the DB bootstrap, the
 first app-secret rotation, the HTTPS target groups going healthy, and the
 Grafana Okta login.
 
-Run everything from **one host** that has Docker, internet egress, and AWS
-credentials for the test account. (If you split the image builds onto a
-separate egress host, copy the persisted `KMS_KEY_ARN`, `IMAGE_URI`,
-`DBADMIN_IMAGE`, `GRAFANA_IMAGE`, `COLLECTOR_IMAGE`, and `CERTIFICATE_ARN`
-lines from that host's `deploy.env` into the deploy host's — the scripts
-persist them automatically but only into the local file.)
+Two hosts (`.claude/rules/offline-build.md`): the `scripts/mirror/` tools
+run on an **egress host** with internet access, then `mirror/` is copied to
+the **build/deploy machine**, which has Docker and AWS credentials for the
+test account but **no internet** — only AWS service endpoints. `deploy.env`
+is persisted locally on whichever host ran a script; the build/deploy
+machine's copy is the one that accumulates `KMS_KEY_ARN`, `IMAGE_URI`,
+`DBADMIN_IMAGE`, `GRAFANA_IMAGE`, `COLLECTOR_IMAGE`, and `CERTIFICATE_ARN`.
 
 Legend: ☐ = do it · 🔎 = checkpoint, confirm before moving on.
 
@@ -200,27 +201,34 @@ so the ECR repos built next are born CMK-encrypted.
 
 ---
 
-## 3. Build & push images (needs Docker + egress + `KMS_KEY_ARN` from step 2)
+## 3. Build & push images (mirror on the egress host; builds need Docker + `KMS_KEY_ARN` from step 2, no internet)
 
 ```bash
-# 3a. Gateway binary → gateway image
+# 3a. EGRESS HOST — stage all external artifacts, then copy mirror/ to the
+#     build machine (.claude/rules/offline-build.md)
 ./scripts/mirror/mirror-claude-release.sh 2.1.207          # honors ANTHROPIC_GPG_KEY / ALLOW_UNVERIFIED_MANIFEST
-cp mirror/2.1.207/claude docker/claude
+./scripts/mirror/mirror-grafana-plugin.sh                  # AMP datasource plugin (pin: grafana-plugin.pin)
+./scripts/mirror/mirror-rds-ca-bundle.sh                   # RDS CA trust bundle
+
+# 3b. BUILD MACHINE — gateway image (stages claude from mirror/2.1.207/,
+#     re-verified against the mirror's CHECKSUMS.txt)
 ./scripts/build-and-push-image.sh                  # persists IMAGE_URI
 
-# 3b. DB admin Lambda image (bootstrap + rotation)
+# 3c. DB admin Lambda image (bootstrap + rotation)
 ./scripts/build-and-push-dbadmin.sh                # persists DBADMIN_IMAGE (+ lambda ECR pull policy)
 
-# 3c. Grafana image
+# 3d. Grafana image (bakes in the mirrored AMP plugin)
 ./scripts/build-and-push-grafana.sh                # persists GRAFANA_IMAGE
 
-# 3d. ADOT collector — mirror a pinned upstream image into ECR.
+# 3e. ADOT collector — mirror a pinned upstream image into ECR.
 #     Set ADOT_VERSION to the release you want; the script pulls it,
 #     pushes to your ECR (CMK-encrypted, immutable), and PERSISTS a
 #     digest-pinned COLLECTOR_IMAGE into deploy.env automatically.
+#     Needs BOTH public.ecr.aws reach and AWS creds — run it where both
+#     are available.
 ADOT_VERSION=v0.43.0 ./scripts/mirror/mirror-collector.sh
 
-# 3e. Download-portal image (only if deploying the optional portal, step 11)
+# 3f. Download-portal image (only if deploying the optional portal, step 9b)
 ./scripts/build-and-push-portal.sh                 # persists PORTAL_IMAGE
 ```
 🔎 After this, `deploy.env` has all four image vars set by the scripts —
@@ -465,7 +473,7 @@ outbound over the **same** server-side egress path (+ SSL-inspection exemption)
 the gateway already requires — same prerequisite, so OIDC can't be verified
 live until that lands.
 
-Prereqs: portal image built (step 3e), and the Okta app has the
+Prereqs: portal image built (step 3f), and the Okta app has the
 `https://<FQDN>/portal/oauth/callback` redirect URI + the `<ACCESS_GROUP>`
 group populated (see `docs/requests/okta-request-email.md`). **Critically, the app must
 have a groups claim configured** on the authorization server (ID token, matches
@@ -545,11 +553,15 @@ against the manifest SHA-256 before upload.
 ./scripts/import-enterprise-cert.sh csr <FQDN>
 ./scripts/import-enterprise-cert.sh import <FQDN> leaf.pem <FQDN>.key.pem chain.pem
 ./scripts/deploy-database.sh
-./scripts/mirror/mirror-claude-release.sh 2.1.207 && cp mirror/2.1.207/claude docker/claude
+# -- egress host --
+./scripts/mirror/mirror-claude-release.sh 2.1.207
+./scripts/mirror/mirror-grafana-plugin.sh
+./scripts/mirror/mirror-rds-ca-bundle.sh
+# -- copy mirror/ to the build machine; everything below runs there --
 ./scripts/build-and-push-image.sh
 ./scripts/build-and-push-dbadmin.sh
 ./scripts/build-and-push-grafana.sh
-#   ... mirror ADOT collector, set COLLECTOR_IMAGE (step 3d) ...
+#   ... mirror ADOT collector, set COLLECTOR_IMAGE (step 3e) ...
 ./scripts/deploy-gateway.sh          # watch: bootstrap, target health, first rotation
 #   ... create CNAME, Zscaler bypass ...
 ./scripts/verify-gateway.sh

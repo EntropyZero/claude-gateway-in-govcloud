@@ -165,6 +165,24 @@ needs live: Okta login on 13.1 (expect one-time re-login for all users) and
 the Fargate task-role credential path from the plugin subprocess. Full entry
 in the security-review fix log.
 
+**Fixed 2026-07-26 (committed): build scripts fetched from the internet on
+the OFFLINE build machine.** The real build/deploy host reaches only AWS
+service endpoints (new rule: `.claude/rules/offline-build.md`) — but
+`build-and-push-grafana.sh` invoked `mirror-grafana-plugin.sh` (grafana.com
+when the artifact was missing) and the gateway + db-admin builds curled the
+RDS truststore. Now: mirroring happens ONLY on the egress host
+(`scripts/mirror/`, incl. new `mirror-rds-ca-bundle.sh`), `mirror/` is copied
+to the build machine, and build scripts consume it — failing closed with
+transfer instructions (`require_mirrored_file`/`verify_sha256` in common.sh,
+bats-covered) instead of fetching. The gateway build also stages `claude`
+from `mirror/<version>/` itself (re-verified against the mirror's
+`CHECKSUMS.txt`) — the manual `cp mirror/<ver>/claude docker/claude` step is
+gone from every runbook. The Grafana plugin pin moved to
+`scripts/mirror/grafana-plugin.pin`, sourced by both the mirror script and
+the build-side re-verification. Runbooks updated (greenfield Phase 4,
+test-run §3, om-runbooks §4/§5/§6). Offline fail paths exercised locally;
+the real two-host mirror→transfer→build chain is exercised by the test run.
+
 **Added 2026-07-25 (committed, NOT yet deployed): portal spend-cap admin page
 + set-spend-limit.sh TLS fix.** (1) `set-spend-limit.sh` failed TLS because
 `--cacert` REPLACES curl's trust store — one extra CA can't verify a chain
@@ -339,11 +357,11 @@ FQDN / cert / Zscaler entry (path-based at `/portal`). Teardown is the reverse
 ## Rules
 
 Hard rules live in `.claude/rules/*.md` (`security`, `cloudformation`,
-`scripts`, `process`). Claude Code **auto-loads** that directory at session
+`scripts`, `process`, `offline-build`). Claude Code **auto-loads** that directory at session
 start — no import needed — so they are always in effect. Follow them; add new
 cross-cutting rules there rather than inline here.
 
 To add a rule file, copy `.claude/rules/TEMPLATE.md.example` to a new `.md`
 file. It shows the house style and the optional `paths:` frontmatter that
-scopes a file to matching paths — the four active files omit it deliberately
+scopes a file to matching paths — the five active files omit it deliberately
 (their rules are cross-cutting), so they load every session.

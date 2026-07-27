@@ -356,23 +356,35 @@ build + baked-bundle mechanism is **[VERIFIED-LIVE]**.
 *Why this is an image rebuild, not a config flip:* both the gateway and the
 db-admin Lambda connect with `sslmode=verify-full`, and the driver trusts the
 **OS/container trust store**, not `sslrootcert=` (proven in the test run — the
-driver ignores `sslrootcert=`). The RDS CA bundle is fetched at build time
-(`RDS_CA_BUNDLE_URL`, default the GovCloud truststore) and **baked into both
-images** (`docker/rds-ca-bundle.pem`, `docker/db-admin/rds-ca-bundle.pem`). A CA
-change therefore means: restage the bundle → rebuild **both** images with a
-**bumped immutable tag** → stack update that rolls the services and re-points
-the Lambda images.
+driver ignores `sslrootcert=`). The RDS CA bundle is staged on the **egress
+host** by `scripts/mirror/mirror-rds-ca-bundle.sh` (`RDS_CA_BUNDLE_URL`,
+default the GovCloud truststore) into `mirror/rds-ca-bundle.pem` and **baked
+into both images** at build (`docker/rds-ca-bundle.pem`,
+`docker/db-admin/rds-ca-bundle.pem`) — the offline build machine never
+fetches it (`.claude/rules/offline-build.md`). A CA change therefore means:
+re-mirror the bundle → transfer → rebuild **both** images with a **bumped
+immutable tag** → stack update that rolls the services and re-points the
+Lambda images.
 
-*Preconditions:* Build host with Docker + egress to the RDS truststore (or a
-mirrored bundle), `KMS_KEY_ARN` set (CMK-encrypted ECR), and — if the CA
+*Preconditions:* The egress host (reaches the RDS truststore) to refresh the
+mirrored bundle, the offline build host with Docker and the transferred
+`mirror/` directory, `KMS_KEY_ARN` set (CMK-encrypted ECR), and — if the CA
 identifier itself changes on the instance — a maintenance window (modifying
 `CACertificateIdentifier` on the DB may require a reboot).
 
 *Steps (exact commands):*
 
-1. **Rebuild the gateway image with a bumped tag** (tags are IMMUTABLE — a
-   same-tag rebuild cannot be pushed). The build script re-fetches the RDS CA
-   bundle every run:
+1. **Re-mirror the bundle on the egress host and transfer it:**
+
+   ```bash
+   # egress host — override RDS_CA_BUNDLE_URL for commercial regions
+   ./scripts/mirror/mirror-rds-ca-bundle.sh    # stages mirror/rds-ca-bundle.pem
+   # copy mirror/ to the build machine (same transfer as a release mirror)
+   ```
+
+2. **Rebuild the gateway image with a bumped tag** (tags are IMMUTABLE — a
+   same-tag rebuild cannot be pushed). The build script re-stages the bundle
+   from the transferred `mirror/` every run:
 
    ```bash
    # bump the tag so the new bundle ships under a new immutable URI
@@ -380,17 +392,14 @@ identifier itself changes on the instance — a maintenance window (modifying
    #   persists IMAGE_URI back into deploy.env
    ```
 
-2. **Rebuild the db-admin Lambda image with a bumped tag:**
+3. **Rebuild the db-admin Lambda image with a bumped tag:**
 
    ```bash
    DBADMIN_VERSION="1.0.1" ./scripts/build-and-push-dbadmin.sh
    #   persists DBADMIN_IMAGE back into deploy.env
    ```
 
-   (Optionally override `RDS_CA_BUNDLE_URL` on both builds to pin a specific
-   bundle for a controlled network.)
-
-3. **Deploy the gateway stack** so the task definition and both Lambdas pick up
+4. **Deploy the gateway stack** so the task definition and both Lambdas pick up
    the new image URIs and the service rolls (images **before** the stack update
    that expects them — `.claude/rules/scripts.md`):
 
@@ -398,7 +407,7 @@ identifier itself changes on the instance — a maintenance window (modifying
    ./scripts/deploy-gateway.sh
    ```
 
-4. **Only if the instance CA identifier changes:** update
+5. **Only if the instance CA identifier changes:** update
    `CACertificateIdentifier` on the RDS instance in `01-database.yaml` to the
    new CA and `./scripts/deploy-database.sh`. This is a property modification,
    not a replacement — verify it is not flagged as `Update:Replace` before
@@ -456,12 +465,17 @@ offline image builds are **[VERIFIED-LIVE]**.
    #   mirror/2.1.208/{claude,claude.exe,CHECKSUMS.txt}
    ```
 
+   Then copy `mirror/` to the build machine — it builds offline
+   (`.claude/rules/offline-build.md`) and also expects the previously
+   transferred `mirror/rds-ca-bundle.pem` to still be present (the gateway
+   build bakes it in every run).
+
 2. **Rebuild the gateway image** (it embeds the linux binary). Set
-   `CLAUDE_VERSION` to the new release in `deploy.env` first, then stage the
-   verified binary and build:
+   `CLAUDE_VERSION` to the new release in `deploy.env` first; the build
+   script stages the binary from `mirror/<version>/` itself, re-verifying
+   it against the mirror's `CHECKSUMS.txt`:
 
    ```bash
-   cp mirror/2.1.208/claude docker/claude
    # deploy.env: export CLAUDE_VERSION="2.1.208"
    ./scripts/build-and-push-image.sh        # tags the image 2.1.208, persists IMAGE_URI
    ./scripts/deploy-gateway.sh              # rolls the gateway service onto it
@@ -601,11 +615,14 @@ expects it** (`.claude/rules/scripts.md`).
   `grafana/grafana` (the `grafana/grafana-oss` Docker Hub repo froze at
   12.4); the build script also stages the `grafana-amazonprometheus-datasource`
   plugin into the image (SigV4 left the core prometheus datasource in 13.1
-  and the task has no egress to install plugins at boot) — the pin and the
-  verified download live in `scripts/mirror/mirror-grafana-plugin.sh`
-  (invoked automatically, idempotent against `mirror/grafana-plugins/`);
-  bump `AMP_PLUGIN_VERSION` + `AMP_PLUGIN_SHA256` together there when
-  updating it; and expect a **one-time re-login for all Grafana users** on
+  and the task has no egress to install plugins at boot) — the plugin zip
+  must already sit in the transferred `mirror/grafana-plugins/` (run
+  `scripts/mirror/mirror-grafana-plugin.sh` on the **egress host**, then
+  copy `mirror/` over; the build host never fetches —
+  `.claude/rules/offline-build.md`); the pin lives in
+  `scripts/mirror/grafana-plugin.pin` — bump `AMP_PLUGIN_VERSION` +
+  `AMP_PLUGIN_SHA256` together there when updating it, then re-mirror and
+  re-transfer; and expect a **one-time re-login for all Grafana users** on
   the first post-upgrade start (external OAuth sessions are re-linked —
   `improvedExternalSessionHandling`, default-on since 12.1).
 - **ADOT collector (sidecar):** `ADOT_VERSION=<vX.Y.Z> ./scripts/mirror/mirror-collector.sh`

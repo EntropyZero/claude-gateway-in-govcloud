@@ -13,12 +13,15 @@ linked, not duplicated — this document is the spine: every command in order,
 with the org-prerequisite lead times sequenced first because they, not AWS,
 set the calendar.
 
-Run everything from **one host** with Docker, internet egress, and AWS
-credentials for the target account (if you split the image builds onto a
-separate egress host, copy the persisted `KMS_KEY_ARN`, `IMAGE_URI`,
-`DBADMIN_IMAGE`, `GRAFANA_IMAGE`, `COLLECTOR_IMAGE`, and `CERTIFICATE_ARN`
-lines into the deploy host's `scripts/deploy.env` — the scripts persist them
-automatically, but only locally).
+Two hosts (`.claude/rules/offline-build.md`): an **egress host** (internet,
+no AWS needed) runs the `scripts/mirror/` tools, and the **build/deploy
+machine** (Docker + AWS service endpoints only, **no internet**) runs
+everything else against the transferred `mirror/` directory. The split
+lands in Phase 4; if the two hosts keep separate checkouts, remember
+`deploy.env` is persisted locally on whichever host ran a script — the
+build/deploy machine's copy is the one that accumulates `KMS_KEY_ARN`,
+`IMAGE_URI`, `DBADMIN_IMAGE`, `GRAFANA_IMAGE`, `COLLECTOR_IMAGE`, and
+`CERTIFICATE_ARN`.
 
 Shell convention: command examples expand variables like `$GATEWAY_FQDN` and
 `$CLAUDE_VERSION` in **your** shell — the scripts source `deploy.env`
@@ -215,27 +218,37 @@ available minor via `DB_ENGINE_VERSION` (query in
 
 ## Phase 4 — Mirror the release + build and push all images
 
-Needs Docker, egress, and `KMS_KEY_ARN` from Phase 3. The GPG decision from
-Phase 1 gates step 4a.
+Two hosts (`.claude/rules/offline-build.md`): step 4a runs on the **egress
+host** (internet, no AWS needed except for `mirror-collector.sh` — see its
+note); steps 4b–4f run on the **build machine** (Docker + AWS only, no
+internet) after you copy `mirror/` over. The GPG decision from Phase 1 gates
+the release mirror. Needs `KMS_KEY_ARN` from Phase 3.
 
 ```bash
-# 4a. Pinned Claude Code release → gateway image
+# 4a. EGRESS HOST — verify + stage every external artifact into mirror/
 ./scripts/mirror/mirror-claude-release.sh "$CLAUDE_VERSION"   # verifies sha256 + (GPG) manifest; fails closed
-cp "mirror/$CLAUDE_VERSION/claude" docker/claude
+./scripts/mirror/mirror-grafana-plugin.sh                     # AMP datasource plugin, sha256-pinned (grafana-plugin.pin)
+./scripts/mirror/mirror-rds-ca-bundle.sh                      # RDS CA trust bundle (baked into gateway + db-admin images)
+# ---- copy the mirror/ directory to the build machine ----
+
+# 4b. BUILD MACHINE — gateway image (stages claude from mirror/, re-verified
+#     against the mirror's CHECKSUMS.txt)
 ./scripts/build-and-push-image.sh                             # persists IMAGE_URI
 
-# 4b. DB-admin Lambda image (bootstrap + rotation)
+# 4c. DB-admin Lambda image (bootstrap + rotation)
 ./scripts/build-and-push-dbadmin.sh                           # persists DBADMIN_IMAGE
 
-# 4c. Grafana image (auto-invokes scripts/mirror/mirror-grafana-plugin.sh —
-#     stages the sha256-pinned AMP datasource plugin into mirror/grafana-plugins/,
-#     reusing it if already transferred there like the release mirror)
+# 4d. Grafana image (bakes in the mirrored AMP plugin, re-verified
+#     against scripts/mirror/grafana-plugin.pin)
 ./scripts/build-and-push-grafana.sh                           # persists GRAFANA_IMAGE
 
-# 4d. ADOT collector — mirror the pinned upstream release into ECR
+# 4e. ADOT collector — mirror the pinned upstream image into ECR. Needs BOTH
+#     public.ecr.aws reach and AWS creds: run it wherever both are available
+#     (the egress host with AWS creds, or the build machine if your landing
+#     zone lets it reach public.ecr.aws).
 ADOT_VERSION=v0.49.0 ./scripts/mirror/mirror-collector.sh     # persists digest-pinned COLLECTOR_IMAGE
 
-# 4e. Download-portal image (only if deploying Phase 9)
+# 4f. Download-portal image (only if deploying Phase 9)
 ./scripts/build-and-push-portal.sh                            # persists PORTAL_IMAGE
 ```
 🔎 `grep -E 'IMAGE_URI|DBADMIN_IMAGE|GRAFANA_IMAGE|COLLECTOR_IMAGE' scripts/deploy.env`
@@ -243,10 +256,12 @@ ADOT_VERSION=v0.49.0 ./scripts/mirror/mirror-collector.sh     # persists digest-
 `claude.exe` + `CHECKSUMS.txt` for the Windows rollout (Phase 10) — stage
 `mirror/$CLAUDE_VERSION/` on the internal file share now. Pin the ADOT
 version currently proven with this repo (v0.49.0 at time of writing —
-check `CLAUDE.md` Status). In a controlled network, mirror the base images
-first (`GATEWAY_BASE_IMAGE`, `GRAFANA_BASE_IMAGE`, `LAMBDA_BASE_IMAGE`,
-`PORTAL_BASE_IMAGE` if deploying 04) — the builds need no package-repo
-access at all (README, "Controlled-network image builds").
+check `CLAUDE.md` Status). Base images must come from **your registry
+mirror** (`GATEWAY_BASE_IMAGE`, `GRAFANA_BASE_IMAGE`, `LAMBDA_BASE_IMAGE`,
+`PORTAL_BASE_IMAGE` if deploying 04) — the build machine cannot reach
+Docker Hub, and the upstream defaults exist for dev convenience only; the
+builds need no package-repo access at all (README, "Controlled-network
+image builds").
 
 ---
 
@@ -378,7 +393,7 @@ gateway plus `otel-collector`), and collector log streams appear under the
 Independent of 03 — any time after Phase 5. Shares the ALB / FQDN / cert /
 Zscaler entry (path-based at `/portal`): **no new DNS or Zscaler request**,
 but it reaches the Okta issuer over the same server-side egress exemption
-the gateway needs. Prereqs: `PORTAL_IMAGE` (Phase 4e), the
+the gateway needs. Prereqs: `PORTAL_IMAGE` (Phase 4f), the
 `/portal/oauth/callback` redirect URI, the **groups claim** on the Okta app
 (without it the portal denies everyone), and `ACCESS_GROUP` populated.
 
@@ -533,12 +548,15 @@ not production-ready. Where a check fails, start at
 ./scripts/import-enterprise-cert.sh csr "$GATEWAY_FQDN"
 ./scripts/import-enterprise-cert.sh import "$GATEWAY_FQDN" leaf.pem "$GATEWAY_FQDN.key.pem" chain.pem
 ./scripts/deploy-database.sh
+# -- egress host --
 ./scripts/mirror/mirror-claude-release.sh "$CLAUDE_VERSION"
-cp "mirror/$CLAUDE_VERSION/claude" docker/claude
+./scripts/mirror/mirror-grafana-plugin.sh
+./scripts/mirror/mirror-rds-ca-bundle.sh
+# -- copy mirror/ to the build machine; everything below runs there --
 ./scripts/build-and-push-image.sh
 ./scripts/build-and-push-dbadmin.sh
 ./scripts/build-and-push-grafana.sh
-ADOT_VERSION=v0.49.0 ./scripts/mirror/mirror-collector.sh
+ADOT_VERSION=v0.49.0 ./scripts/mirror/mirror-collector.sh   # needs public.ecr.aws + AWS creds (see Phase 4e)
 ./scripts/deploy-gateway.sh                      # gate: Okta-issuer egress exemption live
 #   ... DNS CNAME target to the DNS team; confirm client-side Zscaler entry ...
 ./scripts/verify-gateway.sh

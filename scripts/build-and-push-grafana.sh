@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Build the provisioned Grafana image from docker/grafana/ and push to ECR.
-# For controlled networks, mirror the base image into your registry first
-# and pass GRAFANA_BASE_IMAGE pointing at it.
+# OFFLINE build host (.claude/rules/offline-build.md): every external input
+# is pre-staged — the AMP plugin zip arrives in the transferred mirror/
+# directory (scripts/mirror/mirror-grafana-plugin.sh on the egress host),
+# and the base image must come from your registry mirror in the target
+# profile (pass GRAFANA_BASE_IMAGE; the Docker Hub default resolves only
+# where Docker Hub is reachable).
 source "$(dirname "$0")/common.sh"
 
 # 13.1.1 = the 2026-07-25 upgrade off EOL 11.5.1 (11.x left security support
@@ -25,15 +29,16 @@ REPO_NAME="${GRAFANA_ECR_REPO_NAME:-claude-gw-grafana}"
 GRAFANA_IMAGE_TAG="${GRAFANA_IMAGE_TAG:-${GRAFANA_VERSION}}"
 
 # Amazon Managed Prometheus datasource plugin, baked into the image (the
-# task has no egress to install it at boot). The pin (version + sha256) and
-# the verified download live in scripts/mirror/mirror-grafana-plugin.sh —
-# invoked here idempotently: it reuses an already-staged, checksum-clean
-# mirror/grafana-plugins/ artifact and only reaches grafana.com when one is
-# missing, so a pre-staged mirror (transferred like a release mirror) makes
-# this build's plugin input fully offline.
+# task has no egress to install it at boot). Consumed from the transferred
+# mirror/ — NEVER fetched here (this host cannot reach grafana.com). The
+# pin is grafana-plugin.pin, shared with the mirror script, and the zip is
+# re-verified against it so transfer corruption/tampering fails the build.
 command -v unzip >/dev/null || { echo "FATAL: unzip is required (extracts the AMP datasource plugin preserving the backend binary's exec bit)." >&2; exit 1; }
-log "Staging the AMP datasource plugin (scripts/mirror/mirror-grafana-plugin.sh)"
-PLUGIN_ZIP="$(MIRROR_DIR="${MIRROR_DIR:-${REPO_ROOT}/mirror}" "${SCRIPT_DIR}/mirror/mirror-grafana-plugin.sh")"
+source "${SCRIPT_DIR}/mirror/grafana-plugin.pin"
+PLUGIN_ZIP="${MIRROR_DIR:-${REPO_ROOT}/mirror}/grafana-plugins/${AMP_PLUGIN_ID}-${AMP_PLUGIN_VERSION}-linux-amd64.zip"
+require_mirrored_file "$PLUGIN_ZIP" "scripts/mirror/mirror-grafana-plugin.sh"
+verify_sha256 "$PLUGIN_ZIP" "$AMP_PLUGIN_SHA256"
+log "Staging the AMP datasource plugin from ${PLUGIN_ZIP} (verified)"
 PLUGIN_DIR="${REPO_ROOT}/docker/grafana/plugins"
 rm -rf "$PLUGIN_DIR"; mkdir -p "$PLUGIN_DIR"
 unzip -q "$PLUGIN_ZIP" -d "$PLUGIN_DIR"

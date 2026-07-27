@@ -1,8 +1,9 @@
 ---
 # paths: (optional) — scope this rule file to matching files.
 #   • Omit entirely → ALWAYS-ON: every rule here loads each session. This is
-#     the right default for cross-cutting rules, and is what the four active
-#     rule files do (security / cloudformation / scripts / process).
+#     the right default for cross-cutting rules, and is what the five active
+#     rule files do (security / cloudformation / scripts / process /
+#     offline-build).
 #   • Add globs     → the rules load only when a matching file is in play.
 #     Gitignore-style globs; list one or more. Use this when a file's rules
 #     are genuinely specific to one area and would be noise elsewhere.
