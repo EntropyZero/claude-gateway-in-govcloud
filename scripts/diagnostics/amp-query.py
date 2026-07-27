@@ -111,14 +111,22 @@ def names(pattern):
 
 
 def ever_stored(pattern):
-    """Count of series with ANY sample in the window - immune to burstiness."""
-    d = q("api/v1/query", {
-        "query": 'count(count_over_time({__name__=~"%s"}[%dh]))' % (pattern, WINDOW_H)})
-    r = d.get("data", {}).get("result", [])
-    try:
-        return int(float(r[0]["value"][1])) if r else 0
-    except (KeyError, IndexError, ValueError):
-        return 0
+    """Count of series with ANY sample in the window - immune to burstiness.
+
+    Uses the series endpoint, NOT count(count_over_time({__name__=~...})):
+    range functions drop the metric name, so the moment two metrics share a
+    label set (one session's attribute-less counters, e.g. session_count +
+    commit_count) the PromQL form errors with "vector cannot contain metrics
+    with the same labelset" - in exactly the multi-metric conditions this
+    probe exists to detect.
+    """
+    now = int(_time.time())
+    d = q("api/v1/series", {
+        "match[]": '{__name__=~"%s"}' % pattern,
+        "start": str(now - WINDOW_H * 3600),
+        "end": str(now),
+    })
+    return len(d.get("data", []) or [])
 
 
 def qsum_by(metric, label):

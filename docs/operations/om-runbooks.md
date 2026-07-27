@@ -1004,7 +1004,9 @@ and either way it says nothing about whether ingestion is working.
 > UnderscoreEscapingWithoutSuffixes` - the WithOUT variant; the WithSuffixes
 > variant would re-add unit/type suffixes and break the dashboard names.)
 
-> **Dashboard queries reworked for per-session series (2026-07-24).** Keeping
+> **Dashboard queries reworked for per-session series (2026-07-24).**
+> *(Query shapes below are SUPERSEDED by the 2026-07-26 entry that follows -
+> kept as history.)* Keeping
 > `session.id` split cost/usage into one series per session, which broke the
 > dashboard's `increase(...[window])` panels: `increase()` needs >=2 samples
 > per series and returns NOTHING for a short/sparse session, so panels read
@@ -1026,6 +1028,65 @@ and either way it says nothing about whether ingestion is working.
 > Caveat: sessions spanning the window's start edge slightly over-attribute
 > (their pre-window spend counts in the window). For exact accounting the
 > gateway's Postgres `spend` table remains authoritative.
+
+> **Cumulative panels added; stale sessions no longer fall off (2026-07-26).**
+> The trailing-1h time-series read as "the trend", but a session's
+> contribution drains out of a 1h window within an hour of the client going
+> quiet, so spend appeared to vanish from the right edge of the graphs
+> (operator-reported confusion; the same aging applies to the range tiles as
+> the relative range advances). The dashboard now has two sections plus
+> reworked tiles, all validated query-by-query against a real Prometheus
+> (3.7.1) with a synthetic multi-session dataset (active, single-sample,
+> stale-mid-range, spanning-range-start, >1h-gap sessions) - not live AMP:
+>   - **Cumulative (selected range)** - seven new time-series + the top-users
+>     table. Per-session in-range rise:
+>     `sum by (X) (max_over_time(m[$__range]) - ((0 + last_over_time(m[1h]
+>     offset $__range)) or (0 * max_over_time(m[$__range]))))` - counter peak
+>     minus the session's value at the window start when it was already
+>     running, else the full counter. A session that starts in-range FREEZES
+>     at its final value and holds to the right edge (stale clients no longer
+>     fall off); single-sample sessions count in full; the right edge matches
+>     the tiles exactly. The `(0 + ...)` keeps both `or` operands name-free
+>     (`last_over_time` is one of the few functions that RETAINS `__name__`);
+>     defensive only - vector matching ignores `__name__`, and the unguarded
+>     form also evaluates correctly (both verified on Prometheus 3.7.1).
+>     Caveats: sessions overlapping the range START are accounted against the
+>     sliding lookback, so mid-graph they can over-read and decline before
+>     settling exact at the right edge; a live session that goes >1h silent
+>     across the range-start boundary is treated as new (pre-range spend
+>     counts once). Curves are capped at `maxDataPoints: 200` - full-range
+>     lookbacks at every step are the expensive query shape on AMP (its
+>     Cortex-lineage frontend splits long range queries into per-day
+>     sub-queries - Cortex-default 24h, not an AWS-documented figure - each
+>     refetching the whole lookback).
+>   - **Burn rate (trailing 1h)** - the previous seven time-series, retitled
+>     so the drain-off reads as by-design ("who is spending right now").
+>     Expressions value-identical to before; only the two missing template-
+>     variable filters were added so they respect the same dropdowns as the
+>     tiles.
+>   - **Tiles** use the same per-session accounting as the cumulative curves
+>     (so tile == curve right edge, and a session spanning the range start no
+>     longer over-counts its pre-range spend), and now run as INSTANT queries
+>     - as range queries Grafana evaluated the full-range expression at every
+>     plot step and kept only the last point, pure wasted AMP cost.
+>   - **Bug found by the validation dataset:** the Sessions / Active-users
+>     counts selected `{__name__=~"claude_code_.+"}`; range functions drop the
+>     metric name, so the cost+token series of one session collide into the
+>     same label set and the whole query errors ("vector cannot contain
+>     metrics with the same labelset") as soon as one session emits two
+>     metrics with IDENTICAL label sets - live, that is any session that
+>     increments two of the attribute-less counters (session / commit /
+>     pull-request counts; cost and token series escape only because their
+>     `model`/`type` labels differ). The counts now select
+>     `claude_code_cost_usage` only ("sessions/users with spend activity");
+>     `scripts/diagnostics/amp-query.py` had the same PromQL shape in its
+>     burst-proof probe and now uses the series endpoint instead.
+> Deploy as above: bump GRAFANA_IMAGE_TAG, rebuild + push, re-run 03. On the
+> live run, eyeball: tile == cumulative right edge, a finished session still
+> visible at the right edge an hour later, and the Sessions tile non-empty
+> (it may have been erroring silently before this fix). AMP's engine is
+> Prometheus-2-lineage (window boundaries closed both ends vs 3.x left-open);
+> the validated expressions do not depend on boundary inclusivity.
 
 > **Session labels (2026-07-24).** `session.id` is KEPT as a metric label. It
 > was previously deleted for cardinality, but each session's counters start at
