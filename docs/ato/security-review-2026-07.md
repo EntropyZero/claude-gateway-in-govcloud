@@ -116,6 +116,27 @@ own Lambda, with the service roll built into the rotation itself; the
 master secret became break-glass and its rotation affects no running
 task. See the C-batch header below for the item-by-item mapping.
 
+**Portal image build: extra trust anchors are now split one-cert-per-file
+(2026-07-27, found during the live test run).** The portal build staged the
+concatenated `EXTRA_CA_CERT_PATH` + `GATEWAY_CA_BUNDLE` bundle as a single
+`/usr/local/share/ca-certificates/extra-ca.crt`; Debian's
+`update-ca-certificates` hands that directory to `openssl rehash`, which
+refuses multi-cert files — the live build printed `rehash: warning: skipping
+extra-ca.pem, it does not contain exactly one certificate or crl`. Impact was
+**cosmetic-plus**: reproduction against `python:3.12-slim` showed the certs
+still reach `/etc/ssl/certs/ca-certificates.crt` (the bundle Python's `ssl`
+reads — both test CAs verified trusted), `update-ca-certificates` exits 0 and
+the build **succeeds**; only the `/etc/ssl/certs` hash symlinks (capath
+consumers) were missing. The Dockerfile now awk-splits `/tmp/extra-ca.pem`
+into `extra-ca-<n>.crt` one cert per file before `update-ca-certificates`
+(runtime-verified: "2 added", hash symlinks present, both CAs trusted by
+Python, empty-file path still skips). Two warnings the fix does NOT remove,
+both harmless: `rehash: warning: skipping ca-certificates.crt ...` appears on
+every trixie run even with a single perfect cert (rehash scans the master
+bundle in `/etc/ssl/certs`), and `python:3.12-slim` is now Debian 13 trixie —
+the message set differs from bookworm-era docs. If a portal *deploy* aborted,
+the fatal error is elsewhere in the log; these warnings never fail the build.
+
 **Portal dropdowns are now dependent: Cost Center → its Teams (2026-07-27,
 committed NOT yet deployed).** The download portal's flat `PORTAL_TEAMS` +
 `PORTAL_COST_CENTERS` lists (any team could pair with any cost center) were
