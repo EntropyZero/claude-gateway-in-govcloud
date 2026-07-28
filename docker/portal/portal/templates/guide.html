@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Claude Code user guide{% endblock %}
+{% block content %}
+<h1>User guide</h1>
+<p>
+ <a class="button" href="/portal/guide.pdf?download=1">Download the PDF</a>
+ <a href="/portal/guide.pdf" target="_blank" rel="noopener">Open in a new tab</a>
+</p>
+<iframe class="guide-frame" src="/portal/guide.pdf" title="Claude Code user guide (PDF)"></iframe>
+<p class="who">If the viewer stays blank, your browser may not display PDFs
+inline - use the download link above.</p>
+{% endblock %}

@@ -9,6 +9,9 @@ Description: >-
   Install-ClaudeCode.ps1 + a generated install.cmd) from a CMK-encrypted S3
   artifacts bucket, logging every download to a dedicated CMK-encrypted audit
   log group. Deploy after 02-gateway.yaml (same NamePrefix); independent of 03.
+  Requires a 02 deployed WITH the <NamePrefix>-spend-read-key-arn export
+  (re-run scripts/deploy-gateway.sh before this stack when upgrading): the
+  portal imports the read-only spend-admin key for self-usage display.
 
 Parameters:
   NamePrefix:
@@ -87,7 +90,8 @@ Parameters:
       stack's SpendAdminGroups: the page acts with the signed-in admin's OWN
       gateway session token (obtained via the gateway's OAuth device flow), so
       the gateway independently re-checks membership on every call - the portal
-      holds no admin API key. Empty (default) disables the admin page entirely.
+      holds no WRITE admin key (only the read-only key for usage display).
+      Empty (default) disables the admin pages entirely.
 
   PortalCostCenterTeams:
     Type: String
@@ -100,6 +104,15 @@ Parameters:
       pipes (they become OTEL_RESOURCE_ATTRIBUTES labels); a malformed mapping
       fails the portal task at boot. Server-side validation rejects any
       team/cost-center pair not in this mapping.
+
+  UserGuideKey:
+    Type: String
+    Default: docs/user-manual.pdf
+    Description: >-
+      S3 key (within the artifacts bucket) of the user-guide PDF the portal
+      serves at /portal/guide. scripts/publish-portal-release.sh uploads
+      docs/generated/user-manual.pdf to this key; until it exists the guide
+      page shows a friendly "not published yet" message.
 
   ReleaseVersion:
     Type: String
@@ -184,7 +197,6 @@ Parameters:
       'false' on a NAT/TGW profile.
 
 Conditions:
-  HavePortalAdminGroup: !Not [!Equals [!Ref PortalAdminGroup, '']]
   HaveProxy: !Not [!Equals [!Ref HttpsProxyUrl, '']]
   HaveProxyPort: !Not [!Equals [!Ref HttpsProxyPort, '']]
   WantSharedEndpoints: !Equals [!Ref CreateSupportingEndpoints, 'true']
@@ -344,14 +356,14 @@ Resources:
       DestinationSecurityGroupId: !Ref PortalSecurityGroup
       Description: Forward/health-check to the download portal
 
-  # The admin page calls the gateway (device flow + spend-limit API) through
-  # the shared internal ALB at https://<GatewayFqdn> - the portal task is then
-  # an ALB CLIENT, not just a target, so the ALB must accept 443 from the
-  # portal SG. Gated on the admin page being enabled; the plain download
-  # portal never talks to the gateway.
+  # The portal calls the gateway (device flow + spend-limit/usage API) and
+  # fetches the gateway TLS leaf for the fingerprint page through the shared
+  # internal ALB at https://<GatewayFqdn> - the portal task is an ALB CLIENT,
+  # not just a target, so the ALB must accept 443 from the portal SG.
+  # UNCONDITIONAL since portal v2: the fingerprint page and /portal/me
+  # self-usage need this path on every deployment, not just admin-enabled ones.
   PortalToAlbIngress:
     Type: AWS::EC2::SecurityGroupIngress
-    Condition: HavePortalAdminGroup
     Properties:
       GroupId:
         Fn::ImportValue: !Sub '${NamePrefix}-alb-sg'
@@ -359,7 +371,7 @@ Resources:
       FromPort: 443
       ToPort: 443
       SourceSecurityGroupId: !Ref PortalSecurityGroup
-      Description: Spend-cap admin page calls the gateway via the ALB
+      Description: Portal calls the gateway via the ALB (usage API, device flow, fingerprint)
 
   # Let the portal task reach 02's shared interface endpoints (ecr/logs/
   # secretsmanager) for image pull, awslogs, and secret injection. Same
@@ -400,6 +412,10 @@ Resources:
                 Resource:
                   - !Ref PortalOidcClientSecret
                   - !Ref PortalSessionSecret
+                  # The gateway stack's READ-ONLY spend-admin key (02 export):
+                  # injected as SPEND_READ_KEY for the /portal/me self-usage
+                  # page. Read/list only - the write key stays out of 04.
+                  - Fn::ImportValue: !Sub '${NamePrefix}-spend-read-key-arn'
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource:
@@ -519,11 +535,19 @@ Resources:
               Value: '8080'
             - Name: PORTAL_ADMIN_GROUP
               Value: !Ref PortalAdminGroup
+            - Name: USER_GUIDE_KEY
+              Value: !Ref UserGuideKey
           Secrets:
             - Name: OIDC_CLIENT_SECRET
               ValueFrom: !Ref PortalOidcClientSecret
             - Name: SESSION_SECRET
               ValueFrom: !Ref PortalSessionSecret
+            # Read-only spend-admin key from the gateway stack (02 must be
+            # deployed with the ${NamePrefix}-spend-read-key-arn export before
+            # this stack). Powers /portal/me; caps/spend reads only.
+            - Name: SPEND_READ_KEY
+              ValueFrom:
+                Fn::ImportValue: !Sub '${NamePrefix}-spend-read-key-arn'
 
   # No Name (a protocol change replaces the group; a fixed name self-collides
   # mid-update). HTTPS: the portal image's TLS entrypoint serves a per-task

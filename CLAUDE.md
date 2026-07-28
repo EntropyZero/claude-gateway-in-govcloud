@@ -40,6 +40,39 @@ Code-complete with a full test suite (`tests/portal`) green; NOT deploy-verified
 test run (and the same in-flight Zscaler/Okta egress exemption the gateway
 needs). Its new surface + controls are in `docs/ato/security-review-2026-07.md` §E.
 
+**Upgraded 2026-07-27 (committed, NOT yet deployed): portal v2 — Flask
+restructure + self-usage page, all-users admin spend table, user-guide PDF,
+fingerprint page.** `docker/portal/app.py` (single-file stdlib http.server)
+is replaced by a Flask 3 + gunicorn package (`docker/portal/portal/`;
+`PORTAL_VERSION` → 2.0.0; new deps are committed pure-Python wheels via
+`mirror-python-deps.sh portal`). Zero-JS constraint LIFTED (user decision
+2026-07-27): first-party JS only, CSP gains `script-src 'self'` (inline
+still banned). New pages: home cards; `/portal/download-page` with chained
+Cost-Center→Team dropdowns (noscript = the old two-step flow, server-side
+validation unchanged); `/portal/me` — own caps + period-to-date spend via
+the gateway's `GET /v1/organizations/spend_limits/effective`
+(binary-verified 2.1.211: row per user per period, fractional-cents spend →
+Decimal, forward-only paging, `sort=spend_desc` needs exactly one period);
+`/portal/guide`(+`.pdf`) — `publish-portal-release.sh` now uploads
+`docs/generated/user-manual.pdf` to the artifacts bucket (04 param
+`UserGuideKey`, container env `USER_GUIDE_KEY`, deploy.env
+`PORTAL_USER_GUIDE_KEY`); `/portal/fingerprint` — live
+gateway leaf SHA-256 in both encodings (the exact format Claude Code's
+first-connect prompt shows is UNVERIFIED in-repo, hence both);
+`/portal/admin/users` — per-admin device-flow bearer, NOT the read key.
+**Posture change stated in §E:** the portal task now injects the READ-ONLY
+spend key (02 export `${NamePrefix}-spend-read-key-arn` → 04 secret
+`SPEND_READ_KEY`) — disclosure-only blast radius, the write key stays out
+of 04; `PortalToAlbIngress` is now UNCONDITIONAL. **04 now requires a 02
+deployed with the export** — upgrade order: mirror wheels (egress host) →
+commit → build+push 2.0.0 → 02 re-run FIRST → 04 →
+`publish-portal-release.sh`. Needs live (04 still has zero deploy
+verification): `/effective` against the deployed gateway, fingerprint vs
+the real ALB cert, guide + ZIP streaming at real size (incl. mid-stream
+abort = truncated chunked body under gunicorn), and the admin users page
+end to end. Runbook: om-runbooks §6 (portal bullet); read paths:
+`cost-controls.md` §3.4.
+
 The full security review (`docs/ato/security-review-2026-07.md`) is implemented:
 batches A (deploy-breakers), B (ZPA/landing-zone prerequisites), C (FedRAMP
 hardening C1–C11), D (correctness), and C12 (least-privilege app DB user +
@@ -387,8 +420,8 @@ entry in the security-review fix log.
 | `cloudformation/01-database.yaml` | RDS PG16, the **KMS CMK** (created here, exported), db SGs, pgaudit |
 | `cloudformation/02-gateway.yaml` | ALB+TLS, ECS gateway (+ optional co-resident ADOT collector **sidecar** when telemetry is on), IAM, secrets, VPC endpoints, **db bootstrap + rotation Lambdas** |
 | `cloudformation/03-observability.yaml` | AMP, Grafana (Okta SSO), activity-archive chain; **outputs the AMP params the gateway sidecar consumes** (no standalone collector service — that moved into 02's task) |
-| `cloudformation/04-download-portal.yaml` | **optional** Okta-secured installer download portal (ECS Fargate at `/portal`, in-app OIDC + group auth, CMK S3 artifacts + audit log) |
-| `docker/` | gateway image + entrypoint; `db-admin/` (bootstrap+rotation Lambda); `grafana/`; `portal/` (download-portal app) |
+| `cloudformation/04-download-portal.yaml` | **optional** Okta-secured download portal (ECS Fargate at `/portal`, in-app OIDC + group auth, CMK S3 artifacts + audit log): installer downloads, self-usage, user guide, fingerprint, spend-cap admin. Imports 02's spend-read-key export |
+| `docker/` | gateway image + entrypoint; `db-admin/` (bootstrap+rotation Lambda); `grafana/`; `portal/` (download-portal **Flask package** `portal/` + `wsgi.py`, gunicorn, vendored wheels — since v2) |
 | `client/` | `Install-ClaudeCode.ps1` (non-admin Windows install) |
 | `scripts/` | `deploy.env`-driven deploy/operate chain at the root (see `scripts/README.md`); `common.sh` holds the shared helpers |
 | `scripts/mirror/` | **all vendor mirroring**: Claude Code releases, ADOT collector image, the Grafana AMP datasource plugin, Python wheel vendor dirs (`mirror-python-deps.sh` + the per-image `requirements.txt`) |
@@ -425,8 +458,11 @@ separate collector service. 02 never imports from 03; the params flow via
 download portal (04)** is a fifth image + stack that slots in any time after
 02 (independent of 03): `build-and-push-portal.sh → deploy-download-portal.sh
 → publish-portal-release.sh → set-portal-oidc-secret.sh`; it reuses the ALB /
-FQDN / cert / Zscaler entry (path-based at `/portal`). Teardown is the reverse
-(04 and 03 → 02 → 01).
+FQDN / cert / Zscaler entry (path-based at `/portal`). **Since portal v2 the
+02 must carry the `${NamePrefix}-spend-read-key-arn` export** (any 02
+deployed from this commit on does) — when upgrading an older deployment,
+re-run `deploy-gateway.sh` before `deploy-download-portal.sh`. Teardown is
+the reverse (04 and 03 → 02 → 01).
 
 ## How to work here
 
@@ -441,10 +477,12 @@ FQDN / cert / Zscaler entry (path-based at `/portal`). Teardown is the reverse
     Secrets Manager + faked pg/ECS): alternating-user flip, idempotency
     guards, error propagation. **The code with real bug history — extend it
     when you touch `docker/db-admin/app.py`.**
-  - `tests/portal` — pytest for the download-portal app (`docker/portal/app.py`):
-    OIDC/JWT verification (RS256 against a `cryptography`-minted test JWKS),
-    cookie/PKCE, group authz, dropdown validation, install.cmd/ZIP generation,
-    and full HTTP-handler flows. Extend it when you touch the portal app.
+  - `tests/portal` — pytest for the download-portal app (the
+    `docker/portal/portal/` Flask package, driven via `create_app()` +
+    Flask's `test_client()`): OIDC/JWT verification (RS256 against a
+    `cryptography`-minted test JWKS), cookie/PKCE, group authz, dropdown
+    validation, install.cmd/ZIP generation, usage/admin/fingerprint/guide
+    pages, and full HTTP flows. Extend it when you touch the portal app.
   - `tests/bash` — bats for `common.sh` helpers (`proxy_port`, `set_env_var`,
     `require_vars`).
   - `tests/cfn` — `cfn-lint` + a **cfn-guard** ruleset encoding the security

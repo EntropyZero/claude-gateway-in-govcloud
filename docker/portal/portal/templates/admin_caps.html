@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Spend caps{% endblock %}
+{% block content %}
+<h1>Spend-cap administration</h1>
+<p class="who">Gateway session connected - actions are recorded under your
+identity. <a href="/portal/admin/audit">Audit trail</a> |
+<a href="/portal/admin/users">All users usage</a></p>
+{% if flash %}<p class="{{ 'ok' if flash.ok else 'err' }}">{{ flash.msg }}</p>{% endif %}
+
+<h2>Current caps</h2>
+<table>
+ <tr><th>Scope</th><th>Id</th><th>Cap</th><th>Period</th><th>Updated</th><th></th></tr>
+ {# Runtime-verified item shape (gateway 2.1.220): scope is a NESTED object;
+    there is no created_by (attribution lives in the audit trail); a cleared
+    cap REMAINS as a row with amount null. #}
+ {% for item in limits %}
+ {% set scope = item.get('scope') or {} %}
+ {% set scope_type = scope.get('type', item.get('scope_type', '')) %}
+ {% set scope_id = scope.get('user_id') or scope.get('rbac_group_id') or item.get('scope_id') or '' %}
+ {% set period = item.get('period', 'monthly') %}
+ <tr>
+  <td>{{ scope_type }}</td>
+  <td>{{ scope_id }}</td>
+  <td>{% if item.get('amount') is none %}<em>(cleared)</em>{% else %}{{ cents_to_display(item.get('amount')) }}{% endif %}</td>
+  <td>{{ period }}</td>
+  <td>{{ item.get('updated_at', '') }}</td>
+  <td>
+   {% if item.get('amount') is not none %}
+   <form method="POST" action="/portal/admin/clear" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="scope_type" value="{{ scope_type }}">
+    <input type="hidden" name="scope_id" value="{{ scope_id }}">
+    <input type="hidden" name="period" value="{{ period }}">
+    <button type="submit" class="warn">Clear</button>
+   </form>
+   {% endif %}
+  </td>
+ </tr>
+ {% else %}
+ <tr><td colspan="6">No spend caps are set - spend is UNLIMITED for everyone.</td></tr>
+ {% endfor %}
+</table>
+<p class="who">Precedence: a per-user cap beats group caps; several group caps
+combine per the gateway's group_limit_mode. No rows = no enforcement.</p>
+
+<h2>Set / update a cap</h2>
+<form method="POST" action="/portal/admin/set">
+ <input type="hidden" name="csrf" value="{{ csrf }}">
+ <div class="grid">
+  <span><label for="scope_type">Scope</label>
+   <select id="scope_type" name="scope_type">
+    <option value="user">user</option>
+    <option value="rbac_group">rbac_group (Okta group)</option>
+    <option value="organization">organization</option>
+   </select></span>
+  <span><label for="scope_id">User sub/email or group</label>
+   <input id="scope_id" name="scope_id" placeholder="empty for organization"></span>
+  <span><label for="amount">Amount (US dollars)</label>
+   <input id="amount" name="amount" placeholder="50.00" required></span>
+  <span><label for="period">Period</label>
+   <select id="period" name="period">
+    {% for p in periods %}<option value="{{ p }}"{% if p == 'monthly' %} selected{% endif %}>{{ p }}</option>{% endfor %}
+   </select></span>
+ </div>
+ <p><button type="submit">Set cap</button></p>
+</form>
+
+<form method="POST" action="/portal/admin/disconnect" class="inline">
+ <input type="hidden" name="csrf" value="{{ csrf }}">
+ <button type="submit" class="warn">Disconnect gateway session</button>
+</form>
+{% endblock %}

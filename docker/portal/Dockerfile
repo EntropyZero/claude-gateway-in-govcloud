@@ -1,6 +1,6 @@
 # Claude Code installer download portal (ECS Fargate service).
 #
-# A small stdlib+boto3 HTTP service (docker/portal/app.py) that runs the OIDC
+# A Flask app (docker/portal/portal/) served by gunicorn that runs the OIDC
 # authorization-code flow, checks Okta group membership, and streams a
 # per-download ZIP. NOT Lambda: ALB->Lambda responses cap at 1 MB and the
 # claude.exe binary is 100+ MB, so this must be a long-running service that
@@ -8,15 +8,15 @@
 #
 # Mirror the base image into your internal registry for controlled networks
 # and pin it by digest there (a floating tag is mutable upstream):
-#   docker build -t claude-gw-portal:1.0.0 docker/portal/
+#   docker build -t claude-gw-portal:2.0.0 docker/portal/
 ARG PORTAL_BASE_IMAGE=public.ecr.aws/docker/library/python:3.12-slim
 FROM ${PORTAL_BASE_IMAGE}
 
-# boto3 (S3 GetObject for the artifacts + CloudWatch Logs for the audit trail)
-# is the only non-stdlib dependency, installed from vendored wheels so the
-# build needs NO PyPI access - same offline posture as docker/db-admin. vendor/
-# holds boto3 + its transitive deps as universal (py3-none-any) wheels committed
-# to the repo; the pin lives in requirements.txt. Refresh with:
+# flask + gunicorn + boto3 (S3 GetObject for the artifacts + CloudWatch Logs
+# for the audit trail), installed from vendored wheels so the build needs NO
+# PyPI access - same offline posture as docker/db-admin. vendor/ holds the
+# full transitive closure as wheels committed to the repo; the pins live in
+# requirements.txt. Refresh with:
 #   scripts/mirror/mirror-python-deps.sh portal
 COPY requirements.txt /tmp/requirements.txt
 COPY vendor/ /tmp/vendor/
@@ -44,7 +44,9 @@ RUN if [ -s /tmp/extra-ca.pem ]; then \
     fi \
  && rm -f /tmp/extra-ca.pem
 
-COPY app.py /opt/portal/app.py
+# The application package + entrypoints.
+COPY portal/ /opt/portal/portal/
+COPY wsgi.py gunicorn.conf.py /opt/portal/
 # Listener TLS cert (self-signed leaf generated on the build host by
 # build-and-push-portal.sh so the image needs no openssl). The ALB re-encrypts
 # to the target and does not validate this cert; it only encrypts the ALB->task
@@ -54,12 +56,14 @@ COPY --chown=10001:10001 tls/ /etc/portal/tls/
 # Fix modes regardless of the build host's umask (a umask-077 checkout yields
 # mode-600 sources that COPY preserves, breaking reads as the portal user), and
 # create the unprivileged runtime user without shadow-utils.
-RUN chmod 0644 /opt/portal/app.py \
+RUN find /opt/portal -type d -exec chmod 0755 {} + \
+ && find /opt/portal -type f -exec chmod 0644 {} + \
  && printf 'portal:x:10001:10001::/home/portal:/sbin/nologin\n' >> /etc/passwd \
  && printf 'portal:x:10001:\n' >> /etc/group \
  && mkdir -p /home/portal \
  && chown 10001:10001 /home/portal
 
 USER portal
+WORKDIR /opt/portal
 EXPOSE 8080
-ENTRYPOINT ["python3", "/opt/portal/app.py"]
+ENTRYPOINT ["gunicorn", "--config", "/opt/portal/gunicorn.conf.py", "wsgi:application"]

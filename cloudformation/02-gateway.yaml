@@ -2072,6 +2072,16 @@ Outputs:
     Value: !GetAtt Cluster.Arn
     Export:
       Name: !Sub '${NamePrefix}-cluster-arn'
+  # Imported by 04-download-portal.yaml: the portal injects the READ-ONLY
+  # spend-admin key so /portal/me can show the signed-in user their own caps +
+  # period-to-date spend (list/read only - mutations still require the write
+  # key, which is never exported). A 04 deploy therefore needs a 02 deployed
+  # at or after this export was added.
+  SpendReadKeySecretArn:
+    Description: Read-only spend-admin key secret - the download portal (04) imports it for self-usage display.
+    Value: !Ref SpendAdminReadKeySecret
+    Export:
+      Name: !Sub '${NamePrefix}-spend-read-key-arn'
   # Only when the shared Fargate interface endpoints exist (their private DNS
   # forces VPC-wide traffic onto them). 03 imports this to add Grafana-task
   # ingress so it can reach ecr/logs/secretsmanager; without it its 443 is

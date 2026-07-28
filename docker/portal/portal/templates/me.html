@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}My usage &amp; quotas{% endblock %}
+{% block content %}
+<h1>My usage &amp; quotas</h1>
+
+{% if not enabled %}
+<div class="notice">
+ <p><strong>Self-usage view is not enabled on this deployment.</strong></p>
+ <p>The portal has no read-only spend key configured (<code>SPEND_READ_KEY</code>).
+ To enable it, re-run <code>deploy-gateway.sh</code> (stack 02 exports the
+ read-key secret) and then <code>deploy-download-portal.sh</code> (stack 04
+ injects it into the portal task).</p>
+</div>
+{% elif error %}
+<p class="err">{{ error }}</p>
+{% else %}
+{% if rows %}
+{% for row in rows %}
+<section class="usage">
+ <h2>{{ row.period|capitalize }}</h2>
+ <dl class="usage-facts">
+  <div><dt>Cap</dt>
+   <dd>{% if row.has_cap %}{{ row.cap_display }}{% if row.source_label %} <span class="src">({{ row.source_label }})</span>{% endif %}{% else %}no cap - unlimited{% endif %}</dd></div>
+  <div><dt>Spend to date</dt><dd>{{ row.spend_display }}</dd></div>
+  {% if row.percent %}
+  <div><dt>Used</dt><dd>{{ row.percent.display }}</dd></div>
+  {% endif %}
+ </dl>
+ {% if row.percent %}
+ <div class="bar" role="img" aria-label="{{ row.percent.display }} of the {{ row.period }} cap used">
+  <span class="fill {{ row.percent.cls }} w{{ row.percent.width }}"></span>
+ </div>
+ {% endif %}
+</section>
+{% endfor %}
+<p class="who">Spend figures come from the gateway and update as usage is
+recorded; "no cap" periods report spend without enforcement.</p>
+{% else %}
+<p>No usage recorded for your account yet in any period.</p>
+{% endif %}
+{% endif %}
+{% endblock %}

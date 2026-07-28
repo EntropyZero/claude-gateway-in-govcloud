@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Gateway certificate fingerprint{% endblock %}
+{% block content %}
+<h1>Gateway TLS certificate fingerprint</h1>
+{% if result.ok %}
+<p>The gateway at <strong>{{ result.host }}</strong> is currently presenting a
+certificate with this SHA-256 fingerprint:</p>
+<h2>Colon-separated (OpenSSL style)</h2>
+<pre class="fp">{{ result.colon }}</pre>
+<h2>Bare hex</h2>
+<pre class="fp">{{ result.hex }}</pre>
+<div class="notice">
+ <p><strong>When Claude Code first connects to the gateway it shows a
+ certificate fingerprint and asks you to confirm it.</strong> Compare it with
+ the value above (both common encodings are shown; match whichever format the
+ prompt uses).</p>
+ <p>If the fingerprints do <strong>not</strong> match, something between your
+ machine and the gateway is intercepting TLS. Do not approve the prompt -
+ stop and contact IT.</p>
+</div>
+<p class="who">Fingerprints are re-read from the gateway every few minutes;
+after a planned certificate rotation this page shows the new value.</p>
+{% else %}
+<p class="err">Could not read the gateway certificate from
+<strong>{{ result.host }}</strong>: {{ result.error }}</p>
+<p>This usually means the gateway is unreachable from the portal, or the
+portal image's trust store is missing the certificate chain. Try again in a
+minute; if it persists, contact the platform team.</p>
+{% endif %}
+{% endblock %}

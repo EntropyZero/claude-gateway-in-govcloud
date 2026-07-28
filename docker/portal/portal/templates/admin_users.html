@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}All users usage{% endblock %}
+{% block content %}
+<h1>All users - caps &amp; usage</h1>
+<p class="who"><a href="/portal/admin">Spend-cap admin</a> |
+<a href="/portal/admin/audit">Audit trail</a></p>
+
+<form method="GET" action="/portal/admin/users" class="filters">
+ <div class="grid">
+  <span><label for="period">Period</label>
+   <select id="period" name="period">
+    {% for p in periods %}<option value="{{ p }}"{% if p == filters.period %} selected{% endif %}>{{ p }}</option>{% endfor %}
+   </select></span>
+  <span><label for="q">Search</label>
+   <input id="q" name="q" value="{{ filters.q }}" placeholder="name / email / id substring"></span>
+  <span><label for="page_size">Page size</label>
+   <select id="page_size" name="page_size">
+    {% for n in page_sizes %}<option value="{{ n }}"{% if n == filters.page_size %} selected{% endif %}>{{ n }}</option>{% endfor %}
+   </select></span>
+  <span><label for="sort">Order</label>
+   <select id="sort" name="sort">
+    <option value="">default</option>
+    <option value="spend"{% if filters.sort == 'spend' %} selected{% endif %}>highest spend first</option>
+   </select></span>
+ </div>
+ <p><button type="submit">Apply</button></p>
+</form>
+
+<table class="sortable" id="users-table">
+ <thead>
+ <tr>
+  <th>Name</th><th>Email</th><th>User id</th><th>Groups</th>
+  <th>Cap</th><th>Period</th><th data-numeric>Spend to date</th>
+  <th data-numeric>% used</th><th>Cap source</th>
+ </tr>
+ </thead>
+ <tbody>
+ {% for row in rows %}
+ <tr>
+  <td>{{ row.name }}</td>
+  <td>{{ row.email }}</td>
+  <td class="mono">{{ row.user_id }}</td>
+  <td>{{ row.groups }}</td>
+  <td>{% if row.cap_display %}{{ row.cap_display }}{% else %}<em>no cap</em>{% endif %}</td>
+  <td>{{ row.period }}</td>
+  <td data-sort="{{ row.spend_sort }}">{{ row.spend_display }}</td>
+  <td{% if row.percent %} data-sort="{{ row.percent.sort }}"{% endif %}>
+   {% if row.percent %}
+   <span class="pct">{{ row.percent.display }}</span>
+   <div class="bar mini"><span class="fill {{ row.percent.cls }} w{{ row.percent.width }}"></span></div>
+   {% else %}&mdash;{% endif %}
+  </td>
+  <td>{{ row.source_label }}</td>
+ </tr>
+ {% else %}
+ <tr><td colspan="9">No matching users{% if filters.q %} for "{{ filters.q }}"{% endif %}.</td></tr>
+ {% endfor %}
+ </tbody>
+</table>
+
+<p class="pager">
+ {% if paged %}<a class="button" href="{{ first_url }}">&#10226; First</a>{% endif %}
+ {% if next_url %}<a class="button" href="{{ next_url }}">Next &rarr;</a>{% endif %}
+</p>
+<p class="who">Paging is forward-only (the gateway issues one-way page
+tokens); use First to start over. Click a column header to sort the rows on
+THIS page; "highest spend first" above sorts across all pages.</p>
+{% endblock %}

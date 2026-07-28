@@ -86,8 +86,10 @@ caps at `https://<GATEWAY_FQDN>/portal/admin` **as themselves**: the page
 walks the gateway's device-flow sign-in once per session, and every
 list/set/clear call rides the admin's own gateway token. The gateway
 re-checks group membership on each call and `admin_audit` records the
-individual actor (`oidc:<sub>`) — **no admin key is stored anywhere in the
-portal**.
+individual actor (`oidc:<sub>`) — **no WRITE key is stored anywhere in the
+portal**. (Since portal v2 the portal task does inject the READ-ONLY key
+for the usage read paths — §3.4 — but mutations always ride a per-admin
+bearer.)
 
 Drift symptom: the page reports *"The gateway refused: your account is not in its
 spend-admin groups"* → `SPEND_ADMIN_GROUPS` and `PORTAL_ADMIN_GROUP` have
@@ -211,6 +213,36 @@ inference has flowed, or metering is broken); NULL/empty
 group filter is empty. **Raw per-request token/cost detail lives only in
 AMP** — Postgres holds aggregates; use §3.1/§3.2 for the breakdown and
 `scripts/diagnostics/diagnose-telemetry.sh` for pipeline health.
+
+### 3.4 Portal read paths — self-view and the all-users table (portal v2)
+
+Portal v2 (2026-07-27) adds two **read-only** spend views on the download
+portal, both backed by the gateway's effective-limits API —
+`GET /v1/organizations/spend_limits/effective`, which returns one row per
+user per period with the **effective** cap (after user/group/org
+precedence), the scope it came from, and `period_to_date_spend` (the same
+gateway-metered cents the enforcement path uses; may be fractional).
+The endpoint contract is **binary-verified against the mirrored 2.1.211
+gateway; [NEEDS TEST-RUN CONFIRMATION]** against the deployed stack.
+
+- **`/portal/me`** — every signed-in portal user sees their **own** caps
+  and period-to-date spend (per period, with cap source and percent used).
+  The portal makes this call server-side with the injected
+  `${NAME_PREFIX}/spend-admin-read-key` (`SPEND_READ_KEY`, imported from
+  02's export), pinned to the session's own Okta `sub`. If the key is
+  unset the page reports the feature disabled; enabling it on an upgraded
+  deployment = 02 re-run (creates the export), then 04.
+- **`/portal/admin/users`** — a paged, searchable all-users table (name,
+  email, sub, groups, cap, period, spend to date, % used, cap source) for
+  `PORTAL_ADMIN_GROUP` members. It deliberately does **not** use the read
+  key: calls carry the admin's own device-flow bearer, so the gateway
+  re-checks group membership per call and attribution stays individual.
+  Gateway-side constraints surfaced in the UI: sort-by-spend requires
+  selecting a single period, and paging is forward-only.
+
+Neither path can mutate anything: the read key is list/read-scoped and the
+write key never reaches stack 04. See the security-review fix log
+(portal v2 entry) for the full posture discussion.
 
 ---
 
@@ -338,7 +370,10 @@ inference fleet-wide, not just cost tracking.**
 - **Not yet live-verified** (mirrored-gateway/throwaway-Postgres verified
   only): cap enforcement and the 429 experience on the deployed stack, the
   portal admin page end to end (stack 04 has no deploy verification at
-  all), bearer-token admin via `SPEND_ADMIN_GROUPS`, the fail-closed outage
+  all), the portal v2 usage read paths — `/portal/me` and
+  `/portal/admin/users` against the deployed gateway's
+  `/spend_limits/effective` (§3.4) — bearer-token admin via
+  `SPEND_ADMIN_GROUPS`, the fail-closed outage
   and break-glass drill, and admin-key rotation. All
   **[NEEDS TEST-RUN CONFIRMATION]**.
 
@@ -369,4 +404,7 @@ procedure as the gateway JWT secret in [`om-runbooks.md`](om-runbooks.md)
 §7. A plain `deploy-gateway.sh` re-run is NOT enough: the secret write
 happens outside CloudFormation, so the stack update is an empty changeset
 and running tasks keep the old keys. Rotating the write key invalidates any
-operator's cached copy but not portal admins, who never use it.
+operator's cached copy but not portal admins, who never use it. Rotating
+the **read** key (portal v2): the portal task injects it too
+(`SPEND_READ_KEY`), so also force-roll `${NAME_PREFIX}-portal`, or
+`/portal/me` fails with a stale-key 401 until the next portal deployment.

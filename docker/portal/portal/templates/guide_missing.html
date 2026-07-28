@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}User guide not published{% endblock %}
+{% block content %}
+<h1>User guide not published yet</h1>
+<div class="notice">
+ <p>The user-guide PDF has not been uploaded to the artifacts bucket for this
+ deployment.</p>
+ <p>An operator can publish it by running
+ <code>scripts/publish-portal-release.sh</code>, which uploads
+ <code>docs/generated/user-manual.pdf</code> alongside the release
+ artifacts.</p>
+</div>
+{% endblock %}

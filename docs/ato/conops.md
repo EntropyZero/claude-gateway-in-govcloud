@@ -159,9 +159,10 @@ holds the RDS master credential.
   the download portal** (when stack `04` is deployed): they browse to
   `/portal` on the gateway FQDN, authenticate through Okta, pick their **Cost
   Center** and then a **Team belonging to it** (a configured
-  cost-center→teams mapping drives the two-step dropdowns), and receive a
+  cost-center→teams mapping drives the chained dropdowns; a no-script
+  browser falls back to the equivalent two-step page flow), and receive a
   single ZIP whose generated `install.cmd` bakes those choices in (§5.1;
-  `cloudformation/04-download-portal.yaml`; `docker/portal/app.py`).
+  `cloudformation/04-download-portal.yaml`; `docker/portal/`).
 
 ### 3.2 Platform operators
 
@@ -275,8 +276,9 @@ flow through the fielded system and cites the file that implements it.
    - **Self-service (portal, when stack `04` is deployed).** The developer
      browses to `https://<gateway-fqdn>/portal`, signs in through Okta
      (authorization-code flow with PKCE, enforced `AccessGroup` membership —
-     §3.6), selects a **Cost Center** and then one of **its Teams** (two-step
-     dropdowns from the configured cost-center→teams mapping), and downloads a
+     §3.6), selects a **Cost Center** and then one of **its Teams** (chained
+     dropdowns from the configured cost-center→teams mapping; two-step page
+     flow without scripts), and downloads a
      single ZIP:
      the verified `claude.exe`, `Install-ClaudeCode.ps1`, and a generated
      `install.cmd` that invokes the installer with `-GatewayUrl`, `-Sha256`,
@@ -284,7 +286,7 @@ flow through the fielded system and cites the file that implements it.
      double-click, no parameters to get wrong. The ZIP contents come from the
      portal's CMK-encrypted artifacts bucket, published from the verified
      mirror output by `scripts/publish-portal-release.sh` — the portal never
-     fetches from the internet (`docker/portal/app.py`;
+     fetches from the internet (`docker/portal/`;
      `cloudformation/04-download-portal.yaml`).
    - **Operator/MDM push.** The developer (or an MDM push) runs
      `Install-ClaudeCode.ps1` directly from the internal share.
@@ -376,7 +378,7 @@ Three independent audit surfaces, at increasing sensitivity (`architecture.md`
   **dedicated CMK-encrypted CloudWatch log group** (retention
   `PORTAL_AUDIT_RETENTION_DAYS`, default 365; flag for SIEM). It is
   deliberately separate from, and never routed into, the activity stream below
-  (`docker/portal/app.py`; `cloudformation/04-download-portal.yaml`).
+  (`docker/portal/`; `cloudformation/04-download-portal.yaml`).
 - **AI activity stream (opt-in, highly sensitive).** When
   `FORWARD_ACTIVITY_LOGS=true`, bash commands, tool inputs, and file paths per
   user are streamed to a CMK-encrypted CloudWatch window and archived to S3
