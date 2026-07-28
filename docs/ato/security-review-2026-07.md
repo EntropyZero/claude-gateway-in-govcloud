@@ -134,6 +134,45 @@ resubmission doc is the submission snapshot. New findings from that review are
 tracked THERE (its §6 remediation sequence), not re-numbered into the batches
 below.
 
+**Minimum client version enforcement (2026-07-28, committed NOT yet
+deployed): the managed catch-all policy now pushes `requiredMinimumVersion`,
+defaulting to the gateway's own version.** New 02 parameter
+`MinClientVersion` (deploy.env `MIN_CLIENT_VERSION`; `deploy-gateway.sh`
+defaults it to `CLAUDE_VERSION`, accepts `none` to disable, and fails fatal
+on non-`X.Y.Z` values — the template's `AllowedPattern` backstops direct
+deploys) rendered into the `GATEWAY_MANAGED_B64` `cli:` block via a
+conditional Sub line. Client semantics (settings-schema-verified in the
+binary + official settings docs): a client older than the floor **exits at
+startup with instructions to update**; the key is honored **only from
+managed (policy) settings** — exactly what the gateway push becomes — and
+**fails open** on an invalid value (stripped, not enforced), so a bad push
+cannot brick startup fleet-wide. Enforcement begins at a client's next start
+after a settings fetch (a ratchet, not an instant gate), and raising the
+floor must trail `publish-portal-release.sh` since auto-updates are locked
+down — the portal is the only compliance path (om-runbooks §6).
+The key shipped in client 2.1.163 (whats-new W23) — below this repo's
+`CLAUDE_VERSION >= 2.1.195` floor, so every allowed gateway/client version
+carries it. **BOOT-VERIFIED offline against BOTH the mirrored 2.1.211 and
+the downloaded-and-checksummed 2.1.207 gateway binaries** (throwaway
+Postgres + fake Okta issuer): the key passes the managed-`cli` schema check
+on each (store-connected boot, "managed settings: configured"), and the
+negative control — a typo'd key — fails boot with "unknown settings key",
+proving the check is live. Adversarially web-checked 2026-07-28 (official
+settings/admin-setup/whats-new pages): a self-hosted gateway is a
+documented "server-managed" (highest-priority) settings source; the
+blocked-client recovery commands the docs name (`claude update` /
+`claude install`) are deliberately disabled here by the pushed
+`DISABLE_UPDATES` — the docs describe exactly this distribute-your-own
+model, and the startup error is documented as telling users to update
+"through the organization's method". Undocumented residuals for the live
+run: the exact version-comparison semantics (equal-to-floor must start —
+which is the DEFAULT config, floor == gateway version) and the actual
+startup-error wording. **[NEEDS DEPLOY CONFIRMATION]:** after the 02
+re-run, confirm an older client exits at startup, a current client
+(version == floor, the default) connects, and capture the real
+startup-error text — it must not steer users at the disabled
+`claude update` path instead of the portal.
+
 **Portal v2 (2026-07-27, committed NOT yet deployed): Flask restructure,
 self-service usage page, all-users admin spend table, user-guide PDF,
 gateway-fingerprint page — and one stated posture change: the READ-ONLY spend
@@ -1160,7 +1199,10 @@ arrives on three composable channels:
   **GPO/MDM admin channel** (GPP Registry `REG_SZ` at
   `HKLM\SOFTWARE\Policies\ClaudeCode` value `Settings`, or a GPP Files copy of
   `managed-settings.json` to `%ProgramFiles%\ClaudeCode\`). Full AD-admin steps
-  in the new `docs/operations/client-config.md`.
+  in the new `docs/operations/client-config.md`. *(SUPERSEDED for
+  `requiredMinimumVersion` on 2026-07-28: the gateway now pushes the version
+  floor itself — see the top fix-log entry; the GPO channel keeps only the
+  login keys.)*
 
 **CORRECTION (2026-07-22, see the top fix-log entry):** the claim that sign-in
 is a no-settings interactive flow (`claude` → `/login` → "Cloud gateway" → paste

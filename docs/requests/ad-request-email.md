@@ -147,9 +147,9 @@ without churn.
   `first-wins` (the default) drops them entirely. It has no effect on the
   gateway's own `/managed/settings` push, and no effect at all on machines where
   developers just run `claude` and sign in. [BINARY-VERIFIED 2026-07-24.]
-- *(Optional)* `requiredMinimumVersion: "2.1.195"` — refuse to start below this
-  client version. Add it if you want a hard client-side version floor; the
-  gateway also enforces a minimum server-side, so this is optional.
+- Do **not** include `requiredMinimumVersion` — the gateway pushes the client
+  version floor itself (defaulting to the gateway's own version), so a
+  GPO-pinned copy is redundant and risks disagreeing with the pushed value.
 
 ---
 

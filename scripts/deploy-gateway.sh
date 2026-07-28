@@ -69,6 +69,21 @@ _dup_check "Bedrock model / inference-profile IDs" \
   SONNET_BEDROCK_MODEL_ID "$SONNET_BEDROCK_MODEL_ID" \
   HAIKU_BEDROCK_MODEL_ID "$HAIKU_BEDROCK_MODEL_ID"
 
+# Minimum client version, pushed to every client via the managed settings
+# (requiredMinimumVersion): an older client exits at startup telling the
+# user to update. Defaults to CLAUDE_VERSION - the version the gateway
+# image itself runs - so the client floor follows every gateway upgrade
+# automatically. MIN_CLIENT_VERSION=none disables the check; anything else
+# must be X.Y.Z (the template's AllowedPattern would reject it anyway, but
+# failing here names the deploy.env variable instead of a CFN parameter).
+MIN_CLIENT_VERSION="${MIN_CLIENT_VERSION:-${CLAUDE_VERSION:-}}"
+[ "$MIN_CLIENT_VERSION" = "none" ] && MIN_CLIENT_VERSION=""
+if [ -n "$MIN_CLIENT_VERSION" ] && ! [[ "$MIN_CLIENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "FATAL: MIN_CLIENT_VERSION='${MIN_CLIENT_VERSION}' is not a semantic version (X.Y.Z) or 'none'." >&2
+  echo "       (When MIN_CLIENT_VERSION is unset it defaults from CLAUDE_VERSION - check that too.)" >&2
+  exit 1
+fi
+
 ARTIFACTS_BUCKET="$(ensure_artifacts_bucket)"
 
 # On failure, KEEP successfully-created resources (the stack lands in
@@ -138,6 +153,7 @@ aws cloudformation deploy \
       "SonnetBedrockModelId=${SONNET_BEDROCK_MODEL_ID}" \
       "HaikuModelId=${HAIKU_MODEL_ID}" \
       "HaikuBedrockModelId=${HAIKU_BEDROCK_MODEL_ID}" \
+      "MinClientVersion=${MIN_CLIENT_VERSION}" \
       "SpendGroupLimitMode=${SPEND_GROUP_LIMIT_MODE:-min}" \
       "SpendBlockedMessage=${SPEND_BLOCKED_MESSAGE:-Contact the Claude Code platform team to request an increase.}" \
       "SpendAdminGroups=${SPEND_ADMIN_GROUPS:-}"

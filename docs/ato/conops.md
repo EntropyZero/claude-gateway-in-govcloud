@@ -144,7 +144,9 @@ holds the RDS master credential.
   (`allowed_email_domains` in `cloudformation/02-gateway.yaml`, from the
   `ALLOWED_EMAIL_DOMAINS` parameter). A `managed.policies` block is now
   **always rendered**, carrying the **client model allowlist**
-  (`availableModels`), the web/MCP tool denies, and the small/fast-model and
+  (`availableModels`), the web/MCP tool denies, the **minimum client version
+  floor** (`requiredMinimumVersion`, defaulting to the gateway's own
+  version), and the small/fast-model and
   update-lockdown env overrides, scoped to all users via a catch-all policy
   that needs no group claim — client-configuration controls, not access
   control. Okta **group**

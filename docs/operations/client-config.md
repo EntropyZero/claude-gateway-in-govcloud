@@ -329,7 +329,18 @@ was not found and switches you to **Opus 4.8**. This is normal behavior, not
 an error — Opus 4.8 is the default here, and `/model` shows what you can
 switch to.
 
-### 5.8 Bounced to the browser sign-in every hour
+### 5.8 Startup fails: your Claude Code version is below the minimum
+
+The gateway enforces a minimum Claude Code version (normally the gateway's
+own version). If your installed client is older, Claude Code exits at
+startup with a message saying the version is below the required minimum.
+The built-in updater is disabled on this deployment, so the fix is to
+download and run the latest installer from the portal (§2.1) — no admin
+rights needed, same as the first install. Your sign-in, settings, and
+history are kept. You'll hit this after the platform team upgrades the
+gateway; the download portal always has the matching installer.
+
+### 5.9 Bounced to the browser sign-in every hour
 
 If you are pushed through the browser SSO at every session expiry (about
 hourly) and `/login` then shows the default picker until you restart Claude
@@ -348,7 +359,7 @@ After a client authenticates, the **gateway pushes settings to it** via its
 `/managed/settings` endpoint — the same mechanism it already uses to hand
 clients their telemetry (OTLP) configuration.
 
-Four things are pushed:
+Five things are pushed:
 
 **a) The model allowlist — always, to every user.** The gateway pushes
 `availableModels: [<OPUS_MODEL_ID>, <SONNET_MODEL_ID>, <HAIKU_MODEL_ID>]` plus
@@ -434,6 +445,29 @@ gateway); and the live `/model` check should eyeball whether the picker grows
 a cosmetic "Custom Haiku model" entry for the override — it resolves to an
 allowlisted model either way.
 
+**e) The minimum client version — also to everyone.** The policy carries
+`requiredMinimumVersion` in `cli` (rendered when the `MinClientVersion` stack
+parameter is set; `deploy-gateway.sh` defaults it to `CLAUDE_VERSION`, the
+version the gateway image itself runs, so the floor follows every gateway
+upgrade — override with `MIN_CLIENT_VERSION` in `deploy.env`, or set it to
+`none` to disable). A client running an older version **exits at startup**
+with instructions to update. Three properties to know:
+
+- Enforcement is a **client-side startup check** honored only from managed
+  (policy) settings — which is what the gateway push becomes on the client.
+  A client learns the floor when it fetches `/managed/settings`, so an
+  out-of-date client keeps its *current* session and is blocked at its
+  **next start** after a fetch: a ratchet for the installed base, not an
+  instant gate.
+- It **fails open by design**: an invalid value is stripped rather than
+  enforced, so a bad push cannot brick startup fleet-wide (per the settings
+  documentation; `deploy-gateway.sh` and the template's `AllowedPattern`
+  reject non-`X.Y.Z` values before they ship anyway).
+- Because auto-updates are locked down (b) and updates flow through the
+  portal, raising the floor **must trail publishing the matching installer**
+  (`publish-portal-release.sh`) — the startup error tells users to update,
+  and the portal is where they can actually do it.
+
 The Okta **groups claim is still required**, but now for a different reason:
 per-group spend caps (`scope_type` `rbac_group`) resolve against it, so the
 gateway requests the `groups` scope unconditionally. See
@@ -461,7 +495,7 @@ ignored.
 |---|---|---|
 | `forceLoginMethod: "gateway"` | Make the CLI offer/use gateway login | **Managed source only (§8) — no user-scope substitute exists.** Without it, `/login` has no gateway option at all. The network also blocks consumer `claude.ai`/Anthropic endpoints, but that does not create the login option; only the managed key does. |
 | `forceLoginGatewayUrl` | Pre-fill the URL on the login screen (press Enter to connect) | **Managed source only (§8).** There is no user-facing way to type a gateway URL — by design. |
-| `requiredMinimumVersion` | Refuse to start below a version floor | The **gateway enforces a minimum client version (2.1.195+) server-side**, and the mirror-only network path pins the distributed build; a *client-side* hard floor is managed-only (§8, optional). |
+| `requiredMinimumVersion` | Refuse to start below a version floor | **Pushed centrally by the gateway** (§6e) — defaults to the gateway's own version, no GPO change needed. The key is managed-source-only; a GPO copy (§8) is possible but redundant, and pinning a *different* value there is undefined-precedence territory — leave it to the gateway push. |
 | `env.DISABLE_UPDATES` / `env.DISABLE_AUTOUPDATER` | Lock auto-update | Written to the **user** settings `env` block by the installer; the gateway also pushes it centrally to every user via `/managed/settings` (§6); the mirror-only network path is the real control |
 | `env.OTEL_RESOURCE_ATTRIBUTES` (`team` / `cost_center`) | Telemetry grouping | User settings `env` block (`-Team` / `-CostCenter`) |
 | `env.NODE_EXTRA_CA_CERTS` | Enterprise CA trust | User settings `env` block (`-ExtraCaCertPath`) |
@@ -500,12 +534,16 @@ the client instead of the client silently falling back to its built-in model
 menu. Trade-off: a gateway outage then stops Claude Code from starting at all.
 
 ```json
-{"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<GATEWAY_FQDN>","forceRemoteSettingsRefresh":true,"requiredMinimumVersion":"2.1.195"}
+{"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<GATEWAY_FQDN>","forceRemoteSettingsRefresh":true}
 ```
 
-Bump `requiredMinimumVersion` when you raise the fleet's floor (default is
-`2.1.195`, the gateway's server-side minimum). There are two interchangeable
-delivery mechanisms; pick whichever fits the fleet's GPO conventions.
+Do **not** put `requiredMinimumVersion` in this JSON: since 2026-07-28 the
+gateway pushes the version floor itself (§6e), defaulting to its own version
+— a GPO copy is redundant, and which managed source wins when both set a
+floor is not verified anywhere. (If your org deliberately manages the floor
+via GPO instead, set `MIN_CLIENT_VERSION=none` in `deploy.env` so only one
+source carries it.) There are two interchangeable delivery mechanisms; pick
+whichever fits the fleet's GPO conventions.
 
 ### 8.1 Mechanism A — GPP Registry item (recommended)
 
@@ -623,16 +661,18 @@ is in force.
   update lockdown, and enterprise CA trust — everything except login, entirely
   in user scope for the whole fleet with zero elevation.
 - **Managed settings for login (admin — REQUIRED):** `forceLoginMethod:"gateway"`
-  + `forceLoginGatewayUrl` (optionally `requiredMinimumVersion`), delivered by
+  + `forceLoginGatewayUrl` (leave `requiredMinimumVersion` to the gateway
+  push, §6e), delivered by
   GPO/MDM ([`ad-request-email.md`](../requests/ad-request-email.md)) or self-served with
   local admin. Without this the gateway login does not exist on the client; with
   it, login is method-locked and URL-prefilled (§3). This is the one part that
   is not admin-free.
 - **Gateway `/managed/settings` (server-side):** the **client model allowlist**
   (`availableModels` / `enforceAvailableModels`), the web/MCP tool denies, the
-  small/fast-model override, and central telemetry config + update lockdown
-  for every connected client (the group-scoped `MANAGED_CLI_GROUPS` knob was
-  retired 2026-07-24).
+  small/fast-model override, the **minimum client version floor**
+  (`requiredMinimumVersion`, defaulting to the gateway's own version), and
+  central telemetry config + update lockdown for every connected client (the
+  group-scoped `MANAGED_CLI_GROUPS` knob was retired 2026-07-24).
 
 The channels compose cleanly and target different keys: the installer writes no
 policy source, the managed-settings channel owns forced login, and the gateway
