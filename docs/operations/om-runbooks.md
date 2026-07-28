@@ -1043,6 +1043,41 @@ present on `claude_code_cost_usage` for exactly this reason. `team`/`cost_center
 come from the installer's `OTEL_RESOURCE_ATTRIBUTES`; `user_groups` is stamped by
 the gateway from the Okta claim.
 
+*`/v1/metrics` rows showing HTTP 411 (Length Required):* the code pair
+matters. `target=411` (seen live 2026-07-28) is the **gateway binary
+itself** rejecting the export: a top-of-router request-size guard
+(binary-verified in the mirrored 2.1.211) returns `411 length required` for
+ANY request that arrives with `Transfer-Encoding` and no `Content-Length` -
+unconditional, no config knob; requests WITH a length are instead checked
+against `limits.max_request_bytes` (schema default 32 MiB -> 413). Impact:
+the OTLP JS exporter retries only 429/502/503/504, so **every 411 is a
+silently dropped metrics batch** - usage under-counts with no client-side
+surface beyond debug diagnostics. (An `elb=411 target=-` pair would be the
+ALB itself - not a documented ALB behavior; the ALB accepts chunked and
+streams POST bodies to the target without buffering, so a length-less
+frontend request is forwarded chunked and the gateway sees it.) What makes
+a subset of exports arrive length-less, in likelihood order: a re-framing
+hop (Zscaler's re-originated server-side leg - it terminates and re-opens
+the connection under SSL inspection, so it can stream the scanned body or
+speak h2, either of which reaches the gateway as chunked HTTP/1.1);
+Bun/CLI chunked-framing regressions in specific Claude Code versions
+(oven-sh/bun #18640, #21201 - normally Bun buffers the export body and
+sets Content-Length, which is why most exports pass);
+`OTEL_EXPORTER_OTLP_COMPRESSION=gzip` set client-side (the gzip path pipes
+a stream with no length; default is none and the managed policy does not
+set it). Triage from the same access logs: compare 411 rows against 200
+rows on the request-line HTTP version (`HTTP/2.0` on failures = re-framed
+upstream of the ALB), `user_agent` (CLI-version-correlated = the Bun
+class), and client IP (one egress path = the Zscaler class). Local repro
+against the mirrored gateway (no deploy): a chunked POST to `/v1/metrics`
+(`curl -H 'Transfer-Encoding: chunked' --data-binary @f`) returns 411;
+the same POST with Content-Length passes the guard. Fixes by cause:
+Zscaler SSL-inspection exemption for the gateway FQDN (same class as the
+Okta-issuer exemption); pin/upgrade the CLI past the Bun regression; unset
+the gzip env. Upstream note for Anthropic: the guard could size-cap
+chunked bodies while reading instead of rejecting, since otel-js under
+vanilla Node always streams length-less exports.
+
 *Note:* read a 403 from the AMP query by its body. **SignatureDoesNotMatch**
 ("the request signature we calculated does not match") is a client-side
 SIGNING/encoding bug, not permissions - do not chase key policies. (Historic
