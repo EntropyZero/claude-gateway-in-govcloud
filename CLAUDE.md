@@ -175,6 +175,22 @@ throwaway Postgres). **Next step: confirm the deployed gateway image contains th
 an older image ignores the env var SILENTLY - rebuilding with a bumped tag if
 not; then re-run `deploy-gateway.sh` and confirm `/model` in a live session.**
 
+**Added 2026-07-27 (committed, NOT yet deployed): the cost-change audit
+trail now names the Okta user by email.** The gateway's `admin_audit`
+records only `oidc:<sub>` and its schema is the binary's — so the email is
+captured alongside: the portal persists sub→email (session email +
+unverified-decoded gateway-token `sub`, attribution only) as per-sub JSON
+under the artifacts bucket's reserved `identity/principal-emails/` prefix at
+admin connect, and `/portal/admin/audit` gains an Email column joined from
+it (unmapped actors = dash); portal `portal_admin` audit lines add
+`gateway_actor`; `dump-usage.py` LEFT JOINs `admin_audit` to the gateway's
+own `principal_emails`. 04's task role gains `s3:PutObject` on that prefix
+only + `kms:GenerateDataKey`. Deploy: bump+push portal image, re-run
+`deploy-download-portal.sh`. Rebased onto the merged portal-v2 Flask
+restructure: capture lives in `docker/portal/portal/identity.py`, wired in
+`views/admin.py`/`gateway.py`/`audit.py`; Email column in
+`templates/admin_audit.html`. Full entry in the security-review fix log.
+
 **Fixed 2026-07-27 (committed; live repair NOT yet run): 01 DETACHED its own
 CMK on the first re-run — key-policy updates silently applied to nothing.**
 Found live enabling prompt logging: `PutModelInvocationLoggingConfiguration`

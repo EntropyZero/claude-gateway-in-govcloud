@@ -16,7 +16,8 @@ from flask import Blueprint, g, make_response, redirect, render_template, reques
 from ..authz import is_authorized
 from ..crypto import sign_cookie, verify_cookie
 from ..gateway import (SPEND_PERIODS, GatewayError, build_gw_cookie,
-                       build_spend_limit_body)
+                       build_spend_limit_body, gateway_token_sub)
+from ..identity import lookup_principal_emails, record_principal_email
 from ..money import AmountError, cents_str_to_display, parse_cents, percent_used
 from ..selection import SelectionError
 from .common import (audit_admin, cfg, clear_cookie, csrf_for, csrf_ok,
@@ -97,6 +98,10 @@ def _render_connected(session, gw, flash, had_flash):
         if refreshed:
             cookie, ttl = build_gw_cookie(refreshed, session, cfg().session_secret)
             if cookie:
+                # Refreshed tokens re-assert the pairing too - a map object
+                # deleted or never written at connect heals here.
+                record_principal_email(ext()["s3"], cfg().artifacts_bucket,
+                                       gateway_token_sub(refreshed), email)
                 resp = redirect("/portal/admin")
                 set_cookie(resp, "portal_gw", cookie, ttl)
                 return resp
@@ -108,7 +113,8 @@ def _render_connected(session, gw, flash, had_flash):
         # The PORTAL let them in but the GATEWAY refused: PORTAL_ADMIN_GROUP
         # and the gateway's SpendAdminGroups disagree. Surface it precisely.
         audit_admin(session, "denied", "gateway refused the admin call (403): "
-                    "user is not in the gateway's SpendAdminGroups")
+                    "user is not in the gateway's SpendAdminGroups",
+                    gw_sub=gw.get("sub", ""))
         return _connect_page(
             session,
             {"ok": False, "msg":
@@ -174,7 +180,14 @@ def _poll_device_flow(session, txn, had_flash):
              "Use scripts/set-spend-limit.sh, or reduce the groups pushed "
              "into the token."},
             clear_gwdev=True, clear_flash=had_flash)
-    audit_admin(session, "success", "gateway admin session connected")
+    # The ONE moment the portal holds both halves of the identity pairing:
+    # the session's Okta-verified email and the gateway token's sub (the id
+    # admin_audit will record). Persist it for the audit page's Email column.
+    sub = gateway_token_sub(result)
+    record_principal_email(ext()["s3"], c.artifacts_bucket, sub,
+                           session.get("email", ""))
+    audit_admin(session, "success", "gateway admin session connected",
+                gw_sub=sub)
     resp = redirect("/portal/admin")
     set_cookie(resp, "portal_gw", cookie, ttl)
     clear_cookie(resp, "portal_gwdev")
@@ -283,11 +296,12 @@ def _admin_mutate(clear):
         set_flash(out, False, str(exc))
         return out
     if status in (200, 201):
-        audit_admin(session, "success", action)
+        audit_admin(session, "success", action, gw_sub=gw.get("sub", ""))
         out = redirect("/portal/admin")
         set_flash(out, True, "Done: %s." % action)
         return out
-    audit_admin(session, "denied", "%s -> gateway HTTP %s" % (action, status))
+    audit_admin(session, "denied", "%s -> gateway HTTP %s" % (action, status),
+                gw_sub=gw.get("sub", ""))
     detail = ""
     if isinstance(doc, dict):
         err = doc.get("error")
@@ -324,9 +338,24 @@ def admin_audit():
         set_flash(out, False,
                   "Gateway error fetching the audit trail (HTTP %s)." % status)
         return out
+    # Actor is normalized to str here (a non-string actor in a malformed
+    # gateway response would make the template's dict lookup throw); the
+    # rest of the fields render through Jinja, which stringifies safely.
+    events = []
+    for ev in doc.get("data", []):
+        if isinstance(ev, dict):
+            ev = dict(ev)
+            ev["actor"] = str(ev.get("actor") or "")
+            events.append(ev)
+    # Join each oidc:<sub> actor to the identity map captured at connect
+    # time; actors without a map object (break-glass keys, admins who never
+    # connected through the portal) render as a dash.
+    actor_emails = lookup_principal_emails(
+        ext()["s3"], cfg().artifacts_bucket,
+        {ev["actor"] for ev in events})
     return render_template("admin_audit.html", email=session.get("email", ""),
                            is_admin=True, version=cfg().release_version,
-                           events=doc.get("data", []))
+                           events=events, actor_emails=actor_emails)
 
 
 # ---------------------------------------------------------------- all users
@@ -418,6 +447,9 @@ def admin_users():
         if refreshed:
             cookie, ttl = build_gw_cookie(refreshed, session, cfg().session_secret)
             if cookie:
+                record_principal_email(ext()["s3"], cfg().artifacts_bucket,
+                                       gateway_token_sub(refreshed),
+                                       session.get("email", ""))
                 out = redirect(request.full_path if request.query_string
                                else "/portal/admin/users")
                 set_cookie(out, "portal_gw", cookie, ttl)
@@ -428,7 +460,8 @@ def admin_users():
         return out
     if status == 403:
         audit_admin(session, "denied", "gateway refused the usage listing (403): "
-                    "user is not in the gateway's SpendAdminGroups")
+                    "user is not in the gateway's SpendAdminGroups",
+                    gw_sub=gw.get("sub", ""))
         return _connect_page(
             session,
             {"ok": False, "msg":

@@ -17,7 +17,7 @@ log = logging.getLogger("portal")
 
 def build_audit_record(outcome, user_email, user_groups, team, cost_center,
                        version, sha256, source_ip, user_agent, reason=None,
-                       event="portal_download"):
+                       event="portal_download", gateway_actor=None):
     rec = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "event": event,
@@ -33,6 +33,11 @@ def build_audit_record(outcome, user_email, user_groups, team, cost_center,
     }
     if reason:
         rec["reason"] = reason
+    if gateway_actor:
+        # portal_admin events with a connected gateway session: the exact
+        # actor string (`oidc:<sub>`) the gateway writes to admin_audit, so
+        # the two audit trails join on it.
+        rec["gateway_actor"] = gateway_actor
     return rec
 
 

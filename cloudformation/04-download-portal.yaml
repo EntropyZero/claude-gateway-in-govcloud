@@ -441,9 +441,20 @@ Resources:
               - Effect: Allow
                 Action: s3:GetObject
                 Resource: !Sub '${ArtifactsBucket.Arn}/*'
-              # The bucket is SSE-KMS; reading its objects needs the CMK.
+              # The one prefix the portal WRITES: the sub -> email identity map
+              # captured when an admin connects a gateway session, which the
+              # spend-cap audit page joins against (the gateway's admin_audit
+              # records only oidc:<sub>). Scoped so a compromised portal task
+              # can never touch the release artifacts under releases/.
               - Effect: Allow
-                Action: kms:Decrypt
+                Action: s3:PutObject
+                Resource: !Sub '${ArtifactsBucket.Arn}/identity/principal-emails/*'
+              # The bucket is SSE-KMS; reading its objects needs the CMK, and
+              # writing the identity map additionally needs a data key.
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
                 Resource:
                   Fn::ImportValue: !Sub '${NamePrefix}-kms-key-arn'
         - PolicyName: write-audit

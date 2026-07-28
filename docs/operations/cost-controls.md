@@ -395,6 +395,30 @@ The portal admin page shows this trail read-only and additionally writes
 audit log group. Inspect the table directly with
 `scripts/diagnostics/dump-usage.sh` (§3.3).
 
+**Who is `oidc:<sub>`? — the Okta email, three ways.** The `admin_audit`
+table belongs to the gateway binary, so its schema cannot grow an email
+column; the email is captured and joined alongside it instead:
+
+- **Portal audit page** (`/portal/admin/audit`): an **Email** column. When
+  an admin connects a gateway session, the portal holds both halves of the
+  identity — the portal session's Okta email and the gateway token's `sub`
+  (the exact value `admin_audit` will record) — and persists the pairing as
+  one small JSON object per sub under the reserved
+  `identity/principal-emails/` prefix of the portal artifacts bucket
+  (CMK-encrypted; the task role may write only that prefix). The audit page
+  joins actors against this map. Actors who have never connected through
+  the portal since this shipped — including the break-glass CLI keys —
+  show a dash. **[NEEDS TEST-RUN CONFIRMATION]** that the deployed
+  gateway's session-token `sub` matches the `admin_audit` actor sub (holds
+  on the mirrored 2.1.220 gateway).
+- **Portal audit log group**: `event: portal_admin` lines already carry
+  `user_email`; they now also carry `gateway_actor` (`oidc:<sub>`), so a
+  gateway row can be tied to an emailed portal line even without the map.
+- **`dump-usage.sh` (§3.3)**: the `admin_audit` dump now LEFT JOINs the
+  gateway's own `principal_emails` table (`principal` = the sub the gateway
+  resolved at login) and prints an email per row — this covers *all* users
+  the gateway has ever identified, independent of the portal map.
+
 **Key rotation:** both admin keys are `GenerateSecretString` secrets,
 injected as ECS `Secrets` and read only at container start. Rotate by
 writing a new value with the file-based no-argv pattern and then **forcing
