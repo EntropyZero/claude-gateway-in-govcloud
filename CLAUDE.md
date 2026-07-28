@@ -307,6 +307,25 @@ gate clause.** Deploy: bump `GRAFANA_IMAGE_TAG`, rebuild+push, re-run 03;
 live check = re-open the previously-failing 2-day window. Full entry in the
 2026-07-27 om-runbooks note.
 
+**Fixed 2026-07-28 (committed, NOT yet deployed): cumulative curves stepped
+DOWN for sessions spanning the range start.** Live 12h view: a session that
+started before the range start declined near the right edge (its early climb
+mirrored one range-width later); the 24h view of the same data was clean.
+Cause: the `last_over_time(m[1h] offset $__range)` baseline is evaluated per
+plot point — the window slides forward and grows as it crosses the session's
+pre-range climb. Fix: the seven cumulative time-series anchor the baseline
+at the visible range start — `last_over_time(m[1h] @ start())` — so each
+curve is exactly `counter(t) − counter(range start)`: monotonic, same right
+edge. Tiles/table untouched (instant eval already equals the anchored
+window). Re-validated on a real Prometheus (6-session synthetic TSDB, 26
+assertions: old expr reproduces the decline, new is non-decreasing
+everywhere, ghost gate intact, right edge == tiles). The live screenshots
+also settle the earlier caveat: AMP accepts the `@` modifier (the `@ end()`
+gate renders). Multi-day ranges rely on Cortex rewriting `@ start()/end()`
+to absolute times before its per-day split — re-check a 3-day view live.
+Deploy: bump `GRAFANA_IMAGE_TAG`, rebuild+push, re-run 03. Full entry in the
+2026-07-28 om-runbooks note.
+
 **Fixed 2026-07-26 (committed): build scripts fetched from the internet on
 the OFFLINE build machine.** The real build/deploy host reaches only AWS
 service endpoints (new rule: `.claude/rules/offline-build.md`) — but

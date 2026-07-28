@@ -216,7 +216,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (team) ((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset $__range)) or (0 * max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (team) ((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{team}}"
         }
       ],
@@ -262,7 +262,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (cost_center) ((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset $__range)) or (0 * max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (cost_center) ((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{cost_center}}"
         }
       ],
@@ -308,7 +308,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (user_groups) ((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset $__range)) or (0 * max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (user_groups) ((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{user_groups}}"
         }
       ],
@@ -354,7 +354,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (model) ((max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset $__range)) or (0 * max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (model) ((max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{model}}"
         }
       ],
@@ -400,7 +400,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (type) ((max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset $__range)) or (0 * max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (type) ((max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{type}}"
         }
       ],
@@ -446,7 +446,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (team) ((max_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset $__range)) or (0 * max_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (team) ((max_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{team}}"
         }
       ],
@@ -492,7 +492,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (team) ((max_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset $__range)) or (0 * max_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (team) ((max_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{team}}"
         }
       ],
