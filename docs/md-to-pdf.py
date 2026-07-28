@@ -10,6 +10,7 @@ Deps (not part of the test toolchain):  pip install weasyprint markdown
 Usage:  python3 docs/md-to-pdf.py [doc.md | user-manual ...]
         default: docs/ato/architecture.md docs/ato/network-access-controls.md
                  docs/operations/om-runbooks.md docs/operations/cost-controls.md
+                 docs/operations/monitoring-and-retention.md
                  docs/ato/conops.md docs/ato/security-review-2026-07-resubmission.md
                  + user-manual (Part I of client-config.md -> user-manual.pdf;
                  the full client-config.md is deliberately not rendered)
@@ -29,6 +30,7 @@ DEFAULT = [REPO / "docs" / "ato" / "architecture.md",
            REPO / "docs" / "ato" / "network-access-controls.md",
            REPO / "docs" / "operations" / "om-runbooks.md",
            REPO / "docs" / "operations" / "cost-controls.md",
+           REPO / "docs" / "operations" / "monitoring-and-retention.md",
            REPO / "docs" / "ato" / "conops.md",
            REPO / "docs" / "ato" / "security-review-2026-07-resubmission.md"]
 
