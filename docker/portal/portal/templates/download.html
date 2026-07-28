@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Claude Code download{% endblock %}
+{% block content %}
+<h1>Claude Code installer</h1>
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+
+{# The full cost-center -> teams mapping as a JSON data block (not executable
+   script; |tojson escapes <, > and & so "</script>" cannot break out).
+   portal.js reads it to chain the two dropdowns client-side. #}
+<script type="application/json" id="cc-map">{{ cc_map|tojson }}</script>
+
+{% if cost_center %}
+{# Stage 2 (noscript path): a validated cost center was submitted - offer
+   only ITS teams. Server-side validate_selection re-checks the pair. #}
+<p class="cc"><strong>Cost center:</strong> {{ cost_center }}
+ <a href="/portal/download-page">(change)</a></p>
+<form method="GET" action="/portal/download">
+ <input type="hidden" name="cost_center" value="{{ cost_center }}">
+ <label for="team">Team</label>
+ <select id="team" name="team" required>
+  {% for t in teams %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+ </select>
+ <button type="submit">Download pre-configured installer</button>
+</form>
+{% else %}
+{# Stage 1: pick a cost center. Without JS this submits back here (GET) and
+   stage 2 renders that cost center's teams. portal.js upgrades this form in
+   place: it adds a Team select chained to the cost-center pick and retargets
+   the form straight at /portal/download. #}
+<form method="GET" action="/portal/download-page" id="cc-stage1" data-download-action="/portal/download">
+ <label for="cost_center">Cost center</label>
+ <select id="cost_center" name="cost_center" required>
+  {% for cc in cost_centers %}<option value="{{ cc }}">{{ cc }}</option>{% endfor %}
+ </select>
+ <button type="submit" id="cc-submit">Continue</button>
+</form>
+{% endif %}
+{% endblock %}

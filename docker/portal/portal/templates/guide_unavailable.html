@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}User guide unavailable{% endblock %}
+{% block content %}
+<h1>Could not read the user guide right now</h1>
+<div class="notice">
+ <p>The portal could not fetch the user-guide PDF from the artifacts bucket.
+ This is <strong>not</strong> the "not published yet" case &mdash; the request
+ to S3 failed (for example a permissions, KMS, or connectivity problem).</p>
+ <p>An operator can find the underlying error in the portal task's
+ CloudWatch logs. Re-publishing the guide will not fix this class of
+ failure.</p>
+</div>
+{% endblock %}

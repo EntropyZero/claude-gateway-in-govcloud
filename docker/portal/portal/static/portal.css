@@ -1,0 +1,182 @@
+/* Claude Code download portal - the one stylesheet.
+   No inline styles anywhere (CSP: style-src 'self'); the .wN classes at the
+   bottom carry progress-bar fill widths so no style attribute is needed. */
+
+body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:60rem;margin:2rem auto 3rem;padding:0 1rem;color:#1a1a1a;background:#fff}
+main{max-width:60rem}
+h1{font-size:1.4rem}
+h2{font-size:1.1rem;margin-top:1.5rem}
+a{color:#0a58ca}
+code{background:#f4f4f4;padding:0 .25rem;border-radius:.2rem}
+
+/* header / nav */
+header.site{border-bottom:1px solid #e5e5e5;margin-bottom:1.5rem;padding-bottom:.5rem}
+.site-nav{display:flex;flex-wrap:wrap;gap:1rem;align-items:baseline}
+.site-nav a{font-size:.9rem;text-decoration:none}
+.site-nav a:hover{text-decoration:underline}
+.site-nav .brand{font-weight:700;font-size:1rem;color:#1a1a1a}
+.who{color:#555;font-size:.85rem;margin:.5rem 0 0}
+
+/* home cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(16rem,1fr));gap:1rem;margin-top:1.5rem}
+.card{display:block;border:1px solid #ddd;border-radius:.5rem;padding:1rem;text-decoration:none;color:#1a1a1a;background:#fafafa}
+.card:hover{border-color:#0b5;background:#f4fbf7}
+.card h2{margin:0 0 .5rem;font-size:1.05rem}
+.card p{margin:0;font-size:.85rem;color:#555}
+.card.admin{border-style:dashed}
+.card.muted{opacity:.7}
+
+/* forms */
+label{display:block;margin:1rem 0 .25rem;font-weight:600}
+select,input{font-size:1rem;padding:.5rem;box-sizing:border-box;max-width:100%}
+form select,form input{width:100%}
+button,.button{font-size:1rem;padding:.5rem .9rem;background:#0b5;color:#fff;border:0;border-radius:.35rem;cursor:pointer;text-decoration:none;display:inline-block;margin-top:1rem}
+button.warn{background:#c33}
+form.inline{display:inline;margin:0}
+form.inline button{margin-top:0;font-size:.85rem;padding:.35rem .7rem}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(8rem,1fr));gap:.75rem;align-items:end}
+.grid label{margin-top:0}
+.cc{margin:1rem 0 0}
+.cc a{font-size:.85rem;font-weight:400;margin-left:.5rem}
+
+/* flashes / notices */
+.err{background:#fee;border:1px solid #e99;padding:.75rem;border-radius:.35rem}
+.ok{background:#efe;border:1px solid #9e9;padding:.75rem;border-radius:.35rem}
+.notice{background:#f5f8ff;border:1px solid #c9d8f0;padding:.75rem 1rem;border-radius:.35rem}
+
+/* tables */
+table{border-collapse:collapse;width:100%;font-size:.9rem;margin-top:.75rem}
+th,td{border:1px solid #ddd;padding:.4rem .6rem;text-align:left;vertical-align:top}
+th{background:#f5f5f5}
+table.sortable th{cursor:pointer;user-select:none}
+table.sortable th.sorted-asc::after{content:" \25B2";font-size:.7em}
+table.sortable th.sorted-desc::after{content:" \25BC";font-size:.7em}
+td.mono{font-family:ui-monospace,Consolas,monospace;font-size:.8rem}
+.pager{margin-top:1rem}
+.pager .button{margin-right:.5rem}
+
+/* usage blocks */
+section.usage{border:1px solid #ddd;border-radius:.5rem;padding:1rem;margin-top:1rem}
+section.usage h2{margin-top:0}
+.usage-facts{display:flex;flex-wrap:wrap;gap:2rem;margin:0}
+.usage-facts div{margin:0}
+.usage-facts dt{font-size:.8rem;color:#555;font-weight:600}
+.usage-facts dd{margin:0;font-size:1.1rem}
+.usage-facts .src{font-size:.8rem;color:#555}
+
+/* fingerprint */
+pre.fp{background:#f4f4f4;padding:.75rem;border-radius:.35rem;overflow-x:auto;font-size:.95rem;word-break:break-all;white-space:pre-wrap}
+
+/* guide viewer */
+.guide-frame{width:100%;height:70vh;border:1px solid #ddd;border-radius:.35rem;margin-top:1rem}
+
+/* progress bars. Fill width comes from a .wN class (0-100), colors from
+   .ok/.warn/.danger - no inline styles, CSP-clean. */
+.bar{background:#eee;border:1px solid #ddd;border-radius:.5rem;height:1rem;overflow:hidden;margin-top:.75rem}
+.bar.mini{height:.5rem;margin-top:.25rem;max-width:8rem}
+.bar .fill{display:block;height:100%;background:#0b5;border-radius:0}
+.bar .fill.ok{background:#0b5}
+.bar .fill.warn{background:#e6a700}
+.bar .fill.danger{background:#c33}
+.pct{font-size:.85rem}
+.bar .fill.w0{width:0%}
+.bar .fill.w1{width:1%}
+.bar .fill.w2{width:2%}
+.bar .fill.w3{width:3%}
+.bar .fill.w4{width:4%}
+.bar .fill.w5{width:5%}
+.bar .fill.w6{width:6%}
+.bar .fill.w7{width:7%}
+.bar .fill.w8{width:8%}
+.bar .fill.w9{width:9%}
+.bar .fill.w10{width:10%}
+.bar .fill.w11{width:11%}
+.bar .fill.w12{width:12%}
+.bar .fill.w13{width:13%}
+.bar .fill.w14{width:14%}
+.bar .fill.w15{width:15%}
+.bar .fill.w16{width:16%}
+.bar .fill.w17{width:17%}
+.bar .fill.w18{width:18%}
+.bar .fill.w19{width:19%}
+.bar .fill.w20{width:20%}
+.bar .fill.w21{width:21%}
+.bar .fill.w22{width:22%}
+.bar .fill.w23{width:23%}
+.bar .fill.w24{width:24%}
+.bar .fill.w25{width:25%}
+.bar .fill.w26{width:26%}
+.bar .fill.w27{width:27%}
+.bar .fill.w28{width:28%}
+.bar .fill.w29{width:29%}
+.bar .fill.w30{width:30%}
+.bar .fill.w31{width:31%}
+.bar .fill.w32{width:32%}
+.bar .fill.w33{width:33%}
+.bar .fill.w34{width:34%}
+.bar .fill.w35{width:35%}
+.bar .fill.w36{width:36%}
+.bar .fill.w37{width:37%}
+.bar .fill.w38{width:38%}
+.bar .fill.w39{width:39%}
+.bar .fill.w40{width:40%}
+.bar .fill.w41{width:41%}
+.bar .fill.w42{width:42%}
+.bar .fill.w43{width:43%}
+.bar .fill.w44{width:44%}
+.bar .fill.w45{width:45%}
+.bar .fill.w46{width:46%}
+.bar .fill.w47{width:47%}
+.bar .fill.w48{width:48%}
+.bar .fill.w49{width:49%}
+.bar .fill.w50{width:50%}
+.bar .fill.w51{width:51%}
+.bar .fill.w52{width:52%}
+.bar .fill.w53{width:53%}
+.bar .fill.w54{width:54%}
+.bar .fill.w55{width:55%}
+.bar .fill.w56{width:56%}
+.bar .fill.w57{width:57%}
+.bar .fill.w58{width:58%}
+.bar .fill.w59{width:59%}
+.bar .fill.w60{width:60%}
+.bar .fill.w61{width:61%}
+.bar .fill.w62{width:62%}
+.bar .fill.w63{width:63%}
+.bar .fill.w64{width:64%}
+.bar .fill.w65{width:65%}
+.bar .fill.w66{width:66%}
+.bar .fill.w67{width:67%}
+.bar .fill.w68{width:68%}
+.bar .fill.w69{width:69%}
+.bar .fill.w70{width:70%}
+.bar .fill.w71{width:71%}
+.bar .fill.w72{width:72%}
+.bar .fill.w73{width:73%}
+.bar .fill.w74{width:74%}
+.bar .fill.w75{width:75%}
+.bar .fill.w76{width:76%}
+.bar .fill.w77{width:77%}
+.bar .fill.w78{width:78%}
+.bar .fill.w79{width:79%}
+.bar .fill.w80{width:80%}
+.bar .fill.w81{width:81%}
+.bar .fill.w82{width:82%}
+.bar .fill.w83{width:83%}
+.bar .fill.w84{width:84%}
+.bar .fill.w85{width:85%}
+.bar .fill.w86{width:86%}
+.bar .fill.w87{width:87%}
+.bar .fill.w88{width:88%}
+.bar .fill.w89{width:89%}
+.bar .fill.w90{width:90%}
+.bar .fill.w91{width:91%}
+.bar .fill.w92{width:92%}
+.bar .fill.w93{width:93%}
+.bar .fill.w94{width:94%}
+.bar .fill.w95{width:95%}
+.bar .fill.w96{width:96%}
+.bar .fill.w97{width:97%}
+.bar .fill.w98{width:98%}
+.bar .fill.w99{width:99%}
+.bar .fill.w100{width:100%}

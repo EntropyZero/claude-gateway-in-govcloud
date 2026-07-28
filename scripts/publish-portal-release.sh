@@ -15,6 +15,10 @@
 #   releases/<version>/manifest.json
 #   releases/<version>/CHECKSUMS.txt      (if present)
 #   Install-ClaudeCode.ps1                (from client/)
+#   docs/user-manual.pdf                  (from docs/generated/ - the portal's
+#                                          /portal/guide page; build with
+#                                          'make docs-pdf'; SKIP_USER_GUIDE=1
+#                                          skips the upload)
 #   extra-ca.pem                          (when EXTRA_CA_CERT_PATH is set)
 source "$(dirname "$0")/common.sh"
 
@@ -49,12 +53,34 @@ log "claude.exe checksum verified (${ACTUAL})"
 INSTALLER="${REPO_ROOT}/client/Install-ClaudeCode.ps1"
 [ -f "$INSTALLER" ] || { echo "FATAL: ${INSTALLER} not found." >&2; exit 1; }
 
+# User-guide PDF for the portal's /portal/guide page. Checked up front so a
+# missing guide fails before anything is uploaded; SKIP_USER_GUIDE=1 is the
+# named override for publishing a release without (re)publishing the guide.
+USER_GUIDE="${REPO_ROOT}/docs/generated/user-manual.pdf"
+if [ "${SKIP_USER_GUIDE:-}" != "1" ] && [ ! -f "$USER_GUIDE" ]; then
+  echo "FATAL: ${USER_GUIDE} not found - the portal serves it at /portal/guide." >&2
+  echo "       Build it with 'make docs-pdf' (or python3 docs/md-to-pdf.py user-manual)" >&2
+  echo "       and commit it, or set SKIP_USER_GUIDE=1 to publish without it." >&2
+  exit 1
+fi
+
 log "Publishing ${VERSION} to s3://${BUCKET}"
 aws s3 cp "${SRC}/claude.exe"     "s3://${BUCKET}/releases/${VERSION}/claude.exe"     --region "$AWS_REGION"
 aws s3 cp "${SRC}/manifest.json"  "s3://${BUCKET}/releases/${VERSION}/manifest.json"  --region "$AWS_REGION"
 [ -f "${SRC}/CHECKSUMS.txt" ] && \
   aws s3 cp "${SRC}/CHECKSUMS.txt" "s3://${BUCKET}/releases/${VERSION}/CHECKSUMS.txt" --region "$AWS_REGION"
 aws s3 cp "$INSTALLER"            "s3://${BUCKET}/Install-ClaudeCode.ps1"             --region "$AWS_REGION"
+
+if [ "${SKIP_USER_GUIDE:-}" != "1" ]; then
+  # Explicit content type: the portal streams this inline into a viewer page.
+  # Destination key must match the 04 stack's UserGuideKey parameter
+  # (PORTAL_USER_GUIDE_KEY, default docs/user-manual.pdf).
+  log "Uploading user guide (${USER_GUIDE})"
+  aws s3 cp "$USER_GUIDE" "s3://${BUCKET}/${PORTAL_USER_GUIDE_KEY:-docs/user-manual.pdf}" \
+    --content-type application/pdf --region "$AWS_REGION"
+else
+  log "SKIP_USER_GUIDE=1 - not uploading the user guide"
+fi
 
 if [ -n "${EXTRA_CA_CERT_PATH:-}" ]; then
   log "Uploading extra CA (${EXTRA_CA_CERT_PATH}); set PORTAL_BUNDLE_EXTRA_CA=true and redeploy 04 to include it in ZIPs"

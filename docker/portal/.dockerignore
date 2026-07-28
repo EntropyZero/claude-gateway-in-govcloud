@@ -1,0 +1,7 @@
+# Keep host-generated Python bytecode out of the image: the test suite
+# imports the package from this directory, leaving __pycache__/ behind in a
+# dev checkout, and COPY portal/ would bake those nondeterministic .pyc files
+# into the shipped image.
+**/__pycache__
+**/*.pyc
+.dockerignore

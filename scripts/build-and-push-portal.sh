@@ -7,10 +7,10 @@
 # image build itself needs no PyPI or other package-repo access.
 source "$(dirname "$0")/common.sh"
 
-# The repo is tag-IMMUTABLE: bump PORTAL_VERSION for every app.py change (a
-# same-tag rebuild cannot be pushed, and an unchanged PORTAL_IMAGE parameter
-# would leave the deployed service on the old code).
-PORTAL_VERSION="${PORTAL_VERSION:-1.0.0}"
+# The repo is tag-IMMUTABLE: bump PORTAL_VERSION for every portal app change
+# (a same-tag rebuild cannot be pushed, and an unchanged PORTAL_IMAGE
+# parameter would leave the deployed service on the old code).
+PORTAL_VERSION="${PORTAL_VERSION:-2.0.0}"
 PORTAL_BASE_IMAGE="${PORTAL_BASE_IMAGE:-public.ecr.aws/docker/library/python:3.12-slim}"
 REPO_NAME="${PORTAL_ECR_REPO_NAME:-claude-gw-portal}"
 

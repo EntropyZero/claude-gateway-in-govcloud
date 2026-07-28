@@ -483,8 +483,12 @@ offline image builds are **[VERIFIED-LIVE]**.
 
 3. **Publish to the download portal** (when stack `04` is deployed) — this is
    how developers self-serve the new version. Reuses the verified mirror
-   output; uploads `claude.exe`, `manifest.json`, `CHECKSUMS.txt`, and the
-   installer to the portal's CMK-encrypted artifacts bucket, then pins the
+   output; uploads `claude.exe`, `manifest.json`, `CHECKSUMS.txt`, the
+   installer, and (since portal v2) the user-guide PDF
+   (`docs/generated/user-manual.pdf` → the bucket's `docs/user-manual.pdf`,
+   served at `/portal/guide`; the script fails fast if the PDF is missing —
+   `make docs-pdf` builds it, `SKIP_USER_GUIDE=1` is the named skip) to the
+   portal's CMK-encrypted artifacts bucket, then pins the
    portal to the new version:
 
    ```bash
@@ -650,8 +654,34 @@ expects it** (`.claude/rules/scripts.md`).
   gateway task-def revision — **not** an observability-stack update).
 - **db-admin Lambda:** `DBADMIN_VERSION=<new> ./scripts/build-and-push-dbadmin.sh`
   → `./scripts/deploy-gateway.sh`.
-- **Download portal:** `PORTAL_VERSION=<new> ./scripts/build-and-push-portal.sh`
-  → `./scripts/deploy-download-portal.sh`.
+- **Download portal (v2 order — the portal is a Flask/gunicorn package with
+  committed vendored wheels since `PORTAL_VERSION` 2.0.0):**
+  1. *Only when `docker/portal/requirements.txt` changed:* on the **egress
+     host**, `./scripts/mirror/mirror-python-deps.sh portal` regenerates the
+     committed `docker/portal/vendor/` wheel set — commit the wheel changes
+     (the build host installs `--no-index` from `vendor/` and never fetches;
+     `.claude/rules/offline-build.md`).
+  2. `PORTAL_VERSION=<new> ./scripts/build-and-push-portal.sh` (immutable
+     tags — always bump).
+  3. *Only when upgrading from a pre-v2 (1.x) deployment:* re-run
+     `./scripts/deploy-gateway.sh` **first** — 04 now imports 02's
+     `${NAME_PREFIX}-spend-read-key-arn` export (the read-only spend key
+     that powers `/portal/me`), and the 04 deploy fails on the missing
+     import against an older 02.
+  4. `./scripts/deploy-download-portal.sh`.
+  5. `./scripts/publish-portal-release.sh <version>` if the release pin or
+     the user guide changed (it uploads the guide PDF too — runbook 5
+     step 3).
+
+  *Live checks after a portal roll* (**[NEEDS TEST-RUN CONFIRMATION]** as a
+  whole — stack 04 has no deploy verification yet): sign in at
+  `https://${GATEWAY_FQDN}/portal`; download a ZIP end to end at real size
+  and confirm the download lands in the portal audit log group; `/portal/me`
+  shows the signed-in user's caps + period-to-date spend; `/portal/admin/users`
+  lists, searches, and pages (as a `PORTAL_ADMIN_GROUP` member);
+  `/portal/fingerprint` matches the served-cert SHA-256 that
+  `scripts/verify-gateway.sh` reports; `/portal/guide` renders and its
+  download link returns the full PDF.
 
 Each build script persists its new URI/tag into `deploy.env`, so the matching
 `deploy-*.sh` picks it up with no copy-paste.
@@ -718,7 +748,7 @@ master path.
 | `${NAME_PREFIX}/grafana-oidc-client-secret` | 03 | **Manual** | `scripts/set-grafana-oidc-secret.sh` (runbook 2) |
 | `${NAME_PREFIX}/grafana-admin-password` | 03 | **Not rotated** (break-glass; login form disabled) | Regenerate manually (below) |
 | `${NAME_PREFIX}/spend-admin-write-key` | 02 | **Not rotated automatically** (`GenerateSecretString` at create) | Manual — procedure in `cost-controls.md` §7 "Key rotation" (file-based write, then force a gateway deployment) |
-| `${NAME_PREFIX}/spend-admin-read-key` | 02 | **Not rotated automatically** (`GenerateSecretString` at create) | Same as the write key (`cost-controls.md` §7) |
+| `${NAME_PREFIX}/spend-admin-read-key` | 02 | **Not rotated automatically** (`GenerateSecretString` at create) | Same as the write key (`cost-controls.md` §7) — **since portal v2 the portal task injects it too** (`SPEND_READ_KEY`, via the 02 export), so after writing a new value force-roll `$NAME_PREFIX-portal` as well as `$NAME_PREFIX-gateway` |
 | `${NAME_PREFIX}/portal-oidc-client-secret` | 04 | **Manual** | `scripts/set-portal-oidc-secret.sh` (runbook 2) |
 | `${NAME_PREFIX}/portal-session-secret` (cookie signing) | 04 | **Not rotated automatically** (`GenerateSecretString` at create) | Same file-based pattern as the JWT secret (below), then roll `$NAME_PREFIX-portal`; rotation invalidates portal sessions (users just re-login) |
 

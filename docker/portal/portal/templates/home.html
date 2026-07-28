@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Claude Code portal{% endblock %}
+{% block content %}
+<h1>Claude Code portal</h1>
+<div class="cards">
+  <a class="card" href="/portal/download-page">
+    <h2>Download installer</h2>
+    <p>Pre-configured Claude Code install package for your cost center and team.</p>
+  </a>
+  <a class="card{% if not spend_self_enabled %} muted{% endif %}" href="/portal/me">
+    <h2>My usage &amp; quotas</h2>
+    {% if spend_self_enabled %}
+    <p>Your spend caps and period-to-date usage.</p>
+    {% else %}
+    <p>Not enabled on this deployment yet - open for details.</p>
+    {% endif %}
+  </a>
+  <a class="card" href="/portal/guide">
+    <h2>User guide (PDF)</h2>
+    <p>The Claude Code developer manual: install, sign-in, troubleshooting.</p>
+  </a>
+  <a class="card" href="/portal/fingerprint">
+    <h2>Gateway fingerprint</h2>
+    <p>The gateway TLS certificate fingerprint to confirm at first connect.</p>
+  </a>
+  {% if is_admin %}
+  <a class="card admin" href="/portal/admin">
+    <h2>Spend-cap admin</h2>
+    <p>Set or clear per-user, per-group and organization spend caps.</p>
+  </a>
+  <a class="card admin" href="/portal/admin/users">
+    <h2>All users usage</h2>
+    <p>Every user's cap and period-to-date spend - paged, searchable.</p>
+  </a>
+  {% endif %}
+</div>
+{% endblock %}

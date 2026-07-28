@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Deploy cloudformation/04-download-portal.yaml (Okta-secured installer
 # download portal - ECS Fargate behind the existing ALB at /portal).
-# Prerequisites: gateway stack deployed (same NAME_PREFIX), portal image built
+# Prerequisites: gateway stack deployed (same NAME_PREFIX) WITH the
+# spend-read-key export (re-run scripts/deploy-gateway.sh first when upgrading
+# from a pre-portal-v2 02 - this stack imports it), portal image built
 # (scripts/build-and-push-portal.sh). Independent of the observability stack.
-# After deploy: publish a release (scripts/publish-portal-release.sh), register
-# the Okta redirect URI, and set the client secret
-# (scripts/set-portal-oidc-secret.sh).
+# After deploy: publish a release + the user guide
+# (scripts/publish-portal-release.sh), register the Okta redirect URI, and set
+# the client secret (scripts/set-portal-oidc-secret.sh).
 source "$(dirname "$0")/common.sh"
 
 require_vars VPC_ID PRIVATE_SUBNET_IDS GATEWAY_FQDN PORTAL_IMAGE \
@@ -37,6 +39,7 @@ aws cloudformation deploy \
       "PortalAdminGroup=${PORTAL_ADMIN_GROUP:-}" \
       "PortalCostCenterTeams=${PORTAL_COST_CENTER_TEAMS}" \
       "ReleaseVersion=${PORTAL_RELEASE_VERSION:-${CLAUDE_VERSION}}" \
+      "UserGuideKey=${PORTAL_USER_GUIDE_KEY:-docs/user-manual.pdf}" \
       "BundleExtraCa=${PORTAL_BUNDLE_EXTRA_CA:-false}" \
       "DisableUpdates=${PORTAL_DISABLE_UPDATES:-true}" \
       "SessionTtlHours=${PORTAL_SESSION_TTL_HOURS:-8}" \
@@ -60,7 +63,8 @@ cat <<EOF
 
 Next steps:
   1. Publish the release to the artifacts bucket (uploads the verified mirror
-     output + the installer):
+     output + the installer + the user guide docs/generated/user-manual.pdf,
+     served at /portal/guide - build it first with 'make docs-pdf' if stale):
        scripts/publish-portal-release.sh ${PORTAL_RELEASE_VERSION:-${CLAUDE_VERSION}}
   2. Okta app: register the redirect URI from the PortalOidcRedirectUri output,
      add the portal to the AccessGroup (${ACCESS_GROUP}), then set the client

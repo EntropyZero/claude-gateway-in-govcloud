@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Spend caps - approve sign-in{% endblock %}
+{% block head %}
+<meta http-equiv="refresh" content="{{ refresh_seconds }}">
+{% endblock %}
+{% block content %}
+<h1>Approve the gateway sign-in</h1>
+<p>Open <a href="{{ verify_url }}" target="_blank" rel="noopener">the gateway
+sign-in page</a> in a new tab and approve code
+<strong>{{ user_code }}</strong>. This page checks again every few seconds;
+leave it open.</p>
+<p class="who">Waiting for approval&hellip;</p>
+<form method="POST" action="/portal/admin/disconnect" class="inline">
+ <input type="hidden" name="csrf" value="{{ csrf }}">
+ <button type="submit" class="warn">Cancel</button>
+</form>
+{% endblock %}

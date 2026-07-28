@@ -3,4 +3,10 @@
 # scripts/mirror/mirror-python-deps.sh (run it after editing, then rebuild
 # with a bumped PORTAL_VERSION). The Dockerfile installs with --no-index
 # from vendor/, so a pin edit without a re-mirror fails the build loudly.
+#
+# Transitive deps (jinja2, werkzeug, markupsafe, itsdangerous, click,
+# blinker, packaging, botocore chain) resolve from vendor/ at the versions
+# mirrored there — only top-level pins live here.
+flask==3.1.3
+gunicorn==26.0.0
 boto3==1.43.56

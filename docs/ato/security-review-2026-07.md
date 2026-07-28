@@ -134,6 +134,98 @@ resubmission doc is the submission snapshot. New findings from that review are
 tracked THERE (its §6 remediation sequence), not re-numbered into the batches
 below.
 
+**Portal v2 (2026-07-27, committed NOT yet deployed): Flask restructure,
+self-service usage page, all-users admin spend table, user-guide PDF,
+gateway-fingerprint page — and one stated posture change: the READ-ONLY spend
+key now lives in the portal task.** The single-file stdlib `http.server` app
+(`docker/portal/app.py`, ~1800 lines) is replaced by a Flask 3 + Jinja2
+package (`docker/portal/portal/`) served by gunicorn (gthread, 2 workers × 8
+threads, same in-task TLS certs; `PORTAL_VERSION` bumps to 2.0.0 — the repo
+is tag-immutable). The "zero JavaScript" constraint was lifted by user
+decision (2026-07-27): pages may ship **first-party** JS only, and the CSP
+changed accordingly to `default-src 'none'; style-src 'self'; script-src
+'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none';
+object-src 'none'` — this **supersedes** the "CSP has no `script-src`"
+claims in the two portal entries above; inline script/style stays banned
+(external first-party files only).
+
+- **New surface (all GET, all Okta-gated like the rest of the portal):**
+  `/portal` becomes a card/nav home page; the download form moves to
+  `/portal/download-page` with a *chained* Cost-Center→Team dropdown pair
+  (the mapping is server-embedded as escaped JSON; `<noscript>` falls back
+  to the previous two-step GET round-trip, which stays the server-side
+  enforcement path — `validate_selection` is unchanged); `/portal/me` (own
+  caps + period-to-date spend, progress bars); `/portal/guide` (user-manual
+  viewer) + `/portal/guide.pdf` (streamed from the artifacts bucket;
+  `?download=1` = attachment; missing object renders a "not published yet"
+  page, not a 500); `/portal/fingerprint`; `/portal/admin/users` (below).
+  All previous routes keep their paths/methods; ported invariants: HMAC
+  cookie sessions, state/nonce/PKCE, pure-Python RS256 JWKS verify,
+  synchronizer CSRF token on every POST, `_NoRedirect` gateway client,
+  gateway-token cookie budget, XFF-last-entry, integer-cents money,
+  fail-fast config at boot, audit-before-stream, and the
+  chunked/truncation-detectable ZIP stream (gunicorn emits chunked TE for
+  the length-less generator response). The audit stream name now includes
+  the worker **pid** (multiple gunicorn workers share hostname+boot-second).
+- **Posture change, stated candidly: the portal now holds the READ-ONLY
+  spend-admin key.** The 2026-07-25 entry's "the portal holds no gateway
+  admin key" is **superseded**: 02 now exports
+  `${NamePrefix}-spend-read-key-arn` (the existing
+  `${NAME_PREFIX}/spend-admin-read-key` secret) and 04 imports it as
+  container secret `SPEND_READ_KEY` so `/portal/me` can show the signed-in
+  user their own caps/spend. What is still true: the portal holds **no
+  WRITE key** and no signing secret; the read key can only list caps and
+  period-to-date spend, so its compromise impact is **disclosure of
+  per-user spend/cap data, no mutation**. Mitigations: the key is used
+  server-side only (never reaches a browser), the self-view queries only
+  the session's own Okta `sub`, and the all-users admin listing
+  deliberately does **not** use it — it requires each admin's own
+  device-flow bearer, keeping per-admin attribution and the gateway-side
+  group re-check. An unset/empty `SPEND_READ_KEY` feature-gates the page
+  off with an explanatory message. A 04 deploy now **requires a 02
+  deployed with the export** (upgrade order: 02 re-run before 04).
+- **Usage data source:** `GET /v1/organizations/spend_limits/effective` —
+  **[BINARY-VERIFIED against the mirrored 2.1.211 gateway]**: one row per
+  user per period (`daily|weekly|monthly`), `amount` = effective cap in
+  cents (or `null` with `source: null` = no cap; spend still reported),
+  `period_to_date_spend` may be **fractional** cents (parsed with
+  `Decimal`, never float), opaque forward-only `next_page` paging,
+  `user_ids[]` (≤100) disables paging, `sort=spend_desc` requires exactly
+  one `period[]`. Auth is either `x-api-key` (read key — `/portal/me`) or
+  a bearer of an admin-group member (`/portal/admin/users`).
+- **`/portal/admin/users`:** paged/searchable/sortable table of every user
+  with cap + period-to-date spend (name, email, sub, groups, cap, period,
+  spend, % used, cap source), gated exactly like `/portal/admin`
+  (`PORTAL_ADMIN_GROUP` + per-admin bearer). Page views are not audited
+  (matches `/portal/admin`); denials are.
+- **Fingerprint page:** `/portal/fingerprint` opens a direct verified TLS
+  connection to the gateway FQDN (ALB) and renders the leaf cert's SHA-256
+  in **both** encodings — OpenSSL-style uppercase colon-separated and bare
+  lowercase hex — because the exact string format Claude Code's
+  first-connect prompt shows is **unverified in-repo**; 300 s cache; a
+  TLS/socket failure renders a diagnosable error page. Networking:
+  `PortalToAlbIngress` (portal-SG → ALB 443) is now **UNCONDITIONAL** —
+  fingerprint + self-usage need the path on every deployment, not just
+  admin-enabled ones.
+- **User guide:** `publish-portal-release.sh` now also uploads
+  `docs/generated/user-manual.pdf` to the artifacts bucket (key =
+  `UserGuideKey` / `PORTAL_USER_GUIDE_KEY`, default `docs/user-manual.pdf`;
+  fails fast when the file is missing; `SKIP_USER_GUIDE=1` is the named
+  skip). New 04 param `UserGuideKey` → env `USER_GUIDE_KEY`.
+- **Offline build unchanged in kind:** the new deps (flask + its
+  pure-Python chain, gunicorn) are committed wheels in
+  `docker/portal/vendor/`, regenerated by
+  `scripts/mirror/mirror-python-deps.sh portal`; the image still installs
+  `--no-index`.
+- **[NEEDS TEST-RUN CONFIRMATION]** — stack 04 still has **zero** deploy
+  verification, so effectively everything, and specifically: the
+  `/effective` contract against the actually-deployed gateway version
+  (binary-verified only), the fingerprint page against the real ALB cert
+  (+ eyeball the format Claude Code's prompt shows), `/portal/me` +
+  `/portal/admin/users` through the real ALB/Okta, the guide and ZIP
+  streams at real (100+MB) size, and that a mid-stream abort under
+  gunicorn yields a truncated chunked body (no terminating 0-chunk).
+
 **Deploy-breaker found live: 01 detached its own CMK on the first re-run, so
 key-policy updates silently applied to nothing (2026-07-27, ROOT-CAUSED LIVE;
 fix committed, repair NOT yet run).** Enabling Bedrock prompt logging failed
@@ -1620,8 +1712,11 @@ Added 2026-07-18. An **optional** stack: an Okta-secured internal website
 (`https://<FQDN>/portal`) that hands a developer a single, pre-configured
 Claude Code installer ZIP. New attack surface, and the controls on it:
 
-**What it is.** A small stdlib+boto3 ECS Fargate service behind the existing
-ALB via a path-based listener rule (`/portal*`, priority 20; Grafana is 10).
+**What it is.** A small ECS Fargate service behind the existing
+ALB via a path-based listener rule (`/portal*`, priority 20; Grafana is 10) —
+originally stdlib `http.server` + boto3, since **portal v2** (2026-07-27) a
+Flask 3 + gunicorn package with the same dependency posture (pure-Python
+committed wheels, no build-time network).
 Same cert/DNS/Zscaler entry as the gateway — **no new network prerequisite**.
 It streams a per-download ZIP (`claude.exe` stored + streamed from S3,
 `Install-ClaudeCode.ps1`, a generated `install.cmd` with the developer's Team /
@@ -1680,11 +1775,47 @@ already requires — same in-flight prerequisite, not a new one. OIDC therefore
 **cannot be verified live until that exemption lands** (see Status /
 "needs test-run confirmation").
 
+**Portal v2 additions (2026-07-27) — surface delta.** Full entry in the fix
+log above; the §E-relevant changes:
+
+- **Five new authenticated GET pages** (`/portal/download-page`,
+  `/portal/me`, `/portal/guide` with its `/portal/guide.pdf` stream,
+  `/portal/fingerprint`, `/portal/admin/users`), all behind the same OIDC
+  session + group authz; the admin users page additionally behind
+  `PORTAL_ADMIN_GROUP` + the per-admin device-flow bearer. First-party
+  static assets under `/portal/static/` (one CSS + one JS file, no user
+  data) are served **unauthenticated by design** — the pre-auth error and
+  denied pages need the stylesheet.
+- **CSP now allows first-party script** (`script-src 'self'`; inline
+  script/style still banned; `default-src 'none'`, `frame-ancestors
+  'none'`, `object-src 'none'` kept). The zero-JS claim earlier in this
+  section's history is superseded by user decision 2026-07-27.
+- **The READ-ONLY spend-admin key is injected into the portal task**
+  (`SPEND_READ_KEY`, imported from 02's
+  `${NamePrefix}-spend-read-key-arn` export). This is a **posture change
+  stated candidly**: previously the portal stored *no* admin key; now it
+  stores no **write** key. The read key is scoped to listing caps +
+  period-to-date spend — compromise impact is disclosure of per-user
+  spend/cap data, **no mutation**. Mitigations: server-side use only,
+  the self-view queries only the session's own `sub`, and the admin
+  listing still requires each admin's own bearer (per-admin attribution +
+  gateway-side group re-check preserved).
+- **`PortalToAlbIngress` is now unconditional** (was gated on the admin
+  feature): every deployment's portal task is an ALB client, for the
+  fingerprint fetch and the usage API.
+- **The user-guide PDF joins the artifacts bucket** (`UserGuideKey`,
+  default `docs/user-manual.pdf`; uploaded by
+  `publish-portal-release.sh`) — same CMK/S3 posture as the release
+  artifacts; served only through the authenticated portal.
+
 **Deferred / not-yet-live:** the Okta OIDC round-trip and the streamed download
 at real (100+MB) size are not exercisable without a live deploy + the Zscaler
 exemption; both are flagged for test-run confirmation. Group-claim delivery
 (ID token vs `/userinfo`) depends on the Okta app's claim config and is
-doc-verified only.
+doc-verified only. The portal-v2 surface adds its own list — the
+`/v1/organizations/spend_limits/effective` contract against the deployed
+gateway, the fingerprint page against the real ALB cert, the guide stream at
+size, and the admin users page end to end — see the fix-log entry.
 
 ---
 

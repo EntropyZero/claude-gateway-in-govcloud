@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Spend caps - connect{% endblock %}
+{% block content %}
+<h1>Spend-cap administration</h1>
+{% if flash %}<p class="{{ 'ok' if flash.ok else 'err' }}">{{ flash.msg }}</p>{% endif %}
+<p>Managing spend caps acts on the gateway <strong>as you</strong>: the
+gateway checks your Okta group membership and records your identity in its
+admin audit trail. Connect a gateway session to continue (one browser
+sign-in; your Okta session usually makes it a single click).</p>
+<form method="POST" action="/portal/admin/connect">
+ <input type="hidden" name="csrf" value="{{ csrf }}">
+ <button type="submit">Connect gateway session</button>
+</form>
+{% endblock %}

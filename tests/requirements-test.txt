@@ -8,3 +8,8 @@ pyyaml>=6
 # Portal tests mint RSA-signed test ID tokens + JWKS (the portal app itself
 # verifies RS256 in pure Python with no crypto dependency).
 cryptography>=41
+# The portal app is a Flask package (docker/portal/portal); the tests drive it
+# through create_app() + test_client(). Match the app's pinned major (the
+# image pins flask==3.1.x in docker/portal/requirements.txt). gunicorn is NOT
+# needed for tests - only the live boot check uses it.
+flask>=3.1,<4

@@ -57,7 +57,8 @@ Before installing and running Claude Code you need:
   contact IT rather than trying to configure it yourself (a developer with
   local admin can self-serve it — §8).
 - **The gateway certificate fingerprint published by IT** — you confirm it
-  once, at first connect.
+  once, at first connect. The download portal also shows the current value
+  live on its **Gateway fingerprint** page (§4.4).
 - **No admin rights** — the install itself is entirely user-scope.
 
 ## 2. Installing
@@ -66,15 +67,18 @@ Before installing and running Claude Code you need:
 
 The installer comes from the **download portal**: open the portal link IT
 published (`https://<gateway-host>/portal`) in your browser and sign in with
-your normal Okta SSO. Before the download, the portal asks for two picks:
+your normal Okta SSO. The portal opens on a home page of cards — the portal
+is also where you can check your usage and quotas, read this guide, and see
+the gateway fingerprint (§4) — pick **Download installer**. Before the
+download, the page asks for two picks:
 
-1. **Cost center** — choose yours and press **Continue**. The page reloads
-   with the second dropdown (the portal is deliberately JavaScript-free, so
-   this is two quick page loads, not one dynamic form); a **(change)** link
-   takes you back if you picked the wrong one.
-2. **Team** — the list now shows only the teams belonging to the cost center
-   you picked. Choose the team you actually work in and press
-   **Download pre-configured installer**.
+1. **Cost center** — choose yours first.
+2. **Team** — the team list fills in with only the teams belonging to the
+   cost center you picked. Choose the team you actually work in and start
+   the download.
+
+(If your browser has scripts disabled, the same page works as two quick page
+loads instead: pick the cost center, continue, then pick the team.)
 
 **What the picks are for, and how to choose.** Your selections are baked into
 the installer and become labels on your usage telemetry
@@ -142,8 +146,9 @@ pre-filled — you never choose an account type or type a URL.
    the Okta sign-in (+ MFA).
 5. At first connect Claude Code also shows the gateway certificate
    fingerprint and asks you to confirm it (trust-on-first-use). Compare it
-   against the fingerprint IT published — do not blind-accept it; that prompt
-   is what detects TLS interception in front of the gateway.
+   against the fingerprint IT published — the portal's **Gateway
+   fingerprint** page (§4.4) shows the current value. Do not blind-accept
+   it; that prompt is what detects TLS interception in front of the gateway.
 6. Back in the terminal, Claude Code tells you to press Enter to continue.
    About half the time the Enter key does nothing at this point — just
    **close the command window, open a new one, and run `claude`**: you will
@@ -162,6 +167,8 @@ unable to start (§5.6 has the recovery).
 
 ## 4. Day-to-day notes
 
+### 4.1 Everyday behavior
+
 - `/model` lists exactly three models — Opus 4.8 (the default), Sonnet 5, and
   Sonnet 4.5. That is by design, not an error; nothing else is served here.
 - Web tools (WebFetch / WebSearch) and MCP tools are disabled centrally and
@@ -172,6 +179,54 @@ unable to start (§5.6 has the recovery).
   one, download a fresh installer ZIP and run `install.cmd` again.
 - `/status` shows which configuration sources are active — useful to see
   what is centrally managed vs. your own `settings.json`.
+
+The download portal (`https://<gateway-host>/portal`, same Okta sign-in as
+the installer download) is also your self-service window into the
+deployment — the three pages below.
+
+### 4.2 My usage & quotas
+
+The portal's **My usage & quotas** page shows your own Claude Code spend:
+for each budget period that applies to you (daily, weekly, or monthly) it
+lists your spend cap, your spend so far this period, and the percentage
+used, with a colored progress bar. It also tells you where each cap comes
+from — a cap set for you personally, one inherited from an Okta group you
+are in, or the organization-wide cap. If no cap applies to you, the page
+still shows your spend, marked "no cap".
+
+Notes:
+
+- Hitting a cap does not break anything permanently — Claude Code starts
+  refusing requests with a "spend limit reached" message until the period
+  rolls over or an admin raises the cap. This page is how you see the cap
+  coming before you hit it.
+- Spend figures come from the gateway's own metering, the same numbers cap
+  enforcement uses.
+- If the page says usage display is not enabled on this deployment, that is
+  a deployment-side setting — mention it to IT if you expected to see your
+  numbers.
+
+### 4.3 The user guide
+
+The portal's **User guide (PDF)** page shows this manual: read it in the
+browser or use its download link to save a copy. The portal always serves
+the version IT most recently published, so prefer it over stale local
+copies.
+
+### 4.4 Gateway fingerprint
+
+The portal's **Gateway fingerprint** page shows the gateway's current TLS
+certificate fingerprint, fetched live from the gateway itself. It is
+printed in the two common formats — uppercase pairs separated by colons
+(`AA:BB:…`) and the same value as one lowercase hex string — so whichever
+style Claude Code's first-connect prompt uses, you can compare directly
+(§3 step 5).
+
+If the fingerprint Claude Code shows you matches neither form, **stop — do
+not accept it** — and contact IT: a mismatch can mean something is
+intercepting TLS between your machine and the gateway. Also expect the
+value to change when IT rotates the gateway certificate; the portal page
+always shows the current one.
 
 ## 5. Troubleshooting
 

@@ -46,7 +46,7 @@ Reading tips:
 
 | SG | Stack | Attached to | Ingress | Egress |
 |---|---|---|---|---|
-| `alb` | 02 | internal ALB | 443 from `ClientIngressCidr`; 443 from `portal` (04, only when the admin page is enabled — the portal task is then an ALB *client*) | 8080→`svc`; 3000→`grafana` (03); 8080→`portal` (04) |
+| `alb` | 02 | internal ALB | 443 from `ClientIngressCidr`; 443 from `portal` (04, unconditional since portal v2 — every portal task is an ALB *client*: fingerprint + self-usage, not just the admin pages) | 8080→`svc`; 3000→`grafana` (03); 8080→`portal` (04) |
 | `svc` | 02 | gateway tasks (incl. the co-resident **ADOT collector sidecar**) | 8080 from `alb` | 443 anywhere; proxy port (optional); 443→`amp-endpoint` (03) |
 | `db-client` | 01 | gateway tasks, db-admin Lambdas | — | 5432→`db` |
 | `db` | 01 | RDS instance | 5432 from `db-client` | — |
@@ -68,9 +68,10 @@ Cross-stack rule writers (03, 04 and the admin-host parameter modify imported
 `GrafanaToEndpointsIngress`, `GatewayToAmpEndpointEgress` (the sidecar's
 remote-write path, which replaced the former `GatewayToCollectorEgress` /
 `CollectorToEndpointsIngress`), `AdminToEndpointsIngress`; from 04:
-`AlbToPortalEgress`, `PortalToAlbIngress` (only when the spend-cap admin page
-is enabled), `PortalToEndpointsIngress` (only when 02 created the shared
-endpoints). Deploy order (02 before 03/04) and a matching
+`AlbToPortalEgress`, `PortalToAlbIngress` (unconditional since portal v2 —
+the fingerprint page and `/portal/me` self-usage make every portal task an
+ALB client, not just admin-enabled ones), `PortalToEndpointsIngress` (only
+when 02 created the shared endpoints). Deploy order (02 before 03/04) and a matching
 `CREATE_SUPPORTING_ENDPOINTS` across the deploys are what make these land
 correctly.
 
