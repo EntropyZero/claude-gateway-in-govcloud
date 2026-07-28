@@ -1120,7 +1120,8 @@ and either way it says nothing about whether ingestion is working.
 >     form also evaluates correctly (both verified on Prometheus 3.7.1).
 >     Caveats: sessions overlapping the range START are accounted against the
 >     sliding lookback, so mid-graph they can over-read and decline before
->     settling exact at the right edge; a live session that goes >1h silent
+>     settling exact at the right edge *(this caveat is FIXED by the
+>     2026-07-28 anchored-baseline entry below)*; a live session that goes >1h silent
 >     across the range-start boundary is treated as new (pre-range spend
 >     counts once). Curves are capped at `maxDataPoints: 200` - full-range
 >     lookbacks at every step are the expensive query shape on AMP (its
@@ -1174,7 +1175,8 @@ and either way it says nothing about whether ingestion is working.
 > count_over_time(m{...}[$__range] @ end())` - the `@ end()`-anchored window
 > is exactly the visible range regardless of plot step, so fully-pre-range
 > sessions vanish from every step while range-start-spanning sessions (which
-> do have in-range samples) keep their documented mid-graph decline. The
+> do have in-range samples) keep their documented mid-graph decline *(fixed
+> in turn by the 2026-07-28 entry below)*. The
 > `and` matches on the full label set; both sides are range functions over
 > the same selector so the sets align, and `__name__` is dropped on both.
 > Instant tiles and the top-users table are untouched: at instant eval the
@@ -1195,6 +1197,50 @@ and either way it says nothing about whether ingestion is working.
 > push, re-run 03. On the live run: pick a range width that puts a finished
 > session just before the range start (the failing 2-day view) and confirm
 > the curve no longer shows it while the tile total is unchanged.
+
+> **Cumulative panels: baseline anchored at the range start — curves now
+> strictly monotonic (2026-07-28).** Live 12h/24h screenshots after the
+> ghost fix showed the remaining documented caveat is operator-visible: a
+> session that started BEFORE the range start stepped DOWN near the right
+> edge of the 12h view (mirroring its early-morning climb exactly one
+> range-width later) while the same data's 24h view was clean. Cause: the
+> baseline term `last_over_time(m[1h] offset $__range)` is evaluated PER
+> PLOT POINT, so its 1h window slides forward with the plot time and grows
+> as it crosses the session's pre-range climb - a growing subtrahend makes
+> the "cumulative" curve decline. Fix: the seven cumulative time-series now
+> anchor the baseline at the visible range start -
+> `last_over_time(m[1h] @ start())` - a FIXED window `(start-1h, start]`
+> identical at every plot step, so each curve is exactly
+> `counter(t) - counter(range start)`: monotonic non-decreasing, same right
+> edge. The `@ end()` sample-in-range gate from 2026-07-27 is unchanged.
+> Instant tiles and the top-users table keep `offset $__range`: at instant
+> eval the offset window IS `(start-1h, start]`, so they were always right
+> and are byte-identical to before. Validated against a real Prometheus
+> (3.x) with a 6-session synthetic TSDB (range-start-spanning repro, ghost,
+> freeze-and-hold, single-sample, >1h-gap-resume, whole-range-active; 26
+> assertions): the old expression reproduces the screenshot decline, the
+> new one is non-decreasing for every series, ghost exclusion still holds,
+> and every right edge is exact and equals the tiles (the fix changes the
+> curve's path, not any totals). Remaining accepted caveat (unchanged): a
+> session already running before the range start whose samples go >1h
+> silent across the boundary has an empty baseline window and counts its
+> full counter (pre-range spend included). The 12h/24h screenshots also
+> retire the "@ modifier UNVERIFIED against AMP" caveat above - the
+> `@ end()`-gated panels render live data, so AMP accepts `@`; multi-day
+> ranges additionally rely on the Cortex-lineage frontend rewriting
+> `@ start()`/`@ end()` to absolute timestamps before its per-day query
+> split (a real pre-1.11 Cortex bug, fixed Nov 2021 - near-certain on a
+> 2025-era AMP stack, but our 12h/24h evidence never crossed a split
+> boundary). Deploy as above: bump GRAFANA_IMAGE_TAG, rebuild + push,
+> re-run 03. Live checks: (1) a range whose start lands mid-session (the
+> failing 12h view) - the curve must only ever step up, and the right edge
+> must still equal the tile; (2) the split-rewrite probe - `query_range` a
+> >=3-day window of `last_over_time(claude_code_cost_usage[1h] @ start())`
+> via `scripts/diagnostics/amp-query.py` and confirm each returned series
+> is a FLAT constant across the whole range; if AMP's frontend resolved
+> `start()` per sub-query the value would step at each 24h boundary
+> (loud, unmissable failure - and the trigger to roll back to
+> `offset $__range`).
 
 > **Session labels (2026-07-24).** `session.id` is KEPT as a metric label. It
 > was previously deleted for cardinality, but each session's counters start at
