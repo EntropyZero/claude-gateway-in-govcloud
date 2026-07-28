@@ -11,7 +11,8 @@ per-request token counts. It stores:
   principal_emails  principal, email, name,      identity + the Okta groups
                     groups                        claim the gateway resolved
   spend_limits      the caps set via set-spend-limit.sh
-  admin_audit       every admin API mutation
+  admin_audit       every admin API mutation (dumped joined to
+                    principal_emails so oidc:<sub> actors show their email)
 
 Raw per-request token/cost breakdown lives ONLY in AMP as metrics
 (claude_code_token_usage etc.) - use scripts/diagnostics/diagnose-telemetry.sh for that.
@@ -179,8 +180,26 @@ def main():
 
     audit = _q(conn, "SELECT count(*) FROM admin_audit")
     if audit:
-        print("=== admin_audit ===")
-        print("  %d admin mutation(s) recorded\n" % audit[0][0])
+        print("=== admin_audit (cost-change audit trail) ===")
+        print("  %d admin mutation(s) recorded" % audit[0][0])
+        if audit[0][0]:
+            # actor is `oidc:<sub>` for portal admins - join principal_emails
+            # (the gateway's own sub -> email map) so the row names a person.
+            # The gateway owns both schemas; if a column moves, _q warns and
+            # the count above still prints.
+            rows = _q(conn,
+                      "SELECT a.created_at, a.actor, coalesce(e.email,'?'), "
+                      "a.action, coalesce(a.target_id,'') "
+                      "FROM admin_audit a LEFT JOIN principal_emails e "
+                      "ON a.actor = 'oidc:' || e.principal "
+                      "ORDER BY a.created_at DESC LIMIT %d" % LIMIT)
+            if rows:
+                print("  %-22s %-28s %-26s %-24s %s"
+                      % ("at", "actor", "email", "action", "target"))
+                for r in rows:
+                    print("  %-22s %-28s %-26s %-24s %s"
+                          % tuple(str(x) for x in r))
+        print()
 
     conn.close()
 

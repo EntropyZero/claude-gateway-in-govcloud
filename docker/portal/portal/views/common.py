@@ -125,8 +125,12 @@ def audit_denied(email, groups, reason, team=None, cost_center=None,
     ))
 
 
-def audit_admin(session, outcome, reason):
+def audit_admin(session, outcome, reason, gw_sub=None):
+    """gw_sub: the connected gateway session's (unverified) sub claim, when
+    the caller holds one - recorded as gateway_actor (`oidc:<sub>`) so portal
+    audit lines join to the gateway's admin_audit rows."""
     ext()["audit"].write(build_audit_record(
         outcome, session.get("email", ""), session.get("groups", []),
         None, None, None, None, client_ip(),
-        request.headers.get("User-Agent", ""), reason=reason, event="portal_admin"))
+        request.headers.get("User-Agent", ""), reason=reason, event="portal_admin",
+        gateway_actor=("oidc:" + gw_sub) if gw_sub else None))

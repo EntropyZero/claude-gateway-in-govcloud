@@ -221,9 +221,11 @@ def build_gw_cookie(token_response, session, secret, now=None):
     cookie silently. Returns (cookie, ttl_seconds) or (None, 0)."""
     now = int(time.time()) if now is None else now
     exp = min(gateway_token_exp(token_response, now=now), session["exp"])
+    sub = gateway_token_sub(token_response)
     for rt in (token_response.get("refresh_token", ""), ""):
         cookie = sign_cookie(
-            {"tok": token_response["access_token"], "rt": rt, "exp": exp}, secret)
+            {"tok": token_response["access_token"], "rt": rt, "sub": sub,
+             "exp": exp}, secret)
         if len(cookie) <= GW_COOKIE_BUDGET:
             return cookie, max(exp - now, 1)
     return None, 0
@@ -249,3 +251,21 @@ def gateway_token_exp(token_response, now=None):
     if isinstance(expires_in, int) and expires_in > 0:
         return now + expires_in
     return now + 900
+
+
+def gateway_token_sub(token_response):
+    """The gateway session token's sub claim - the exact value the gateway
+    records as `oidc:<sub>` in admin_audit. Like gateway_token_exp, the
+    payload is decoded UNVERIFIED: this feeds audit attribution/display only,
+    never an authorization decision (the gateway verifies the token itself on
+    every call). Empty string when the token has no parseable sub."""
+    tok = token_response.get("access_token", "")
+    parts = tok.split(".")
+    if len(parts) == 3:
+        try:
+            sub = json.loads(b64url_decode(parts[1])).get("sub")
+            if isinstance(sub, str):
+                return sub
+        except Exception:
+            pass
+    return ""

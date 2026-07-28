@@ -266,6 +266,47 @@ re-run converges). **[NEEDS TEST-RUN CONFIRMATION]:** the import round-trip
 in GovCloud (incl. `UsePreviousValue` on an IMPORT changeset, undocumented
 combination), and the deferred-convergence behavior just described.
 
+**Cost-change audit now names the Okta user by email (2026-07-27, committed,
+NOT yet deployed).** The gateway's `admin_audit` table records cap mutations
+as `oidc:<sub>` — an opaque Okta user id — and its schema is the binary's,
+not ours to extend. The email is captured and joined alongside it instead,
+three ways. (1) **Portal identity map:** when an admin connects a gateway
+session, the portal holds both halves (portal-session email + gateway-token
+`sub`, decoded unverified exactly like the existing `exp` read — display/
+attribution only, never authorization) and persists one JSON object per sub
+under the reserved `identity/principal-emails/` prefix of the artifacts
+bucket; the `/portal/admin/audit` page gains an **Email** column joined from
+it. Unmapped actors (pre-feature rows, never-connected admins, the
+break-glass keys) render a dash. New surface, least-privilege: the task role
+gains `s3:PutObject` on **that prefix only** (release artifacts under
+`releases/` stay unwritable) + `kms:GenerateDataKey` on the CMK for the
+SSE-KMS write; map writes are best-effort and never block sign-in. Sub
+values are charset/length-gated before becoming S3 keys (no path traversal).
+(2) **Portal audit lines** (`event: portal_admin`) now carry
+`gateway_actor: oidc:<sub>` next to the existing `user_email`, so the two
+trails join even without the map. (3) **`dump-usage.py`** dumps recent
+`admin_audit` rows LEFT JOINed to the gateway's own `principal_emails`
+(sub → email resolved by the gateway at login) — covers all users the
+gateway ever identified. Ported onto the portal-v2 Flask restructure when
+that merged (capture lives in `docker/portal/portal/identity.py`, wired in
+`views/admin.py` / `gateway.py` / `audit.py`; the Email column is in
+`templates/admin_audit.html`). Pinned by 11 new portal tests (240 total,
+incl. legacy pre-`sub` cookie compat, the `/portal/admin/users` refresh
+path, malformed non-string audit actors, and gateway-403 denial
+attribution); cfn suite green. The audit page's email join does one S3 GET
+per distinct `oidc:` actor (serial, uncached, bounded by the page's
+`limit=200` fetch and in practice by the admin population) — accepted at
+current scale. Known-accepted: the artifacts bucket is versioned with no lifecycle
+rule, so superseded map objects (email + sub) persist as noncurrent
+versions — add a prefix-scoped noncurrent-version expiration if that ever
+matters. **[NEEDS TEST-RUN CONFIRMATION]:** the deployed gateway session
+token's `sub` equals the `admin_audit` actor sub (holds on the mirrored
+2.1.220 binary), and the join-key shape `principal_emails.principal` = bare
+sub — if the stored principal is already-prefixed the join misses SILENTLY
+(every row shows `?`; the dump's warn fires only on SQL errors like a
+renamed column). Deploy: bump + push the
+portal image, re-run `deploy-download-portal.sh` (task-role change).
+
 **Portal image build: extra trust anchors are now split one-cert-per-file
 (2026-07-27, found during the live test run).** The portal build staged the
 concatenated `EXTRA_CA_CERT_PATH` + `GATEWAY_CA_BUNDLE` bundle as a single

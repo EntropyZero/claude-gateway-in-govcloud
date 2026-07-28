@@ -204,11 +204,14 @@ class _FakeBody:
 
 class FakeS3:
     """objects: {key: bytes}. Missing keys raise a NoSuchKey-shaped error;
-    fail_after[key]=N makes the Nth+1 Body.read() raise (mid-stream failure)."""
+    fail_after[key]=N makes the Nth+1 Body.read() raise (mid-stream failure);
+    fail_puts=True makes every put_object raise (identity-map write failure)."""
 
-    def __init__(self, objects=None):
+    def __init__(self, objects=None, fail_puts=False):
         self.objects = dict(objects or {})
         self.fail_after = {}
+        self.fail_puts = fail_puts
+        self.puts = []                      # (Bucket, Key) per put_object
 
     def get_object(self, Bucket, Key):
         if Key not in self.objects:
@@ -218,6 +221,13 @@ class FakeS3:
             "Body": _FakeBody(data, self.fail_after.get(Key)),
             "ContentLength": len(data),
         }
+
+    def put_object(self, Bucket, Key, Body, **kwargs):
+        if self.fail_puts:
+            raise RuntimeError("injected S3 put failure")
+        self.puts.append((Bucket, Key))
+        self.objects[Key] = Body if isinstance(Body, bytes) else Body.encode()
+        return {}
 
 
 class FakeAudit:

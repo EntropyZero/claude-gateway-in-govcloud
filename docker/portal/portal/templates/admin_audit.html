@@ -5,19 +5,23 @@
 <p class="who"><a href="/portal/admin">Back to caps</a></p>
 <p class="who">Recorded by the gateway (admin_audit table): every cap
 create/update/clear, with the acting identity - oidc:&lt;sub&gt; for portal
-admins, admin-key:&lt;id&gt; for the break-glass CLI keys.</p>
+admins, admin-key:&lt;id&gt; for the break-glass CLI keys. Email is joined
+from the portal's identity map (captured when an admin connects a gateway
+session); a dash means no mapping - a break-glass key, or an admin who has
+never connected through this portal.</p>
 <table>
- <tr><th>At</th><th>Actor</th><th>Action</th><th>Target</th><th>Reason</th></tr>
+ <tr><th>At</th><th>Actor</th><th>Email</th><th>Action</th><th>Target</th><th>Reason</th></tr>
  {% for ev in events %}
  <tr>
-  <td>{{ ev.get('created_at', '') }}</td>
-  <td>{{ ev.get('actor', '') }}</td>
-  <td>{{ ev.get('action', '') }}</td>
-  <td>{{ ev.get('target_id', '') }}</td>
-  <td>{{ ev.get('reason', '') }}</td>
+  <td>{{ ev.get('created_at') or '' }}</td>
+  <td>{{ ev.get('actor') or '' }}</td>
+  <td>{{ actor_emails.get(ev.get('actor', ''), '-') }}</td>
+  <td>{{ ev.get('action') or '' }}</td>
+  <td>{{ ev.get('target_id') or '' }}</td>
+  <td>{{ ev.get('reason') or '' }}</td>
  </tr>
  {% else %}
- <tr><td colspan="5">No admin actions recorded yet.</td></tr>
+ <tr><td colspan="6">No admin actions recorded yet.</td></tr>
  {% endfor %}
 </table>
 {% endblock %}

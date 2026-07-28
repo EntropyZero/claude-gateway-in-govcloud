@@ -12,7 +12,7 @@ import pytest
 from portal.crypto import b64url_encode, sign_cookie, verify_cookie
 from portal.gateway import GatewayError
 
-from conftest import (SECRET, TEST_ENV, Harness, StubGateway, cookie_value,
+from conftest import (SECRET, TEST_ENV, FakeS3, Harness, StubGateway, cookie_value,
                       csrf_for_payload, session_cookie, session_payload,
                       set_cookies_of)
 
@@ -568,3 +568,191 @@ def test_admin_users_escapes_gateway_data(admin_env):
                  cookies={"portal_session": _session(), "portal_gw": _gw_cookie()})
     assert b"<img src=x" not in resp.data
     assert b"&lt;img" in resp.data
+
+
+# ------------------------------------------------------------- identity map
+# The gateway's admin_audit records actors as oidc:<sub> (opaque). At connect
+# time the portal holds both halves - the session's Okta-verified email and
+# the gateway token's sub - and persists the pairing to S3 so the audit page
+# can render an Email column. Capture is best-effort (never blocks sign-in);
+# lookup failure renders unmapped, not an error.
+
+from portal.identity import principal_map_key  # noqa: E402
+
+MAP_KEY = "identity/principal-emails/00uAdmin.json"
+
+
+def _gw_token(sub="00uAdmin", ttl=600):
+    """A gateway-session-shaped JWS (payload decodable, signature fake - the
+    portal never verifies it)."""
+    payload = b64url_encode(json.dumps(
+        {"sub": sub, "exp": int(time.time()) + ttl}).encode())
+    return "h." + payload + ".s"
+
+
+def _gw_cookie_sub(tok=None, rt="", ttl=900, sub="00uAdmin"):
+    """A portal_gw cookie as build_gw_cookie now writes it (with sub)."""
+    return sign_cookie({"tok": tok or _gw_token(sub), "rt": rt, "sub": sub,
+                        "exp": int(time.time()) + ttl}, SECRET)
+
+
+def test_poll_success_writes_identity_map_and_cookie_sub(admin_env):
+    gw = StubGateway(poll_results=[
+        {"access_token": _gw_token("00uAdmin"), "refresh_token": "rt-1"}])
+    h = _harness(admin_env, gw)
+    resp = h.get("/portal/admin", cookies={"portal_session": _session(),
+                                           "portal_gwdev": _gwdev_cookie()})
+    assert resp.status_code == 302
+    # sub -> email persisted as one JSON object under the reserved prefix
+    assert h.s3.puts == [("portal-artifacts", MAP_KEY)]
+    doc = json.loads(h.s3.objects[MAP_KEY])
+    assert doc["sub"] == "00uAdmin" and doc["email"] == "admin@example.com"
+    assert "updated_at" in doc
+    # the signed cookie carries the sub for later audit attribution
+    tok = verify_cookie(cookie_value(set_cookies_of(resp), "portal_gw"), SECRET)
+    assert tok["sub"] == "00uAdmin"
+    # the portal's own audit line joins to the gateway's admin_audit actor
+    success = [r for r in h.audit.records if r["outcome"] == "success"]
+    assert success and success[0]["gateway_actor"] == "oidc:00uAdmin"
+
+
+def test_poll_success_survives_identity_map_write_failure(admin_env):
+    # The map write is best-effort: an S3 outage must never block the admin
+    # sign-in it rides on.
+    gw = StubGateway(poll_results=[
+        {"access_token": _gw_token("00uAdmin"), "refresh_token": "rt-1"}])
+    h = Harness(env=admin_env, gateway=gw, s3=FakeS3(fail_puts=True))
+    resp = h.get("/portal/admin", cookies={"portal_session": _session(),
+                                           "portal_gwdev": _gwdev_cookie()})
+    assert resp.status_code == 302
+    assert cookie_value(set_cookies_of(resp), "portal_gw")
+    assert any(r["outcome"] == "success" for r in h.audit.records)
+
+
+def test_refresh_path_rewrites_identity_map(admin_env):
+    gw = StubGateway(api={("GET", ""): (401, None)},
+                     refresh_resp={"access_token": _gw_token("00uAdmin"),
+                                   "refresh_token": "rt-2"})
+    h = _harness(admin_env, gw)
+    resp = h.get("/portal/admin", cookies={"portal_session": _session(),
+                                           "portal_gw": _gw_cookie(rt="rt-1")})
+    assert resp.status_code == 302
+    assert h.s3.puts == [("portal-artifacts", MAP_KEY)]
+
+
+def test_users_refresh_path_rewrites_identity_map(admin_env):
+    gw = StubGateway(effective=[(401, None)],
+                     refresh_resp={"access_token": _gw_token("00uAdmin"),
+                                   "refresh_token": "rt-2"})
+    h = _harness(admin_env, gw)
+    resp = h.get("/portal/admin/users",
+                 cookies={"portal_session": _session(),
+                          "portal_gw": _gw_cookie(rt="rt-1")})
+    assert resp.status_code == 302
+    assert h.s3.puts == [("portal-artifacts", MAP_KEY)]
+
+
+def test_audit_page_joins_actor_emails(admin_env):
+    gw = StubGateway(api={("GET", "/audit"): (200, {"data": [
+        {"created_at": "2026-07-24T00:00:00Z", "actor": "oidc:00uAdmin",
+         "action": "spend_limit.update", "target_id": "spl_1", "reason": None},
+        {"created_at": "2026-07-24T00:01:00Z", "actor": "admin-key:break-glass",
+         "action": "spend_limit.update", "target_id": "spl_2", "reason": None},
+        {"created_at": "2026-07-24T00:02:00Z", "actor": "oidc:00uNever",
+         "action": "spend_limit.delete", "target_id": "spl_3", "reason": None},
+    ]})})
+    s3 = FakeS3(objects={MAP_KEY: json.dumps(
+        {"sub": "00uAdmin", "email": "admin@example.com"}).encode()})
+    h = Harness(env=admin_env, gateway=gw, s3=s3)
+    resp = h.get("/portal/admin/audit", cookies={"portal_session": _session(),
+                                                 "portal_gw": _gw_cookie()})
+    assert resp.status_code == 200
+    body = resp.data
+    assert b"<th>Email</th>" in body
+    assert b"admin@example.com" in body
+    # break-glass key + never-connected admin render as a dash, and null
+    # reasons render empty, not "None"
+    assert body.count(b"<td>-</td>") == 2
+    assert b"None" not in body
+
+
+def test_audit_page_renders_when_map_unreadable(admin_env):
+    class BrokenS3(FakeS3):
+        def get_object(self, Bucket, Key):
+            raise RuntimeError("S3 unavailable")
+    gw = StubGateway(api={("GET", "/audit"): (200, {"data": [
+        {"created_at": "2026-07-24T00:00:00Z", "actor": "oidc:00uAdmin",
+         "action": "spend_limit.update", "target_id": "spl_1", "reason": None},
+    ]})})
+    h = Harness(env=admin_env, gateway=gw, s3=BrokenS3())
+    resp = h.get("/portal/admin/audit", cookies={"portal_session": _session(),
+                                                 "portal_gw": _gw_cookie()})
+    assert resp.status_code == 200
+    assert b"oidc:00uAdmin" in resp.data      # unmapped, but the page renders
+    assert b"<td>-</td>" in resp.data
+
+
+def test_set_cap_audit_records_gateway_actor(admin_env):
+    gw = StubGateway(api={("POST", ""): (200, {"id": "spl_1"})})
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    h.post("/portal/admin/set",
+           form={"scope_type": "user", "scope_id": "00u123", "amount": "50",
+                 "period": "monthly", "csrf": csrf},
+           cookies={"portal_session": cookie, "portal_gw": _gw_cookie_sub()})
+    success = [r for r in h.audit.records if r["outcome"] == "success"]
+    assert success and success[0]["gateway_actor"] == "oidc:00uAdmin"
+
+
+def test_legacy_gw_cookie_without_sub_still_works(admin_env):
+    # Cookies signed before the sub field shipped keep verifying (the signer
+    # is schema-agnostic); mutations succeed and just omit gateway_actor.
+    gw = StubGateway(api={("POST", ""): (200, {"id": "spl_1"})})
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    resp = h.post("/portal/admin/set",
+                  form={"scope_type": "user", "scope_id": "00u123",
+                        "amount": "50", "period": "monthly", "csrf": csrf},
+                  cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert resp.status_code == 302
+    assert gw.api_calls          # the mutation went through
+    success = [r for r in h.audit.records if r["outcome"] == "success"]
+    assert success and "gateway_actor" not in success[0]
+
+
+def test_principal_map_key_rejects_unsafe_subs():
+    assert principal_map_key("00uAdmin") == MAP_KEY[:-len("00uAdmin.json")] + "00uAdmin.json"
+    assert principal_map_key("") is None
+    assert principal_map_key("a/../../etc") is None      # path traversal
+    assert principal_map_key("a b") is None              # space
+    assert principal_map_key("x" * 129) is None          # oversized
+
+
+def test_audit_page_survives_non_string_actor(admin_env):
+    # A malformed gateway response with a list/dict actor must render (the
+    # Email join coerces to str), not 500 on an unhashable dict key.
+    gw = StubGateway(api={("GET", "/audit"): (200, {"data": [
+        {"created_at": "2026-07-24T00:00:00Z", "actor": ["evil"],
+         "action": "spend_limit.update", "target_id": "spl_1", "reason": None},
+        {"created_at": "2026-07-24T00:01:00Z", "actor": None,
+         "action": "spend_limit.update", "target_id": "spl_2", "reason": None},
+    ]})})
+    h = _harness(admin_env, gw)
+    resp = h.get("/portal/admin/audit", cookies={"portal_session": _session(),
+                                                 "portal_gw": _gw_cookie()})
+    assert resp.status_code == 200
+    assert resp.data.count(b"<td>-</td>") == 2      # both unmapped
+
+
+def test_gateway_403_denials_record_gateway_actor(admin_env):
+    # Connected-session denials join to the gateway trail too, not just
+    # successes: caps page and users page 403s both carry gateway_actor.
+    gw = StubGateway(api={("GET", ""): (403, {"error": "forbidden"})},
+                     effective=[(403, {"error": "forbidden"})])
+    h = _harness(admin_env, gw)
+    cookies = {"portal_session": _session(), "portal_gw": _gw_cookie_sub()}
+    h.get("/portal/admin", cookies=cookies)
+    h.get("/portal/admin/users", cookies=cookies)
+    denied = [r for r in h.audit.records if r["outcome"] == "denied"]
+    assert len(denied) == 2
+    assert all(r["gateway_actor"] == "oidc:00uAdmin" for r in denied)
