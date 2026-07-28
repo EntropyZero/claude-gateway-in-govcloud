@@ -456,7 +456,8 @@ offline image builds are **[VERIFIED-LIVE]**.
 
 *Steps (exact commands):*
 
-1. **Mirror the release** (linux-x64 for the image + win32-x64 for laptops):
+1. **Mirror the release** (linux-x64 for the image *and* the portal's Linux
+   download; win32-x64 for Windows laptops):
 
    ```bash
    ANTHROPIC_GPG_KEY=/path/to/anthropic-release-key.asc \
@@ -489,8 +490,10 @@ offline image builds are **[VERIFIED-LIVE]**.
 
 3. **Publish to the download portal** (when stack `04` is deployed) — this is
    how developers self-serve the new version. Reuses the verified mirror
-   output; uploads `claude.exe`, `manifest.json`, `CHECKSUMS.txt`, the
-   installer, and (since portal v2) the user-guide PDF
+   output; uploads both platform binaries (`claude.exe` + `claude`),
+   `manifest.json`, `CHECKSUMS.txt`, both
+   installers (`Install-ClaudeCode.ps1` + `install-claude-code.sh`), and
+   (since portal v2) the user-guide PDF
    (`docs/generated/user-manual.pdf` → the bucket's `docs/user-manual.pdf`,
    served at `/portal/guide`; the script fails fast if the PDF is missing —
    `make docs-pdf` builds it, `SKIP_USER_GUIDE=1` is the named skip) to the
@@ -543,10 +546,13 @@ offline image builds are **[VERIFIED-LIVE]**.
   then `scripts/verify-gateway.sh`.
 - Client: `claude --version` reports the new version; below-floor binaries
   refuse to start when `requiredMinimumVersion` is raised.
-- Portal (if published): download a ZIP from `https://${GATEWAY_FQDN}/portal`
-  and confirm it contains the new `claude.exe` and that the generated
-  `install.cmd` carries the new version's SHA-256; the download appears in the
-  portal audit log group (`/claude/${NAME_PREFIX}/portal-audit`).
+- Portal (if published): download a ZIP per platform from
+  `https://${GATEWAY_FQDN}/portal` and confirm the Windows one contains the
+  new `claude.exe` (generated `install.cmd` carrying the new win32-x64
+  SHA-256) and the Linux one the new `claude` (generated `install.sh`
+  carrying the linux-x64 SHA-256); each download appears in the
+  portal audit log group (`/claude/${NAME_PREFIX}/portal-audit`) with its
+  `platform` field.
 
 *Rollback / recovery:* Redeploy the previous `IMAGE_URI` (old immutable tag
 still in ECR) via `deploy.env` + `deploy-gateway.sh` — and **revert

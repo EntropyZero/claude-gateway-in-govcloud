@@ -58,6 +58,7 @@ class Config:
         self.artifacts_bucket = env["ARTIFACTS_BUCKET"]
         self.release_version = env["RELEASE_VERSION"]
         self.installer_key = env.get("INSTALLER_KEY", "Install-ClaudeCode.ps1")
+        self.linux_installer_key = env.get("LINUX_INSTALLER_KEY", "install-claude-code.sh")
         self.extra_ca_key = env.get("EXTRA_CA_KEY", "extra-ca.pem")
         self.bundle_extra_ca = env.get("BUNDLE_EXTRA_CA", "false") == "true"
         # Baked installer arguments.

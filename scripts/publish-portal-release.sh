@@ -11,10 +11,12 @@
 #
 # Uploads to the CMK-encrypted bucket (bucket default encryption applies the
 # CMK; the caller needs kms:GenerateDataKey on it):
-#   releases/<version>/claude.exe
+#   releases/<version>/claude.exe         (win32-x64)
+#   releases/<version>/claude             (linux-x64)
 #   releases/<version>/manifest.json
 #   releases/<version>/CHECKSUMS.txt      (if present)
 #   Install-ClaudeCode.ps1                (from client/)
+#   install-claude-code.sh                (from client/ - the Linux installer)
 #   docs/user-manual.pdf                  (from docs/generated/ - the portal's
 #                                          /portal/guide page; build with
 #                                          'make docs-pdf'; SKIP_USER_GUIDE=1
@@ -34,24 +36,37 @@ BUCKET="${PORTAL_ARTIFACTS_BUCKET:-$(stack_output "$PORTAL_STACK_NAME" Artifacts
   exit 1
 }
 
-# The win32-x64 binary + manifest are required; CHECKSUMS.txt is a convenience.
-[ -f "${SRC}/claude.exe" ] || { echo "FATAL: ${SRC}/claude.exe not found (run scripts/mirror/mirror-claude-release.sh ${VERSION} win32-x64)." >&2; exit 1; }
+# Both platform binaries + the manifest are required (the portal offers a
+# Windows AND a Linux download); CHECKSUMS.txt is a convenience. The default
+# mirror-claude-release.sh run fetches both platforms.
+[ -f "${SRC}/claude.exe" ] || { echo "FATAL: ${SRC}/claude.exe not found (run scripts/mirror/mirror-claude-release.sh ${VERSION})." >&2; exit 1; }
+[ -f "${SRC}/claude" ]     || { echo "FATAL: ${SRC}/claude (linux-x64) not found (run scripts/mirror/mirror-claude-release.sh ${VERSION})." >&2; exit 1; }
 [ -f "${SRC}/manifest.json" ] || { echo "FATAL: ${SRC}/manifest.json not found." >&2; exit 1; }
 
-# Re-verify the exe against the manifest before publishing (defence in depth -
-# the mirror already did, but the share could have been tampered with since).
-EXPECTED="$(jq -re '.platforms["win32-x64"].checksum' "${SRC}/manifest.json")"
-ACTUAL="$(sha256sum "${SRC}/claude.exe" | awk '{print $1}')"
-if [ "$EXPECTED" != "$ACTUAL" ]; then
-  echo "FATAL: claude.exe SHA-256 does not match the manifest - refusing to publish." >&2
-  echo "  manifest: ${EXPECTED}" >&2
-  echo "  actual:   ${ACTUAL}" >&2
-  exit 2
-fi
-log "claude.exe checksum verified (${ACTUAL})"
+# Re-verify each binary against the manifest before publishing (defence in
+# depth - the mirror already did, but the share could have been tampered with
+# since).
+verify_platform_binary() {
+  local file="$1" platform="$2"
+  local expected actual
+  expected="$(jq -re --arg p "$platform" '.platforms[$p].checksum' "${SRC}/manifest.json")" || {
+    echo "FATAL: platform '${platform}' not in ${SRC}/manifest.json." >&2; exit 2; }
+  actual="$(sha256sum "$file" | awk '{print $1}')"
+  if [ "$expected" != "$actual" ]; then
+    echo "FATAL: $(basename "$file") SHA-256 does not match the manifest - refusing to publish." >&2
+    echo "  manifest: ${expected}" >&2
+    echo "  actual:   ${actual}" >&2
+    exit 2
+  fi
+  log "$(basename "$file") checksum verified (${actual})"
+}
+verify_platform_binary "${SRC}/claude.exe" win32-x64
+verify_platform_binary "${SRC}/claude"     linux-x64
 
 INSTALLER="${REPO_ROOT}/client/Install-ClaudeCode.ps1"
 [ -f "$INSTALLER" ] || { echo "FATAL: ${INSTALLER} not found." >&2; exit 1; }
+LINUX_INSTALLER="${REPO_ROOT}/client/install-claude-code.sh"
+[ -f "$LINUX_INSTALLER" ] || { echo "FATAL: ${LINUX_INSTALLER} not found." >&2; exit 1; }
 
 # User-guide PDF for the portal's /portal/guide page. Checked up front so a
 # missing guide fails before anything is uploaded; SKIP_USER_GUIDE=1 is the
@@ -66,10 +81,12 @@ fi
 
 log "Publishing ${VERSION} to s3://${BUCKET}"
 aws s3 cp "${SRC}/claude.exe"     "s3://${BUCKET}/releases/${VERSION}/claude.exe"     --region "$AWS_REGION"
+aws s3 cp "${SRC}/claude"         "s3://${BUCKET}/releases/${VERSION}/claude"         --region "$AWS_REGION"
 aws s3 cp "${SRC}/manifest.json"  "s3://${BUCKET}/releases/${VERSION}/manifest.json"  --region "$AWS_REGION"
 [ -f "${SRC}/CHECKSUMS.txt" ] && \
   aws s3 cp "${SRC}/CHECKSUMS.txt" "s3://${BUCKET}/releases/${VERSION}/CHECKSUMS.txt" --region "$AWS_REGION"
 aws s3 cp "$INSTALLER"            "s3://${BUCKET}/Install-ClaudeCode.ps1"             --region "$AWS_REGION"
+aws s3 cp "$LINUX_INSTALLER"      "s3://${BUCKET}/install-claude-code.sh"             --region "$AWS_REGION"
 
 if [ "${SKIP_USER_GUIDE:-}" != "1" ]; then
   # Explicit content type: the portal streams this inline into a viewer page.

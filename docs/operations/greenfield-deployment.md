@@ -270,7 +270,8 @@ ADOT_VERSION=v0.49.0 ./scripts/mirror/mirror-collector.sh     # persists digest-
 ```
 🔎 `grep -E 'IMAGE_URI|DBADMIN_IMAGE|GRAFANA_IMAGE|COLLECTOR_IMAGE|BASE_IMAGE' scripts/deploy.env`
 — all set by the scripts, none by hand. The mirror output also contains
-`claude.exe` + `CHECKSUMS.txt` for the Windows rollout (Phase 10) — stage
+`claude.exe` + `claude` + `CHECKSUMS.txt` for the client rollout (Phase 10;
+the portal publish needs both platform binaries) — stage
 `mirror/$CLAUDE_VERSION/` on the internal file share now. Pin the ADOT
 version currently proven with this repo (v0.49.0 at time of writing —
 check `CLAUDE.md` Status). Base images come from step 4b's digest-pinned
@@ -416,7 +417,7 @@ the gateway needs. Prereqs: `PORTAL_IMAGE` (Phase 4g), the
 
 ```bash
 ./scripts/deploy-download-portal.sh                    # stack + CMK artifacts bucket (persists PORTAL_ARTIFACTS_BUCKET)
-./scripts/publish-portal-release.sh "$CLAUDE_VERSION"  # re-verifies claude.exe against the manifest, uploads
+./scripts/publish-portal-release.sh "$CLAUDE_VERSION"  # re-verifies claude.exe + claude against the manifest, uploads
 ./scripts/set-portal-oidc-secret.sh                    # paste the portal client secret; rolls the service
 ```
 🔎 Target group healthy on the HTTPS `/portal/healthz` check;
@@ -453,9 +454,10 @@ the one-time elevated HKLM seed in [`test-run-runbook.md`](test-run-runbook.md)
   *before* the pin.
 - ☐ **Distribute the installer** — either path:
   - **Portal** (Phase 9): developers browse `https://<GATEWAY_FQDN>/portal`
-    → Okta SSO → pick Cost Center, then one of its Teams → ZIP with a pre-baked
-    `install.cmd` (`-GatewayUrl` / `-Sha256` / `-Team` / `-CostCenter` /
-    `-DisableUpdates`).
+    → Okta SSO → pick Cost Center, one of its Teams, and a Platform
+    (Windows or Linux x64) → ZIP with a pre-baked wrapper — `install.cmd`
+    (`-GatewayUrl` / `-Sha256` / `-Team` / `-CostCenter` / `-DisableUpdates`)
+    on Windows, `install.sh` (same options) on Linux.
   - **Direct** (file share): stage `claude.exe` + `CHECKSUMS.txt` from the
     Phase-4 mirror on the share (over ZPA the share needs its **own** app
     segment, TCP 445), then per laptop, **no admin**:

@@ -42,7 +42,7 @@ for the full runbook.
 | `verify-gateway.sh` | Post-deploy DNS/TLS/OAuth verification from the client-side network |
 | `deploy-observability.sh` | Stack 03: AMP + Grafana + activity archive (emits the AMP params 02 consumes) |
 | `deploy-download-portal.sh` | Stack 04 (optional): download portal. Imports 02's spend-read-key export — when upgrading a pre-portal-v2 deployment, re-run `deploy-gateway.sh` first |
-| `publish-portal-release.sh` | Upload a verified release + installer + the user-guide PDF (`docs/generated/user-manual.pdf`; `SKIP_USER_GUIDE=1` skips) to the portal artifacts bucket |
+| `publish-portal-release.sh` | Upload a verified release (both platform binaries) + both installers (PS1 + Linux sh) + the user-guide PDF (`docs/generated/user-manual.pdf`; `SKIP_USER_GUIDE=1` skips) to the portal artifacts bucket |
 
 ## Secret setters
 

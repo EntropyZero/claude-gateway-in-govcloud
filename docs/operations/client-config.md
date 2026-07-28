@@ -37,17 +37,24 @@ records the design history.
 
 Before installing and running Claude Code you need:
 
-- **Git for Windows — required.** Claude Code's shell tooling runs through
-  Git's `bash.exe`, and its version-control features (diffs, commits,
-  branches) use `git` itself. A standard install is found automatically
-  (Claude Code looks in `C:\Program Files\Git\bin\bash.exe` and
+- **Git for Windows — required** (Windows laptops). Claude Code's shell
+  tooling runs through Git's `bash.exe`, and its version-control features
+  (diffs, commits, branches) use `git` itself. A standard install is found
+  automatically (Claude Code looks in `C:\Program Files\Git\bin\bash.exe` and
   `C:\Program Files (x86)\Git\bin\bash.exe`). If your Git lives anywhere else
   — a per-user or portable install — set the `CLAUDE_CODE_GIT_BASH_PATH`
   environment variable to your `bash.exe` location (see §5.1).
+- **On Linux:** a glibc x86-64 distribution (Ubuntu/Debian/RHEL and
+  derivatives — the portal serves the `linux-x64` glibc build, not the
+  Alpine/musl one), with `git`, `bash`, and the `sha256sum` coreutils
+  (present on any standard developer distribution); `python3` is used by the
+  installer to write your settings file — without it the binary still
+  installs and the installer prints the settings to add by hand.
 - **Node.js / npm — NOT required.** This deployment distributes the
-  precompiled native `claude.exe`; nothing is installed from npm, and
-  `npm install`-based instructions you may find online do not apply here
-  (updates are locked down and this network does not reach npm anyway).
+  precompiled native binary (`claude.exe` on Windows, `claude` on Linux);
+  nothing is installed from npm, and `npm install`-based instructions you may
+  find online do not apply here (updates are locked down and this network
+  does not reach npm anyway).
 - **An Okta account** in the authorized group, with MFA enrolled — the same
   corporate SSO sign-in gates both the download portal and Claude Code
   itself.
@@ -70,15 +77,17 @@ published (`https://<gateway-host>/portal`) in your browser and sign in with
 your normal Okta SSO. The portal opens on a home page of cards — the portal
 is also where you can check your usage and quotas, read this guide, and see
 the gateway fingerprint (§4) — pick **Download installer**. Before the
-download, the page asks for two picks:
+download, the page asks for three picks:
 
 1. **Cost center** — choose yours first.
 2. **Team** — the team list fills in with only the teams belonging to the
-   cost center you picked. Choose the team you actually work in and start
-   the download.
+   cost center you picked. Choose the team you actually work in.
+3. **Platform** — **Windows (64-bit)** or **Linux (x64)**, then start the
+   download.
 
 (If your browser has scripts disabled, the same page works as two quick page
-loads instead: pick the cost center, continue, then pick the team.)
+loads instead: pick the cost center, continue, then pick the team and
+platform.)
 
 **What the picks are for, and how to choose.** Your selections are baked into
 the installer and become labels on your usage telemetry
@@ -95,7 +104,7 @@ right pair and re-run the installer: re-installing is harmless and simply
 overwrites the labels. Each download is recorded (who, which team/cost
 center, which version) in an audit log.
 
-### 2.2 Running the installer
+### 2.2 Running the installer (Windows)
 
 The ZIP contains `claude.exe`, the installer script
 (`Install-ClaudeCode.ps1`), an `install.cmd` with your portal picks and the
@@ -127,6 +136,40 @@ file — **not** policy keys. The installer never writes
 `HKx\SOFTWARE\Policies\ClaudeCode`. A SYSTEM-context run is refused outright.
 
 After installing, **open a new terminal** so the updated PATH is picked up.
+
+### 2.3 Running the installer (Linux)
+
+The Linux ZIP contains the `claude` binary (linux-x64), the installer script
+(`install-claude-code.sh`), an `install.sh` with your portal picks and the
+deployment's standard options baked in, a `README.txt`, and — when the
+deployment bundles one — an `extra-ca.pem` trust file. Unzip it and run:
+
+```bash
+unzip claude-code-<version>-linux.zip -d claude-code && cd claude-code
+bash install.sh
+```
+
+No root or sudo is involved; the installer is the Linux twin of the Windows
+one and does the same three user-scope things:
+
+- **Binary** → `~/.local/bin/claude` (mode 0755), verified by SHA-256
+  against the release manifest on a local staging copy before it is moved
+  into place. (There is no Authenticode on Linux; the checksum chain back to
+  the GPG-verified release manifest is the integrity check.)
+- **PATH** → if `~/.local/bin` is not already on your `PATH` (most
+  distributions put it there), a guarded `export PATH=…` line is appended to
+  `~/.bashrc`. If your shell is not bash, add the equivalent line to your
+  shell's profile yourself.
+- **User configuration** → the same `env` block as §2.2's table, merged into
+  `~/.claude/settings.json` with the same rules (preserves unrelated keys,
+  refuses to overwrite a file it cannot parse). The one path difference: a
+  bundled enterprise CA is copied to `~/.local/bin/claude-extra-ca.pem` and
+  referenced from `NODE_EXTRA_CA_CERTS`.
+
+The installer refuses to run as root (it would install into root's home, not
+yours). After installing, **open a new terminal** and continue with §3 — the
+sign-in flow is the same on Linux, and the login policy your machine needs is
+the Linux managed-settings file (§8.5), delivered by IT.
 
 ## 3. First launch & signing in
 
@@ -312,6 +355,19 @@ $j | ConvertTo-Json -Depth 100 | Set-Content $p -Encoding utf8
 
 (If `%USERPROFILE%\.claude.json` does not exist yet, create it containing
 just `{"hasCompletedOnboarding": true}`.)
+
+On Linux the same flag lives in `~/.claude.json`; back the file up
+(`cp ~/.claude.json ~/.claude.json.bak`) and set it with:
+
+```bash
+python3 - <<'EOF'
+import json, os
+p = os.path.expanduser("~/.claude.json")
+d = json.load(open(p)) if os.path.exists(p) else {}
+d["hasCompletedOnboarding"] = True
+json.dump(d, open(p, "w"), indent=2)
+EOF
+```
 
 Then open a **new** terminal, run `claude`, and run `/login`. Because
 `/logout` also deletes the pinned certificate fingerprint, the fingerprint
@@ -520,11 +576,14 @@ source**, and a managed source **overrides user and project settings** — so a
 developer cannot edit their way around them (nor edit their way *into* the
 gateway login without one).
 
-Deliver them by **Group Policy / MDM** for a locked-down fleet (the AD request
-is [`ad-request-email.md`](../requests/ad-request-email.md)), or self-serve them once on a
-machine where the developer has **local admin**. The core value is the same
-small JSON either way (the two login keys; `parentSettingsBehavior` is an
-optional third). Two interchangeable mechanisms follow.
+Deliver them by **Group Policy / MDM** for a locked-down Windows fleet (the
+AD request is [`ad-request-email.md`](../requests/ad-request-email.md)), by
+configuration management to the root-owned `/etc/claude-code/` file on
+**Linux** (§8.5), or self-serve them once on a machine where the developer
+has **local admin** (Windows) / **sudo** (Linux). The core value is the same
+small JSON on every OS (the two login keys; `parentSettingsBehavior` is an
+optional third). Two interchangeable Windows mechanisms follow; §8.5 is the
+Linux equivalent.
 
 The managed-settings JSON to deliver (single object, one line for the registry
 value). `forceRemoteSettingsRefresh: true` makes the CLI block startup until it
@@ -644,7 +703,57 @@ Remove-Item -Path (Join-Path $env:ProgramData 'ClaudeCode\managed-settings.json'
 Then confirm with `/status` (below) that no unexpected managed source remains.
 Fresh fleets that never ran the old installer are unaffected.
 
-### 8.5 Verifying the active configuration
+### 8.5 Linux — the managed-settings file under `/etc/claude-code/`
+
+On Linux (and WSL) Claude Code reads managed settings from the root-owned
+file **`/etc/claude-code/managed-settings.json`** — the same `file` source
+type as §8.2's `%ProgramFiles%` path, so the login keys are honored from it
+(§8.3's source-type list). `/etc` is root-write-only, which is what makes the
+file tamper-resistant: a developer without sudo cannot edit or remove it, and
+there is no user-scope location that can carry the login keys. The JSON is
+identical to the Windows delivery (pretty-printed is fine in a file):
+
+```json
+{
+  "forceLoginMethod": "gateway",
+  "forceLoginGatewayUrl": "https://<GATEWAY_FQDN>",
+  "forceRemoteSettingsRefresh": true
+}
+```
+
+Deliver it with whatever manages your Linux fleet — Ansible/Salt/Puppet
+copying the file (owner `root:root`, mode `0644`: world-readable so the CLI
+can read it from any account, root-write-only so no one else can change it) —
+or set it once by hand on a machine where the developer has sudo:
+
+```bash
+sudo mkdir -p /etc/claude-code
+sudo tee /etc/claude-code/managed-settings.json >/dev/null <<'EOF'
+{
+  "forceLoginMethod": "gateway",
+  "forceLoginGatewayUrl": "https://<GATEWAY_FQDN>",
+  "forceRemoteSettingsRefresh": true
+}
+EOF
+sudo chmod 644 /etc/claude-code/managed-settings.json
+```
+
+(The portal's Linux installer prints a self-serve snippet with the two login
+keys and the refresh flag — the deployment's real gateway URL substituted —
+at the end of every install. As on Windows, do **not** add
+`requiredMinimumVersion` here: the gateway pushes the version floor itself —
+see the §8 intro.)
+
+Anthropic's settings docs also support a drop-in directory
+(`/etc/claude-code/managed-settings.d/*.json`) for layering additional
+managed fragments; this deployment's runbooks use only the single file.
+Verification is the same as Windows: `/status` inside `claude` must show the
+login keys sourced from the managed layer (§8.6). **Note:** the Linux
+managed-settings path is doc-verified against Anthropic's settings
+documentation; it has not yet been exercised by this deployment's live test
+run.
+
+### 8.6 Verifying the active configuration
 
 Inside `claude`, run **`/status`** — it shows the **active setting sources**,
 so an admin can confirm the managed source is present and winning over user

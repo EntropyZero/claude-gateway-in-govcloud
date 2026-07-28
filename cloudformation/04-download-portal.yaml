@@ -5,10 +5,11 @@ Description: >-
   cert/DNS/Zscaler entry - no new org requests. The portal app runs the full
   OIDC authorization-code flow (PKCE + JWKS verification) and Okta GROUP
   authorization itself (the ALB's authenticate-oidc cannot evaluate a groups
-  claim), then streams a single pre-configured ZIP (claude.exe +
-  Install-ClaudeCode.ps1 + a generated install.cmd) from a CMK-encrypted S3
-  artifacts bucket, logging every download to a dedicated CMK-encrypted audit
-  log group. Deploy after 02-gateway.yaml (same NamePrefix); independent of 03.
+  claim), then streams a single pre-configured per-platform ZIP (Windows:
+  claude.exe + Install-ClaudeCode.ps1 + a generated install.cmd; Linux:
+  claude + install-claude-code.sh + a generated install.sh) from a
+  CMK-encrypted S3 artifacts bucket, logging every download to a dedicated
+  CMK-encrypted audit log group. Deploy after 02-gateway.yaml (same NamePrefix); independent of 03.
   Requires a 02 deployed WITH the <NamePrefix>-spend-read-key-arn export
   (re-run scripts/deploy-gateway.sh before this stack when upgrading): the
   portal imports the read-only spend-admin key for self-usage display.
@@ -120,7 +121,8 @@ Parameters:
     Description: >-
       The pinned Claude Code version the portal serves. Must match a release
       published to the artifacts bucket by scripts/publish-portal-release.sh
-      (releases/<version>/claude.exe + manifest.json).
+      (releases/<version>/claude.exe + claude + manifest.json - both platform
+      binaries are required; the portal offers Windows AND Linux downloads).
 
   BundleExtraCa:
     Type: String

@@ -7,9 +7,10 @@ The portal:
     signature against the issuer's JWKS in pure Python (no crypto dependency),
   * authorizes on Okta GROUP membership (a value the ALB's authenticate-oidc
     cannot evaluate - which is why auth lives in the app, not the listener),
-  * streams a per-download installer ZIP (claude.exe STORED and streamed from
-    the CMK-encrypted artifacts bucket, install.cmd baked with the selected
-    Cost Center / Team, README, optional enterprise CA),
+  * streams a per-download, per-platform installer ZIP (claude.exe or the
+    linux-x64 claude, STORED and streamed from the CMK-encrypted artifacts
+    bucket; install.cmd / install.sh baked with the selected Cost Center /
+    Team, README, optional enterprise CA),
   * shows the signed-in user their spend quotas + usage, the user-guide PDF,
     and the gateway TLS certificate fingerprint, and
   * hosts the spend-cap admin pages (device-flow bearer: admins act as
