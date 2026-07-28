@@ -209,6 +209,21 @@ via CloudFormation IMPORT changeset later — both need test-run confirmation.
 Bedrock's misleading bucket error + the KMS prerequisite are documented in
 §11.
 
+**Added 2026-07-28 (committed, NOT yet deployed): minimum client version
+enforcement — the managed catch-all policy pushes `requiredMinimumVersion`,
+defaulting to the gateway's own version.** New 02 param `MinClientVersion`
+(deploy.env `MIN_CLIENT_VERSION`: empty → `CLAUDE_VERSION`, `none` →
+disabled, else `X.Y.Z`; script + `AllowedPattern` both validate). A client
+older than the floor exits at startup with instructions to update; the key
+is honored only from managed settings, fails open on invalid values, and
+takes effect at a client's next start after a settings fetch. Because
+auto-updates are locked down, raise the floor only after
+`publish-portal-release.sh` has the matching installer up (om-runbooks §6;
+client-config.md §6e). Boot-verified against the mirrored 2.1.211 AND
+2.1.207 gateway binaries (typo'd key = boot failure, so the schema check is
+real). Deploy: re-run `deploy-gateway.sh`; live check = old client blocked
+at start, current client connects.
+
 **Added 2026-07-25 (committed, NOT yet deployed): Bedrock prompt logging,
 opt-in.** Bedrock model invocation logging = verbatim prompts+responses of
 EVERY bedrock-runtime call in the ACCOUNT+REGION (not just this gateway's),

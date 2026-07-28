@@ -141,6 +141,24 @@ Parameters:
       hit ("spend limit reached - <this>"). Single quotes are not allowed (the
       value is rendered into a single-quoted YAML scalar).
 
+  MinClientVersion:
+    Type: String
+    Default: ''
+    # X.Y.Z only: the value is rendered into the managed cli block as
+    # requiredMinimumVersion, and a malformed version string would ship to
+    # every client's startup version check.
+    AllowedPattern: '([0-9]+\.[0-9]+\.[0-9]+)?'
+    ConstraintDescription: >-
+      A semantic version (X.Y.Z), or empty to disable the minimum-version
+      check.
+    Description: >-
+      Minimum Claude Code client version, pushed to every client as
+      requiredMinimumVersion in the managed settings: a client running an
+      older version exits at startup with instructions to update.
+      deploy-gateway.sh defaults this to CLAUDE_VERSION (the version the
+      gateway image itself runs), so the client floor follows the gateway
+      unless MIN_CLIENT_VERSION overrides it. Empty disables the check.
+
   SpendAdminGroups:
     Type: String
     Default: ''
@@ -504,6 +522,7 @@ Conditions:
   WantAnyInterfaceEndpoint: !Or [!Condition WantBedrockEndpoint, !Condition WantSupportingEndpoints]
   HaveAdminClientSg: !Not [!Equals [!Ref AdminClientSecurityGroupId, '']]
   HaveSpendAdminGroups: !Not [!Equals [!Ref SpendAdminGroups, '']]
+  HaveMinClientVersion: !Not [!Equals [!Ref MinClientVersion, '']]
   WantAdminEndpointIngress: !And [!Condition WantAnyInterfaceEndpoint, !Condition HaveAdminClientSg]
   WantS3Endpoint: !Not [!Equals [!Join ['', !Ref PrivateRouteTableIds], '']]
   HaveAlarmTopic: !Not [!Equals [!Ref AlarmSnsTopicArn, '']]
@@ -1235,6 +1254,18 @@ Resources:
             #    allowlist to the "Default" selection so Default can't resolve to
             #    an unserved model (the client's Default resolves to Opus).
             #    IDs match the `models:` entries above by construction.
+            #  * requiredMinimumVersion - the minimum client version floor. A
+            #    client older than this exits at startup with instructions to
+            #    update; enforcement is a client-side startup check that only
+            #    honors the key from MANAGED (policy) settings, which is
+            #    exactly what this block is once pushed. deploy-gateway.sh
+            #    defaults it to CLAUDE_VERSION so the floor tracks the gateway
+            #    itself; rendered only when MinClientVersion is non-empty. A
+            #    client only learns the floor when it fetches /managed/settings,
+            #    so enforcement begins at the NEXT client start after a fetch -
+            #    it is a ratchet for the installed base, not an instant gate.
+            #    (Distinct from `minimumVersion`, which is the auto-updater's
+            #    downgrade guard, not an enforcement key.)
             #  * env - the update lockdown, the server-side twin of the installer's
             #    -DisableUpdates. This USED to be scoped to `MANAGED_CLI_GROUPS`
             #    Okta groups; it now applies to everyone, which is strictly broader
@@ -1278,22 +1309,31 @@ Resources:
             # - the gateway warns and still boots, so it fails silently.
             - Name: GATEWAY_MANAGED_B64
               Value:
-                Fn::Base64: !Sub |
-                  managed:
-                    policies:
-                      - cli:
-                          availableModels: ['${OpusModelId}', '${SonnetModelId}', '${HaikuModelId}']
-                          enforceAvailableModels: true
-                          permissions:
-                            deny: ['WebFetch', 'WebSearch', 'mcp__*']
-                          env:
-                            DISABLE_UPDATES: "1"
-                            DISABLE_AUTOUPDATER: "1"
-                            # no Haiku in GovCloud - see the comment above
-                            ANTHROPIC_DEFAULT_HAIKU_MODEL: '${HaikuModelId}'
-                            # delta sums are silently dropped by the sidecar's
-                            # prometheus translation - see the comment above
-                            OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "cumulative"
+                # Two-arg !Sub: RequiredMinVersionLine renders the version
+                # floor only when MinClientVersion is set (a YAML comment
+                # line otherwise, so the block never carries a dangling key).
+                Fn::Base64: !Sub
+                  - |
+                    managed:
+                      policies:
+                        - cli:
+                            availableModels: ['${OpusModelId}', '${SonnetModelId}', '${HaikuModelId}']
+                            enforceAvailableModels: true
+                            ${RequiredMinVersionLine}
+                            permissions:
+                              deny: ['WebFetch', 'WebSearch', 'mcp__*']
+                            env:
+                              DISABLE_UPDATES: "1"
+                              DISABLE_AUTOUPDATER: "1"
+                              # no Haiku in GovCloud - see the comment above
+                              ANTHROPIC_DEFAULT_HAIKU_MODEL: '${HaikuModelId}'
+                              # delta sums are silently dropped by the sidecar's
+                              # prometheus translation - see the comment above
+                              OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "cumulative"
+                  - RequiredMinVersionLine: !If
+                      - HaveMinClientVersion
+                      - !Sub "requiredMinimumVersion: '${MinClientVersion}'"
+                      - '# requiredMinimumVersion: not set (MinClientVersion empty)'
           Secrets:
             - Name: OIDC_CLIENT_SECRET
               ValueFrom: !Ref OktaClientSecret

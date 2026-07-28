@@ -478,8 +478,14 @@ offline image builds are **[VERIFIED-LIVE]**.
    ```bash
    # deploy.env: export CLAUDE_VERSION="2.1.208"
    ./scripts/build-and-push-image.sh        # tags the image 2.1.208, persists IMAGE_URI
-   ./scripts/deploy-gateway.sh              # rolls the gateway service onto it
    ```
+
+   Do **not** run `deploy-gateway.sh` yet when stack `04` is deployed: the
+   deploy raises the pushed `requiredMinimumVersion` client floor to the
+   new `CLAUDE_VERSION` (§6 note), and update-locked clients can only
+   comply through the portal — publish there first (step 3), then roll
+   (step 4). To roll the gateway without raising the floor, pin
+   `MIN_CLIENT_VERSION` in `deploy.env` to the old version for the run.
 
 3. **Publish to the download portal** (when stack `04` is deployed) — this is
    how developers self-serve the new version. Reuses the verified mirror
@@ -497,7 +503,14 @@ offline image builds are **[VERIFIED-LIVE]**.
    ./scripts/deploy-download-portal.sh      # only needed when the pinned version changes
    ```
 
-4. **Distribute the Windows client (share/MDM route).** Stage
+4. **Roll the gateway service** onto the new image — this is also the moment
+   the pushed client floor rises to the new version (unless pinned):
+
+   ```bash
+   ./scripts/deploy-gateway.sh              # rolls the service; pushes requiredMinimumVersion=<CLAUDE_VERSION>
+   ```
+
+5. **Distribute the Windows client (share/MDM route).** Stage
    `mirror/2.1.208/claude.exe` + `CHECKSUMS.txt` on the file share and install
    non-elevated per developer:
 
@@ -508,22 +521,18 @@ offline image builds are **[VERIFIED-LIVE]**.
      -GatewayUrl https://<GATEWAY_FQDN> -DisableUpdates
    ```
 
-5. **Forcing the upgrade (optional).** The installer is user-scope only and has
-   no settings-push mode; a client-side version floor is a **managed setting**,
-   delivered by GPO/MDM (see [`client-config.md`](client-config.md) §8). To
-   raise the floor, bump `requiredMinimumVersion` in the managed-settings JSON
-   the GPO already delivers (default floor is `2.1.195`, the gateway's minimum):
-
-   ```json
-   {"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<GATEWAY_FQDN>","forceRemoteSettingsRefresh":true,"requiredMinimumVersion":"2.1.208"}
-   ```
-
-   Update the GPP Registry value `Settings` under
-   `HKLM\SOFTWARE\Policies\ClaudeCode` (or the `%ProgramFiles%\ClaudeCode\managed-settings.json`
-   file) with the new floor; clients pick it up on the next Group Policy
-   refresh. The gateway also enforces its own minimum client version
-   server-side regardless, so a below-floor client is refused at the gateway
-   even without the GPO lock.
+6. **Forcing the upgrade — automatic since 2026-07-28.** `deploy-gateway.sh`
+   (step 4) defaults the pushed `requiredMinimumVersion` floor to the new
+   `CLAUDE_VERSION`, so every client that has fetched `/managed/settings`
+   refuses to start on the old version at its next launch, with instructions
+   to update (see [`client-config.md`](client-config.md) §6e). No GPO change
+   is needed. Pin `MIN_CLIENT_VERSION` in `deploy.env` (or set it `none`) to
+   hold the floor while the fleet catches up. A GPO/MDM-delivered
+   `requiredMinimumVersion` ([`client-config.md`](client-config.md) §8) still
+   works as a machine-policy copy, but is no longer the mechanism of record —
+   and don't pin a *different* value there: which managed source wins when
+   both set a floor is not verified anywhere, so keep the GPO JSON free of
+   the key unless you deliberately manage the floor there instead.
 
 *Verification:*
 
@@ -540,9 +549,13 @@ offline image builds are **[VERIFIED-LIVE]**.
   portal audit log group (`/claude/${NAME_PREFIX}/portal-audit`).
 
 *Rollback / recovery:* Redeploy the previous `IMAGE_URI` (old immutable tag
-still in ECR) via `deploy.env` + `deploy-gateway.sh`; lower
-`requiredMinimumVersion` back in the GPO managed-settings JSON if you raised the
-floor ([`client-config.md`](client-config.md) §8). Portal: set
+still in ECR) via `deploy.env` + `deploy-gateway.sh` — and **revert
+`CLAUDE_VERSION` (or pin `MIN_CLIENT_VERSION`) in the same edit**: the pushed
+client floor defaults from `CLAUDE_VERSION`, so restoring only `IMAGE_URI`
+leaves the *next* `deploy-gateway.sh` pushing the NEW floor while the portal
+and fleet are back on the old version — locking out every client that hasn't
+updated. If you had raised a GPO-delivered floor instead, lower it there
+([`client-config.md`](client-config.md) §8). Portal: set
 `PORTAL_RELEASE_VERSION` back to the prior version and re-run
 `deploy-download-portal.sh` (earlier `releases/<version>/` prefixes stay in the
 artifacts bucket). Keep the prior `mirror/<version>/` directory until the new
@@ -570,7 +583,10 @@ release is confirmed across the fleet.
   or `%ProgramFiles%\ClaudeCode\managed-settings.json` — **never** from user
   `settings.json` or HKCU (a user-level `forceLoginMethod:"gateway"` is
   explicitly nulled by the binary), which is why the installer writes no policy
-  source. `requiredMinimumVersion` rides the same managed JSON. On hardened
+  source. (`requiredMinimumVersion` *can* ride the same managed JSON, but
+  since 2026-07-28 the gateway pushes the floor itself — see step 6 above —
+  so keep the key out of the GPO copy unless deliberately managing it
+  there.) On hardened
   fleets the `Policies` subtree is ACL-locked under STIG/CIS baselines, so the
   entry is delivered by GPO/MDM: a GPP Registry `REG_SZ` value `Settings` under
   `HKLM\SOFTWARE\Policies\ClaudeCode`, or a GPP Files copy of
@@ -610,6 +626,18 @@ duplicates before deploying (the usual hit: a pre-Sonnet-5 `deploy.env` whose
 `HAIKU_MODEL_ID` default). Re-run `deploy-gateway.sh`; connected clients pick
 the new allowlist up on their next settings fetch (re-login if it lags).
 Verify with `/model` on a real client before calling it done.
+
+*Gateway version bumps (`CLAUDE_VERSION`) also raise the client version
+floor:* `deploy-gateway.sh` defaults the `MinClientVersion` parameter to
+`CLAUDE_VERSION`, and the gateway pushes it to every client as
+`requiredMinimumVersion` via `/managed/settings` — a client older than the
+floor exits at its next start (after it has fetched settings) with
+instructions to update. Auto-updates are locked down, so **publish the
+matching installer to the portal (`publish-portal-release.sh`) before or with
+the `deploy-gateway.sh` re-run**, or users hit the startup error with no way
+to comply. Pin `MIN_CLIENT_VERSION` in `deploy.env` to hold the floor while
+rolling the gateway ahead, or set it to `none` to disable the check. See
+`client-config.md` §6e.
 
 *Preconditions:* Build host with Docker; `KMS_KEY_ARN` set; the relevant stack
 already deployed. **Rebuild and push the image BEFORE the stack update that

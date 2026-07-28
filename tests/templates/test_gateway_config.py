@@ -160,25 +160,46 @@ def _managed_b64_block():
     return text[m.start():tail]
 
 
-def _managed_policies():
-    """Parse the rendered managed: block into policy dicts.
+def _managed_body():
+    """Return the raw managed-block body (first !Sub list element).
 
-    Single unconditional `Fn::Base64: !Sub |` block scalar (the ManagedCliGroups
-    variant was retired 2026-07-24 along with the parameter).
+    Since the MinClientVersion floor landed (2026-07-28) the env var carries a
+    TWO-ARG Fn::Base64 !Sub - the body is the block scalar under `- |`, and the
+    second list element supplies RequiredMinVersionLine (the same shape as
+    GATEWAY_CONFIG_B64's OidcScopesLine). The loop stops at the shallower
+    `- RequiredMinVersionLine` element that follows the body.
     """
     block = _managed_b64_block()
-    m = re.search(r"Fn::Base64: !Sub \|\n", block)
-    assert m, "GATEWAY_MANAGED_B64 should be a single Fn::Base64 !Sub block scalar"
-    body_lines = block[m.end():].split("\n")
-    base_indent = len(body_lines[0]) - len(body_lines[0].lstrip())
-    yaml_lines = []
-    for l in body_lines:
+    lines = block.split("\n")
+    subi = next(
+        (i for i, l in enumerate(lines) if l.strip() == "- |"), None
+    )
+    assert subi is not None, (
+        "GATEWAY_MANAGED_B64 should be a two-arg Fn::Base64 !Sub (body under '- |')"
+    )
+    base_indent = len(lines[subi + 1]) - len(lines[subi + 1].lstrip())
+    body = []
+    for l in lines[subi + 1:]:
         if l.strip() == "":
             continue
         if len(l) - len(l.lstrip()) < base_indent:
             break
-        yaml_lines.append(l[base_indent:])
-    raw = "\n".join(yaml_lines)
+        body.append(l[base_indent:])
+    return "\n".join(body)
+
+
+def _managed_policies(min_version=True):
+    """Parse the rendered managed: block into policy dicts.
+
+    min_version toggles the RequiredMinVersionLine render: True is the
+    HaveMinClientVersion branch (the deploy-gateway.sh default - it always
+    passes CLAUDE_VERSION unless MIN_CLIENT_VERSION=none), False the
+    disabled branch (a YAML comment line, so the block must stay parseable).
+    """
+    raw = _managed_body()
+    repl = ("requiredMinimumVersion: '2.1.207'" if min_version
+            else "# requiredMinimumVersion: not set (MinClientVersion empty)")
+    raw = raw.replace("${RequiredMinVersionLine}", repl)
     raw = raw.replace("${OpusModelId}", "claude-opus-4-8")
     raw = raw.replace("${SonnetModelId}", "claude-sonnet-5")
     raw = raw.replace("${HaikuModelId}", "claude-sonnet-4-5")
@@ -200,7 +221,9 @@ def test_managed_cli_groups_is_fully_retired():
 
 def test_managed_b64_is_always_emitted():
     """The model allowlist must reach EVERY client, so the env var is
-    unconditional - no !If, no NoValue branch."""
+    unconditional - no NoValue branch. (The RequiredMinVersionLine Sub var
+    carries an !If, but both branches are strings, so the env var itself is
+    always emitted.)"""
     block = _managed_b64_block()
     assert "AWS::NoValue" not in block, (
         "GATEWAY_MANAGED_B64 must not be droppable - the model allowlist has to "
@@ -300,6 +323,79 @@ def test_webfetch_deny_and_small_model_override_reach_every_user():
     )
     assert cli["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] in cli["availableModels"], (
         "the haiku-role override must reference a model the allowlist carries"
+    )
+
+
+def test_required_minimum_version_inside_cli_and_conditional():
+    """The minimum-client-version floor (added 2026-07-28).
+
+    - The key must sit INSIDE `cli` (it is a Claude Code settings.json key;
+      BOOT-VERIFIED against the mirrored 2.1.211 AND downloaded 2.1.207
+      gateway binaries: inside cli boots, a typo'd key fails boot with
+      "unknown settings key").
+    - It renders from the RequiredMinVersionLine Sub var, gated on
+      HaveMinClientVersion, and the disabled branch must be a YAML COMMENT so
+      the block parses either way (never a dangling key).
+    - The value is single-quoted and comes from the MinClientVersion
+      parameter, never a hardcoded version.
+    """
+    # enabled branch: key lands inside the catch-all policy's cli block
+    cli = _managed_policies(min_version=True)[-1]["cli"]
+    assert cli["requiredMinimumVersion"] == "2.1.207"
+    # disabled branch: block still parses, key absent everywhere
+    for policy in _managed_policies(min_version=False):
+        assert "requiredMinimumVersion" not in policy
+        assert "requiredMinimumVersion" not in policy.get("cli", {})
+    # never at policy level (unrecognized key there = boot failure)
+    for policy in _managed_policies(min_version=True):
+        assert "requiredMinimumVersion" not in policy, (
+            f"requiredMinimumVersion at policy level is a BOOT FAILURE: {policy!r}"
+        )
+    text = _template_text()
+    assert re.search(r"RequiredMinVersionLine:\s*!If", text), (
+        "RequiredMinVersionLine should be conditional on HaveMinClientVersion"
+    )
+    assert "HaveMinClientVersion" in text
+    assert "requiredMinimumVersion: '${MinClientVersion}'" in text, (
+        "the floor must come from the MinClientVersion parameter"
+    )
+    # pin the disabled branch too - _managed_policies constructs the comment
+    # string itself, so only this raw-text check fails if the !If else-branch
+    # drifts to something that is not a full-line YAML comment
+    assert "- '# requiredMinimumVersion: not set (MinClientVersion empty)'" in text, (
+        "the HaveMinClientVersion else-branch must stay a full-line YAML "
+        "comment - an empty string or dangling key breaks the rendered block"
+    )
+    # the marker itself sits inside the cli: block of the body
+    body = _managed_body()
+    cli_ix = body.index("- cli:")
+    marker_ix = body.index("${RequiredMinVersionLine}")
+    assert cli_ix < marker_ix, "RequiredMinVersionLine must render inside cli:"
+
+
+def test_min_client_version_parameter_rejects_non_semver():
+    """The value ships to every client's startup version check, and the client
+    strips (fails open on) an invalid value - so a malformed version would
+    silently disable enforcement. Both guards pin X.Y.Z: the template's
+    AllowedPattern (direct deploys) and deploy-gateway.sh's fatal check
+    (which names the deploy.env variable)."""
+    text = _template_text()
+    blk = text[text.index("MinClientVersion:"):]
+    m = re.search(r"AllowedPattern:\s*'([^']+)'", blk)
+    assert m, "MinClientVersion has no AllowedPattern"
+    pat = m.group(1)
+    assert re.fullmatch(pat, "2.1.207")
+    assert re.fullmatch(pat, "")  # empty = feature off
+    for bad in ("2.1", "v2.1.207", "2.1.207-rc1", "none", "latest"):
+        assert not re.fullmatch(pat, bad), f"AllowedPattern accepts {bad!r}"
+    script = open(os.path.join(
+        os.path.dirname(__file__), "..", "..", "scripts", "deploy-gateway.sh"
+    )).read()
+    assert 'MIN_CLIENT_VERSION="${MIN_CLIENT_VERSION:-${CLAUDE_VERSION:-}}"' in script, (
+        "deploy-gateway.sh must default the floor to CLAUDE_VERSION"
+    )
+    assert "MinClientVersion=${MIN_CLIENT_VERSION}" in script, (
+        "deploy-gateway.sh must pass MinClientVersion through"
     )
 
 
