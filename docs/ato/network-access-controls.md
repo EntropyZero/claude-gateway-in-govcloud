@@ -20,7 +20,12 @@ rather than hand-editing the SVGs.
 Every arrow is an explicit SG rule *pair*: an egress rule on the source group
 **and** an ingress rule on the destination group. A connection with only one
 half configured does not work; a connection with neither is dropped silently.
-Every group suppresses default egress with a `127.0.0.1/32` placeholder, so
+Every group's default allow-all egress is removed, but not all the same way:
+`alb`, `db-client`, `db`, `endpoint`, and `amp-endpoint` suppress it with a
+`127.0.0.1/32` placeholder rule (their real egress, where any exists, is
+added as a separate standalone rule to break a reference cycle, or there is
+genuinely none); `svc`, `db-admin`, `grafana`, and `portal` instead declare
+their real 443 egress inline, with no placeholder rule at all. Either way,
 nothing here is reachable "by default."
 
 ![Security groups — who may talk to whom](diagrams/07-security-groups-map.svg)
@@ -33,9 +38,10 @@ Reading tips:
   database" — nothing else is ever granted 5432.
 - **The interface endpoints are the chokepoint.** Their private DNS captures
   AWS API calls from **every** VPC client, so any in-VPC caller of
-  ecr/logs/secretsmanager/ecs — including the admin/build host — must appear
-  in the endpoint SG's ingress or its calls black-hole (this bit the first
-  test run twice).
+  ecr/logs/secretsmanager/ecs — including the admin/build host and tasks
+  created by a different stack — must appear in the endpoint SG's ingress or
+  its calls black-hole. This is the most common cause of a downstream stack
+  rolling back at image pull or secret read.
 - **Okta is the only external dependency** the workloads dial out to; it
   rides the landing zone's central egress and needs the Zscaler
   ALLOW + no-inspect prerequisite (see `networking-request-email.md`).
@@ -46,31 +52,33 @@ Reading tips:
 
 | SG | Stack | Attached to | Ingress | Egress |
 |---|---|---|---|---|
-| `alb` | 02 | internal ALB | 443 from `ClientIngressCidr`; 443 from `portal` (04, unconditional since portal v2 — every portal task is an ALB *client*: fingerprint + self-usage, not just the admin pages) | 8080→`svc`; 3000→`grafana` (03); 8080→`portal` (04) |
+| `alb` | 02 | internal ALB | 443 from `ClientIngressCidr`; 443 from `portal` (04, unconditional — every portal task is an ALB *client*: the fingerprint and self-usage pages need it, not only the admin pages) | 8080→`svc`; 3000→`grafana` (03); 8080→`portal` (04) |
 | `svc` | 02 | gateway tasks (incl. the co-resident **ADOT collector sidecar**) | 8080 from `alb` | 443 anywhere; proxy port (optional); 443→`amp-endpoint` (03) |
 | `db-client` | 01 | gateway tasks, db-admin Lambdas | — | 5432→`db` |
 | `db` | 01 | RDS instance | 5432 from `db-client` | — |
 | `db-admin` | 02 | bootstrap + rotation Lambdas | — | 443 anywhere |
 | `endpoint` | 02 | all 02 interface endpoints | 443 from `svc`, `db-admin`, `grafana` (03), `portal` (04, when 02 created the shared endpoints), admin host (param) | — |
 | `grafana` | 03 | Grafana task | 3000 from `alb` | 443 anywhere |
-| `amp-endpoint` | 03 | aps-workspaces endpoint | 443 from `svc` (gateway sidecar), `grafana` | — |
+| `amp-endpoint` | 03 | aps-workspaces endpoint | 443 from `svc` (gateway sidecar), `grafana`, admin host (param, when granted) | — |
 | `portal` | 04 | download-portal tasks | 8080 from `alb` | 443 anywhere (Okta, S3, CloudWatch); proxy port (optional) |
 
 There is **no `collector` security group**: the ADOT collector is a
 co-resident sidecar inside the gateway task, reached over loopback
 (`127.0.0.1:4318`), so its OTLP receiver is never on the network and needs no
-SG rule (this eliminated the former plaintext gateway→collector hop — security
-review C2, resolved 2026-07-22). The sidecar's remote-write to AMP rides the
+SG rule — which is why there is no gateway→collector network hop to encrypt
+(`architecture.md` §10 note 1). The sidecar's remote-write to AMP rides the
 gateway `svc` SG.
 
 Cross-stack rule writers (03, 04 and the admin-host parameter modify imported
-02 SGs as separate `SecurityGroup{In,E}gress` resources): `AlbToGrafanaEgress`,
+02 SGs — or, for `AdminToAmpEndpointIngress`, 03's own `amp-endpoint` SG — as
+separate `SecurityGroup{In,E}gress` resources): `AlbToGrafanaEgress`,
 `GrafanaToEndpointsIngress`, `GatewayToAmpEndpointEgress` (the sidecar's
-remote-write path, which replaced the former `GatewayToCollectorEgress` /
-`CollectorToEndpointsIngress`), `AdminToEndpointsIngress`; from 04:
-`AlbToPortalEgress`, `PortalToAlbIngress` (unconditional since portal v2 —
-the fingerprint page and `/portal/me` self-usage make every portal task an
-ALB client, not just admin-enabled ones), `PortalToEndpointsIngress` (only
+remote-write path), `AdminToEndpointsIngress`, `AdminToAmpEndpointIngress`
+(admin host → `amp-endpoint`, same param, mirrors `AdminToEndpointsIngress`);
+from 04:
+`AlbToPortalEgress`, `PortalToAlbIngress` (unconditional — the fingerprint page
+and `/portal/me` self-usage make every portal task an ALB client, not only
+admin-enabled ones), `PortalToEndpointsIngress` (only
 when 02 created the shared endpoints). Deploy order (02 before 03/04) and a matching
 `CREATE_SUPPORTING_ENDPOINTS` across the deploys are what make these land
 correctly.
@@ -81,8 +89,10 @@ SGs are one of **five** gates on the path of a single AWS API call. The
 diagram traces a gateway task reading its DB secret; the failure table under
 it is the reason none of the layers is redundant — the second row
 (attacker-owned credentials exfiltrating *through* a private endpoint) is the
-one SGs and your own IAM cannot stop alone, and is why every endpoint carries
-a resource policy.
+one SGs and your own IAM cannot stop alone, and is why every endpoint that
+**supports** a resource policy carries one. (The one deliberate exception is
+`ecs` — GovCloud does not support a policy on that endpoint type; IAM-side
+scoping is the only gate there, per the accepted-risk note above.)
 
 ![Layered access control](diagrams/09-access-control-layers.svg)
 
@@ -109,5 +119,5 @@ policy names its grantees.
 *Change discipline: a new workload that needs the database gets `db-client`
 attached (never a new 5432 rule); a new in-VPC caller of AWS APIs gets an
 ingress on the `endpoint` SG (or it will black-hole); anything touching the
-endpoint SG or the observability SGs should re-check the cross-stack
-reachability findings in `security-review-2026-07.md`.*
+endpoint SG or the observability SGs should re-check cross-stack reachability
+by hand — no static gate catches it (`../operations/troubleshooting.md`).*

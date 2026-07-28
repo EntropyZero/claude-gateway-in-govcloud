@@ -3,9 +3,9 @@
 Companion to the security-review package
 ([`architecture.md`](architecture.md),
 [`network-access-controls.md`](network-access-controls.md),
-[`security-review-2026-07.md`](security-review-2026-07.md)) for the RMF/FedRAMP
-ATO submission. Where those documents describe *what the system is built from*,
-this one describes *how it is operated and used*: who the users are, what they
+[`security-assessment-2026-07.md`](security-assessment-2026-07.md)) for the
+RMF/FedRAMP ATO submission. Where those documents describe *what the system is
+built from*, this one describes *how it is operated and used*: who the users are, what they
 do, how the system behaves in normal and degraded modes, and what the operating
 organization must provide. It is written for ISSO/AO reviewers who have not read
 the repository.
@@ -73,8 +73,8 @@ laptops without a public internet dependency on the AI provider.
   writes (`DISABLE_UPDATES`/`DISABLE_AUTOUPDATER`), backstopped by the
   mirror-only network path (`scripts/mirror/mirror-claude-release.sh`,
   `client/Install-ClaudeCode.ps1`).
-- **Not a Node/npm distribution.** By decision (2026-07-15), only the
-  precompiled native `claude` binary is fielded (CLAUDE.md "User decisions").
+- **Not a Node/npm distribution.** By decision, only the precompiled native
+  `claude` binary is fielded (CLAUDE.md "User decisions").
 
 ### 1.4 System boundary
 
@@ -96,9 +96,11 @@ At a glance (full detail in `architecture.md` §1–§2):
 
 - Developers on managed Windows laptops run `claude`, which reaches an
   **internal ALB** over TLS via **Zscaler ZPA**. The ALB re-encrypts to the
-  **ECS Fargate gateway** tasks (per-task TLS), which authenticate the user
-  against **Okta OIDC** and proxy inference to **Bedrock** over a private
-  interface endpoint whose policy admits only the three approved models.
+  **ECS Fargate gateway** tasks over a TLS leaf baked into the gateway image
+  at build time (not generated per task — see `architecture.md` §6), which
+  authenticate the user against **Okta OIDC** and proxy inference to
+  **Bedrock** over a private interface endpoint whose policy admits only the
+  three approved models.
 - **Session and spend state** lives in **RDS PostgreSQL 16**; the gateway
   connects as a least-privilege application role, never the RDS master user.
 - **Usage telemetry** (tokens, cost, model, and stamped user identity) flows
@@ -142,21 +144,17 @@ holds the RDS master credential.
   (`cloudformation/02-gateway.yaml` `oidc:` and `session:` blocks).
 - Are gated at sign-in by **allowed email domain**
   (`allowed_email_domains` in `cloudformation/02-gateway.yaml`, from the
-  `ALLOWED_EMAIL_DOMAINS` parameter). A `managed.policies` block is now
-  **always rendered**, carrying the **client model allowlist**
-  (`availableModels`), the web/MCP tool denies, the **minimum client version
-  floor** (`requiredMinimumVersion`, defaulting to the gateway's own
-  version), and the small/fast-model and
-  update-lockdown env overrides, scoped to all users via a catch-all policy
-  that needs no group claim — client-configuration controls, not access
-  control. Okta **group**
-  claims remain **not yet enforced** as gateway access control: the `groups`
-  scope is now requested unconditionally, but for **spend caps** (per-group cost
-  limits resolve against the groups claim), not for access control. The former
-  group-matched update-lockdown policy (`MANAGED_CLI_GROUPS`) was retired
-  2026-07-24; the lockdown now applies to every user. Reviewers should read
-  gateway authorization today as "authenticated Okta user in an approved email
-  domain," with per-group policy as an available, unexercised extension.
+  `ALLOWED_EMAIL_DOMAINS` parameter). A `managed.policies` block is **always
+  rendered**, carrying the **client model allowlist** (`availableModels`), the
+  web/MCP tool denies, the **minimum client version floor**
+  (`requiredMinimumVersion`, defaulting to the gateway's own version), and the
+  small/fast-model and update-lockdown env overrides, scoped to all users via a
+  catch-all policy that needs no group claim — client-configuration controls,
+  not access control. Okta **group** claims are **not** used as gateway access
+  control: the `groups` scope is requested unconditionally, but for **spend
+  caps** (per-group cost limits resolve against the groups claim). Reviewers
+  should read gateway authorization as "authenticated Okta user in an approved
+  email domain," with per-group policy as an available extension.
 - Obtain the installer either from an operator/MDM push or **self-service from
   the download portal** (when stack `04` is deployed): they browse to
   `/portal` on the gateway FQDN, authenticate through Okta, pick their **Cost
@@ -171,12 +169,11 @@ holds the RDS master credential.
 - Deploy and maintain the system with the `deploy.env`-driven scripts in
   `scripts/` (fixed order: cert → `01` → build four images → `02` →
   DNS/Zscaler → verify → `03` → Grafana secret → re-run `02`;
-  `docs/operations/test-run-runbook.md`).
+  `docs/operations/greenfield-deployment.md`).
 - Operate from a host with Docker, AWS credentials, and egress; an **in-VPC
   admin/build host** is admitted to the interface-endpoint security group when
   `ADMIN_CLIENT_SG_ID` is set, so its AWS API calls are not black-holed by the
-  endpoints' private DNS (`network-access-controls.md` §1; `security-review`
-  batch, endpoint-SG cross-stack reachability).
+  endpoints' private DNS (`network-access-controls.md` §1).
 - Never inject the RDS master secret into any task; the deploy tooling writes
   secrets via mode-600 `file://` temp files, never on the command line
   (`.claude/rules/security.md`; `scripts/common.sh` `put_secret_and_roll`).
@@ -217,20 +214,19 @@ The portal (optional stack `04`) authorizes on **Okta group membership**: the
 `claude-gateway-users`) names **one or more groups** (comma-separated), and a
 member of **any** listed group may download the installer; everyone else is
 denied — and the denial is audited (§5.4). The parameter is named generically
-so the **same group(s) can gate the gateway** once its commented-out group
-policy (§3.1) is enabled, giving one org-managed membership set for both surfaces
+so the **same group(s) can gate the gateway** if per-group access control is
+enabled there (§3.1), giving one org-managed membership set for both surfaces
 (`cloudformation/04-download-portal.yaml`; `scripts/deploy.env.example`).
-Unlike the gateway and Grafana, the portal's group check is enforced today,
-which makes the **Okta groups-claim configuration an operating prerequisite**
-for the portal (§8.2).
+Because the portal's group check is unconditional — unlike the gateway, which
+gates on email domain — **Okta groups-claim configuration is an operating
+prerequisite** for the portal (§8.2).
 
 ---
 
 ## 4. Operational environment
 
 The system is fielded into an **AWS Landing Zone** with the following
-characteristics (CLAUDE.md "Landing zone"; `security-review-2026-07.md` target
-profile):
+characteristics (CLAUDE.md "Landing zone"):
 
 - **Hub-and-spoke with Transit Gateway** (not VPC peering), **central egress**;
   the workload VPC is a **no-NAT spoke** in the target profile. Because there is
@@ -246,19 +242,19 @@ profile):
   the **Okta issuer** for OIDC discovery and token exchange. This traffic is
   server-originated (no Zscaler user identity), so the workload VPC's central
   egress path needs an explicit **ALLOW + SSL-inspection exemption** for the
-  Okta issuer FQDN (`docs/requests/networking-request-email.md`, "Server-side egress").
-  This is the single open org prerequisite blocking the first end-to-end run
-  (CLAUDE.md Status).
+  Okta issuer FQDN (`docs/requests/networking-request-email.md`, "Server-side
+  egress"). Without it the gateway fails at OIDC discovery on boot: the
+  exchange carries the OIDC client secret and must not transit inspection
+  infrastructure.
 - **Corporate DNS**: a single CNAME in the corporate zone points the gateway
   FQDN at the ALB's `internal-*.elb.amazonaws.com` name — a public record
   returning private IPs, so no split-horizon/private-hosted-zone is required;
   App Connectors must be able to resolve the corporate CNAME
-  (`docs/requests/networking-request-email.md` §2; `security-review-2026-07.md` B1).
+  (`docs/requests/networking-request-email.md` §2).
 
 Per-source-IP attribution is deliberately **not** relied upon: ZPA collapses all
 users to a handful of App Connector IPs, so identity is carried in the Okta →
-gateway-session chain, not the network layer (`architecture.md` §3;
-`security-review-2026-07.md` B8).
+gateway-session chain, not the network layer (`architecture.md` §3).
 
 ---
 
@@ -319,16 +315,17 @@ flow through the fielded system and cites the file that implements it.
    fingerprint (printed by `import-enterprise-cert.sh`) so the developer
    confirms it at first login. This is exactly why TLS inspection must not sit
    in front of the gateway FQDN (`docs/requests/networking-request-email.md` §3;
-   `docs/operations/test-run-runbook.md` §1).
+   `docs/operations/greenfield-deployment.md`).
 
 ### 5.2 Normal use — a request
 
 Steady-state request path (`architecture.md` §2, hop table):
 
 Laptop `claude` → **ZPA** (TCP 443, no inspection) → **internal ALB** (TLS,
-FIPS policy) → **gateway task** (ALB re-encrypts to per-task TLS on 8080) →
-**Bedrock** (TLS + SigV4 over the interface endpoint, three approved models
-only).
+FIPS policy) → **gateway task** (ALB re-encrypts to the image-baked TLS leaf
+on 8080 — the same key on every task running that image, not a per-task
+generation) → **Bedrock** (TLS + SigV4 over the interface endpoint, three
+approved models only).
 Session and spend state is read and written in **RDS** over `verify-full` TLS,
 with the gateway authenticating as the least-privilege application role
 (`gateway_app` / `gateway_app_clone`), never the master user (`architecture.md`
@@ -355,12 +352,11 @@ gateway forwards to it over **loopback** (`http://localhost:4318`) — there is 
 over-the-wire telemetry hop. The sidecar remote-writes to AMP and to the
 activity log group under the **gateway task role** (scoped to this workspace and
 this log group only), and its OTLP listener binds `127.0.0.1` so nothing off the
-task can reach it. This is the resolution of finding C2: SC-8 is met by absence
-of network transmission (a stronger posture than an internal-CA TLS listener,
-and with no new PKI to custody — SC-17/SC-12), after the live run showed the
-gateway rejects a non-HTTPS telemetry forward URL off localhost
-(`security-review-2026-07.md` C2 + fix log). **Pending live verification:**
-metrics landing in AMP through the sidecar.
+task can reach it. SC-8 is met by absence of network transmission — a stronger
+posture than an internal-CA TLS listener, and with no new PKI to custody
+(SC-17/SC-12). The design is also the only one the gateway permits: it rejects
+a non-HTTPS telemetry forward URL unless the host is loopback
+(`security-assessment-2026-07.md`; `architecture.md` §10 note 1).
 
 ### 5.4 Audit
 
@@ -369,7 +365,7 @@ Three independent audit surfaces, at increasing sensitivity (`architecture.md`
 
 - **DB audit (pgaudit).** DDL, role changes, and writes (no bind values) are
   exported from RDS to a CMK-encrypted CloudWatch log group
-  (`cloudformation/01-database.yaml`; `security-review-2026-07.md` C4).
+  (`cloudformation/01-database.yaml`).
 - **ALB access logs.** Source connector IPs, URIs, and timings land in an S3
   bucket (SSE-S3, IAM-only, lifecycle expiry) (`cloudformation/02-gateway.yaml`;
   `architecture.md` §9 note).
@@ -394,7 +390,7 @@ Three independent audit surfaces, at increasing sensitivity (`architecture.md`
 - **Deploy / update flow.** The load-bearing order is cert → `01` database →
   build all four images → `02` gateway → DNS/Zscaler → `verify-gateway.sh` →
   `03` observability → set Grafana Okta secret → re-run `02`
-  (`docs/operations/test-run-runbook.md`; CLAUDE.md "Deploy model"). Scripts persist their
+  (`docs/operations/greenfield-deployment.md`; CLAUDE.md "Deploy model"). Scripts persist their
   outputs back into `deploy.env` (`set_env_var` in `scripts/common.sh`), so
   there are no copy-paste steps. Container image tags are immutable — an image
   change means a new tag and a service roll (`.claude/rules/scripts.md`).
@@ -420,7 +416,7 @@ Three independent audit surfaces, at increasing sensitivity (`architecture.md`
   `publish-portal-release.sh <version>` — which reuses the GPG-verified mirror
   output. Serving a **new client version** to developers is that one publish
   command plus updating `PORTAL_RELEASE_VERSION` (`docs/operations/om-runbooks.md` §5;
-  `docs/operations/test-run-runbook.md`).
+  `docs/operations/greenfield-deployment.md`).
 
 ---
 
@@ -437,15 +433,15 @@ from Bedrock, telemetry flows to Grafana, and audit surfaces are recording.
   is optional and gated on the observability stack existing; the deploy-gateway
   guard only disables forwarding on a definitively-missing stack, and a gateway
   with no OTLP target continues to serve inference. Usage dashboards go stale;
-  developer service does not (`cloudformation/02-gateway.yaml` telemetry toggle;
-  `security-review-2026-07.md` self-review notes on the telemetry guard).
+  developer service does not (`cloudformation/02-gateway.yaml` telemetry
+  toggle).
 - **Okta unreachable → no new logins, existing sessions continue.** OIDC is the
   authentication front door; if the issuer is unreachable (or the server-side
   egress ALLOW/exemption is missing), **new** logins fail closed, but sessions
   already holding a valid JWT keep working until their TTL expires
-  (`SESSION_TTL_HOURS`; `cloudformation/02-gateway.yaml` `session:` block). This
-  is the failure the current org prerequisite would otherwise cause at boot
-  (CLAUDE.md Status).
+  (`SESSION_TTL_HOURS`; `cloudformation/02-gateway.yaml` `session:` block). The
+  same failure occurs at gateway boot if the server-side egress ALLOW /
+  SSL-inspection exemption for the issuer FQDN is withdrawn (§4).
 - **Collector shares the gateway task lifecycle — and fails CLOSED by
   default (AU-5).** The ADOT collector is a sidecar in the gateway task, not
   a separate service, so there is no independent collector redeploy: a
@@ -465,11 +461,23 @@ from Bedrock, telemetry flows to Grafana, and audit surfaces are recording.
   guaranteed — a failing AMP endpoint at shutdown can still lose the last
   batch). The **end-to-end control is the missing-telemetry alarm**
   (observability stack): container health proves the collector is alive,
-  while the alarm proves samples are actually landing in AMP — it fires
-  after `MISSING_TELEMETRY_ALARM_MINUTES` (default 15) of ingestion
-  silence, covering IAM/endpoint breakage, misconfiguration, and AMP-side
-  failure that no health check can see (`security-review-2026-07.md` C2;
-  O&M runbook 9 triage).
+  while the alarm proves the AMP remote-write **pipeline** is alive — it
+  fires after `MISSING_TELEMETRY_ALARM_MINUTES` (default 15) of total
+  ingestion silence on the workspace, covering IAM/endpoint breakage and a
+  full AMP-side outage that no health check can see. A continuous heartbeat
+  — the sidecar scrapes its own `otelcol_*` self-metrics over loopback into
+  the same remote-write pipeline — keeps that alarm meaningful on an idle
+  fleet, where the bursty client metrics alone would otherwise look like a
+  broken pipeline. Because the heartbeat shares the same pipeline as client
+  metrics, the alarm cannot by itself prove that **client** usage metrics
+  specifically are landing: a translation-layer failure that silently drops
+  only `claude_code_*` points (the delta-temporality incident of
+  2026-07-24, since fixed at the client) leaves total ingestion above zero
+  and this alarm stays OK. Detecting that narrower failure class today is a
+  manual diagnostic — `scripts/diagnostics/amp-query.py`, or watching the
+  collector's own `otelcol_exporter_prometheusremotewrite_failed_translations`
+  metric — not an alarm (`docs/operations/troubleshooting.md`; O&M runbook 9
+  triage).
 - **Download portal down → no self-service installs, gateway unaffected.** The
   portal is an optional, separate stack behind its own `/portal` listener rule;
   its failure (or absence) does not touch the inference path. Installers remain
@@ -500,39 +508,48 @@ document, `docs/operations/om-runbooks.md`.
 ## 7. Security posture summary and accepted risks
 
 Stated up front, per the review-package convention. The source of truth for
-finding-by-finding status is `security-review-2026-07.md`; the accepted-risk
-register is `architecture.md` §10.
+finding-by-finding status is `security-assessment-2026-07.md`; the
+accepted-risk register is `architecture.md` §10.
 
 The implemented posture: a single customer-managed KMS key encrypts everything
-at rest (bar the ALB-logs bucket, an ELB platform limitation); TLS in transit on
-every network hop (the one former exception — the gateway→collector telemetry
-leg — is now a loopback sidecar with no network transmission, below); RDS
-`verify-full`; pgaudit;
-VPC-endpoint and IAM policies scoped to the three approved models and this
-account's exact ARNs; explicit (no default-allow) security-group egress; and a
-least-privilege application DB user with self-rolling rotation. Full batch status
-(A deploy-breakers, B ZPA/landing-zone prerequisites, C FedRAMP hardening C1–C11,
-D correctness, C12 least-privilege DB user) is in `security-review-2026-07.md`.
+at rest (bar the ALB-logs bucket, an ELB platform limitation); no plaintext
+network hop anywhere — TLS in transit on every hop, and the telemetry leg is a
+loopback sidecar with no network transmission at all (below); RDS
+`verify-full`; pgaudit; VPC-endpoint and IAM policies scoped to the three
+approved models and this account's exact ARNs; explicit (no default-allow)
+security-group egress; and a least-privilege application DB user with
+self-rolling rotation.
 
 **Accepted / deferred risks a reviewer should see immediately:**
 
-- **C2 (formerly an accepted partial risk) — WITHDRAWN, not carried.** The
-  review had accepted the gateway→collector OTLP hop as plaintext-but-SG-scoped.
-  The live test run **disproved** that posture — the gateway refuses a non-HTTPS
-  telemetry forward URL unless the host is localhost, so the hop could never run
-  — so the accepted risk was withdrawn (2026-07-22) and the collector moved to a
-  **co-resident localhost sidecar** in the gateway task (§5.3). There is now no
-  plaintext telemetry leg to accept: SC-8 is met by absence of network
-  transmission, with no new PKI to manage (`security-review-2026-07.md` C2 + fix
-  log; `architecture.md` §10 note 1). This is surfaced here rather than silently
-  dropped because it reverses a decision recorded in earlier review packages.
-- **C9 — S3 Object Lock / WORM on audit buckets is deferred**, by decision
-  (2026-07-15). Revisit if AU-9 WORM retention is mandated
-  (`security-review-2026-07.md` C9; `architecture.md` §10 note 3).
+- **There is no plaintext telemetry leg to accept.** Earlier review packages
+  recorded the gateway→collector OTLP hop as an accepted
+  plaintext-but-SG-scoped risk. That acceptance is **withdrawn**: the gateway
+  refuses a non-HTTPS telemetry forward URL unless the host is localhost, so
+  the hop was never implementable, and the collector runs as a **co-resident
+  localhost sidecar** in the gateway task instead (§5.3). SC-8 is met by
+  absence of network transmission, with no new PKI to manage
+  (`architecture.md` §10 note 1). Surfaced here rather than silently dropped
+  because it reverses a decision recorded in earlier packages.
+- **S3 Object Lock / WORM on audit buckets is deferred**, by decision. The
+  archives are CMK-encrypted, IAM-scoped, and `Retain`-protected, but a
+  sufficiently privileged principal could still delete or shorten retention
+  — and that exposure is not uniformly narrowed by versioning today: only
+  the portal artifacts bucket (04) has `VersioningConfiguration` enabled;
+  the activity-archive and Bedrock prompt-log buckets (03) do not. Revisit
+  if AU-9 WORM retention is mandated (`architecture.md` §10 note 3).
+- **Spend enforcement fails closed.** `enforcement.fail_closed_on_error: true`
+  means a spend-store (RDS) outage blocks inference **fleet-wide** rather than
+  allowing uncapped requests — a deliberate availability-for-control trade.
+  Recovery procedure: `docs/operations/cost-controls.md` §5.
 - **ALB access-logs bucket uses SSE-S3, not the CMK** — an AWS platform
   limitation (ELB log delivery does not support KMS), not an oversight; the
   bucket blocks public access and expires on a lifecycle (`architecture.md` §9,
   §10 note 2).
+- **`ClientIngressCidr` is the pre-auth reachability bound** and must be set
+  per deployment to the ZPA App Connector source range: the same ALB security
+  group fronts the gateway, `/grafana`, and the portal (all three of which
+  independently require Okta with group or domain checks).
 
 ---
 
@@ -544,20 +561,24 @@ D correctness, C12 least-privilege DB user) is in `security-review-2026-07.md`.
   4.8** (`us-gov.anthropic.claude-opus-4-8`), **Sonnet 5**
   (`us-gov.anthropic.claude-sonnet-5`), and **Sonnet 4.5**
   (`us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`) in `us-gov-west-1`.
-  Sonnet 5 became available in GovCloud Bedrock in 2026-07 and is now the
-  configured Sonnet-tier default; its inference-profile ID above (un-dated
-  format, like Opus 4.8) was confirmed by the operator on 2026-07-27.
-  Sonnet 4.6 was never offered in
-  GovCloud, and no Haiku-family model is (Sonnet 4.5 fills the small/fast
-  role). Model IDs must always be verified against the Bedrock console before
-  changing defaults (`scripts/deploy.env.example`; CLAUDE.md "GovCloud model
-  availability").
+  Sonnet 5 is the configured Sonnet-tier default; its inference-profile ID is
+  un-dated, like Opus 4.8. Sonnet 4.6 was never offered in GovCloud, and no
+  Haiku-family model is (Sonnet 4.5 fills the small/fast role). Model IDs must
+  always be verified against the Bedrock console before changing defaults
+  (`scripts/deploy.env.example`; CLAUDE.md "GovCloud model availability").
 - **Template, not a deployment.** No organization-specific value is hardcoded;
   each is a CloudFormation parameter or a `deploy.env` variable
   (`.claude/rules/security.md`).
-- **Client distribution is the precompiled native binary only** (decision
-  2026-07-15); Grafana auth is Okta SSO; Object Lock is deferred (CLAUDE.md
-  "User decisions").
+- **Client distribution is the precompiled native binary only**; Grafana auth
+  is Okta SSO; Object Lock is deferred (CLAUDE.md "User decisions").
+- **Account-level CloudTrail is assumed, not provisioned by this repo.** No
+  template here creates an `AWS::CloudTrail::Trail`; management-event
+  coverage (AU-2/AU-6) is assumed inherited from the landing zone's account
+  baseline, not verified by this project. Object-level (S3 data-event)
+  logging on the activity-archive and Bedrock prompt-log buckets is not
+  configured anywhere in these templates; if data-event coverage on those
+  two buckets is required for the ATO package, it must be added to the
+  org's trail (or a dedicated trail provisioned) as a separate action.
 
 ### 8.2 Organizational dependencies (prerequisites)
 
@@ -580,29 +601,21 @@ operate; templates for the requests exist in the repo:
 - **Okta groups claim configured — hard prerequisite for the portal.** The
   `groups` *scope* alone yields group membership in **neither** the ID token
   nor userinfo on an org authorization server; an Okta admin must configure a
-  groups **claim**, or the portal denies every user. The gateway and Grafana
-  tolerate this today (email-domain gating; Grafana needs groups too but is
-  optional); the portal does not (`docs/requests/okta-request-email.md`;
+  groups **claim**, or the portal denies every user. The gateway gates on email
+  domain and Grafana is optional, so the portal is the surface that makes this
+  a hard prerequisite (`docs/requests/okta-request-email.md`;
   `docs/operations/om-runbooks.md`).
 
-### 8.3 Verification status — verified on paper vs. verified live
+### 8.3 Operational status
 
-Per the "done means verified live" discipline (`.claude/rules/process.md`), the
-following is stated honestly for reviewers:
+The deployment has completed end-to-end validation in the target GovCloud
+account and operates in steady state: developer sign-in through Okta, inference
+against the three approved Bedrock models, the least-privilege DB user and its
+automated rotation, usage telemetry reaching AMP through the loopback sidecar,
+Grafana dashboards, the audit surfaces of §5.4, and the download portal.
 
-- **First end-to-end test run is IN PROGRESS** (as of 2026-07-17). Proven live
-  so far: DB bootstrap and app-user auth, RDS `verify-full` TLS, offline image
-  builds on a hardened host, ALB + access logs, and the endpoint-SG reachability
-  model (CLAUDE.md Status).
-- **Currently blocked** on one org prerequisite — the Zscaler ALLOW +
-  SSL-inspection exemption for the Okta issuer FQDN on server-side egress —
-  which the gateway needs for OIDC discovery at boot (CLAUDE.md Status;
-  `docs/requests/networking-request-email.md`).
-- **Still unexercised** and therefore not yet claimed as fielded: gateway steady
-  state and end-to-end developer login, Grafana Okta login, secret rotation, the
-  activity archive, and the **download portal end-to-end** (live Okta
-  round-trip with the groups claim, a real ~100 MB streamed download through
-  the ALB, listener-rule and audit-log wiring) (CLAUDE.md Status;
-  `security-review-2026-07.md` "What remains"). The system is not
-  production-ready until the runbook's validation checklist
-  (`docs/operations/test-run-runbook.md` §9) is green.
+Re-deployments into a new account follow
+`docs/operations/greenfield-deployment.md`, whose validation checklist is the
+gate before a deployment is treated as fielded; steady-state procedures are in
+`docs/operations/om-runbooks.md` and failure-mode triage in
+`docs/operations/troubleshooting.md`.

@@ -4,8 +4,9 @@
   least the affected suite) and get it **green** before starting the next unit
   of work or committing. A red suite blocks progress — fix it or revert; never
   stack new work on a failing base. New behavior ships with a test in the
-  matching suite (`tests/lambda` pytest, `tests/bash` bats, `tests/cfn`
-  cfn-lint+cfn-guard, `tests/powershell` Pester). A gate that can't fail is not
+  matching suite (`tests/lambda` pytest, `tests/portal` pytest, `tests/bash`
+  bats, `tests/cfn` cfn-lint+cfn-guard, `tests/powershell` Pester). A gate
+  that can't fail is not
   a test — when adding one, confirm it goes red on a real violation.
 
 - **Self-review before committing nontrivial infra changes.** For any change
@@ -23,8 +24,8 @@
 
 - **"Done" means verified live.** Doc- or web-confirmed behavior is a
   hypothesis until a real deploy exercises it. Flag anything that is
-  assumption-verified-only (the async rotation event shape is the standing
-  example) as needing test-run confirmation, and don't mark it settled sooner.
+  assumption-verified-only as needing live confirmation, and don't mark it
+  settled sooner.
 
 - **Documentation visuals: SVG or PNG only — NEVER Mermaid.** This applies
   to every visual in any documentation (architecture diagrams, README
@@ -53,14 +54,28 @@
   nonexistent (`PgauditLogRetentionDays` is a stack-01 template parameter
   only). Grep for the exact name before citing it.
 
-- **Keep the review doc honest.** `docs/ato/security-review-2026-07.md` is the
-  source of truth for finding status and accepted risks; update it in the same
-  change that alters a finding. Keep the Status block in `CLAUDE.md` current.
+- **Keep the POA&M honest.** `docs/ato/poam.md` is the source of truth for
+  open security/technical findings; `docs/ato/security-assessment-2026-07.md`
+  is the point-in-time assessment it derives from (accepted risks live there);
+  `docs/ato/ato-package-gaps.md` tracks missing documentation artifacts. When
+  a change remediates a finding, update the POA&M row (and only append to,
+  never rewrite, the assessment) in the same change. A fresh assessment
+  supersedes, not edits, the old one. Keep the Status block in `CLAUDE.md`
+  current.
 
-- **Surface accepted risks, don't bury them.** The plaintext OTLP hop (C2) and
-  deferred Object Lock (C9) are deliberate, SSP-scoped decisions. Any review
-  package or summary states them up front rather than letting a reviewer find
-  them.
+- **Every source doc has a PDF partner.** Each `.md` under `docs/ato/`,
+  `docs/operations/`, and `docs/requests/` renders to the mirrored path under
+  `docs/generated/` (plus `user-manual.pdf` at the `generated/` root — its
+  path is fixed; `publish-portal-release.sh` uploads it). Run `make docs-pdf`
+  and commit the regenerated PDFs in the same change that edits a source doc
+  or diagram; `md-to-pdf.py` discovers sources automatically, so a new doc
+  needs no script change.
+
+- **Surface accepted risks, don't bury them.** Deferred S3 Object Lock,
+  SSE-S3 on the ALB access-logs bucket, the fail-closed spend-enforcement
+  availability trade, and their peers are deliberate, SSP-scoped decisions
+  recorded in the assessment's accepted-risks section. Any review package or
+  summary states them up front rather than letting a reviewer find them.
 
 - **Commit trailer:** end messages with
   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.

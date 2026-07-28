@@ -9,541 +9,91 @@ A **client-configurable, code-driven** deployment of Anthropic's self-hosted
 Claude apps gateway for Claude Code, targeting **AWS GovCloud
 `us-gov-west-1`**: internal ALB + ECS Fargate gateway, RDS PostgreSQL store,
 Bedrock inference (Opus 4.8 / Sonnet 5 / Sonnet 4.5 via `us-gov` inference
-profiles),
-Okta OIDC, an offline Windows client rollout, and an optional usage/cost
-observability stack (AMP + ADOT collector + Grafana). End users are on
-Zscaler-secured Windows laptops (ZPA) in an AWS Landing Zone (Transit
-Gateway, central egress).
+profiles), Okta OIDC, an offline Windows + Linux client rollout, an optional
+usage/cost observability stack (AMP + ADOT sidecar + Grafana), and an
+optional Okta-secured installer download portal. End users are on
+Zscaler-secured laptops (ZPA) in an AWS Landing Zone (Transit Gateway,
+central egress).
 
 It is a **template, not a single deployment** — every org-specific value is a
 CloudFormation parameter or a `scripts/deploy.env` variable.
 
 ## Status (keep this current)
 
-**As of 2026-07-17: first end-to-end test run IN PROGRESS.** Stacks 01/02
-deploy; proven live so far: DB bootstrap + app-user auth, RDS TLS
-(verify-full via the OS trust store — the driver ignores `sslrootcert=`),
-offline image builds on a hardened host (legacy Docker builder, umask 077),
-ALB + access logs (after evicting a landing-zone auto-remediation), and the
-endpoint-SG reachability model (workloads + in-VPC admin host).
-**Currently blocked on one org prerequisite: a Zscaler ALLOW +
-SSL-inspection exemption for the Okta issuer FQDN on the VPC's server-side
-egress** — gateway boot fails at OIDC discovery (403) until it lands. The
-running fix log is at the top of `docs/ato/security-review-2026-07.md`. Still
-unexercised: gateway steady state + end-to-end login, Grafana Okta login,
-secret rotation, activity archive. Not production-ready until the runbook's
-validation checklist is green.
+**As of 2026-07-28: the pilot deployment is LIVE and stable.** All four
+stacks deploy from this repo and the end-to-end path is proven in
+production: Okta sign-in, the three-model menu on Bedrock, per-user/group
+spend caps with fail-closed enforcement, client telemetry → AMP → the
+Grafana dashboard, the activity archive, the download portal (Windows and
+Linux), and secret rotation. The docs describe this steady state; the
+hard-won symptom→cause→fix lessons from bring-up live in
+`docs/operations/troubleshooting.md`, not in narrative history.
 
-**Added 2026-07-18: the optional installer download portal (stack 04).**
-Code-complete with a full test suite (`tests/portal`) green; NOT deploy-verified
-— the Okta OIDC round-trip and the streamed download at real size need the live
-test run (and the same in-flight Zscaler/Okta egress exemption the gateway
-needs). Its new surface + controls are in `docs/ato/security-review-2026-07.md` §E.
-
-**Upgraded 2026-07-27 (committed, NOT yet deployed): portal v2 — Flask
-restructure + self-usage page, all-users admin spend table, user-guide PDF,
-fingerprint page.** `docker/portal/app.py` (single-file stdlib http.server)
-is replaced by a Flask 3 + gunicorn package (`docker/portal/portal/`;
-`PORTAL_VERSION` → 2.0.0; new deps are committed pure-Python wheels via
-`mirror-python-deps.sh portal`). Zero-JS constraint LIFTED (user decision
-2026-07-27): first-party JS only, CSP gains `script-src 'self'` (inline
-still banned). New pages: home cards; `/portal/download-page` with chained
-Cost-Center→Team dropdowns (noscript = the old two-step flow, server-side
-validation unchanged); `/portal/me` — own caps + period-to-date spend via
-the gateway's `GET /v1/organizations/spend_limits/effective`
-(binary-verified 2.1.211: row per user per period, fractional-cents spend →
-Decimal, forward-only paging, `sort=spend_desc` needs exactly one period);
-`/portal/guide`(+`.pdf`) — `publish-portal-release.sh` now uploads
-`docs/generated/user-manual.pdf` to the artifacts bucket (04 param
-`UserGuideKey`, container env `USER_GUIDE_KEY`, deploy.env
-`PORTAL_USER_GUIDE_KEY`); `/portal/fingerprint` — live
-gateway leaf SHA-256 in both encodings (the exact format Claude Code's
-first-connect prompt shows is UNVERIFIED in-repo, hence both);
-`/portal/admin/users` — per-admin device-flow bearer, NOT the read key.
-**Posture change stated in §E:** the portal task now injects the READ-ONLY
-spend key (02 export `${NamePrefix}-spend-read-key-arn` → 04 secret
-`SPEND_READ_KEY`) — disclosure-only blast radius, the write key stays out
-of 04; `PortalToAlbIngress` is now UNCONDITIONAL. **04 now requires a 02
-deployed with the export** — upgrade order: mirror wheels (egress host) →
-commit → build+push 2.0.0 → 02 re-run FIRST → 04 →
-`publish-portal-release.sh`. Needs live (04 still has zero deploy
-verification): `/effective` against the deployed gateway, fingerprint vs
-the real ALB cert, guide + ZIP streaming at real size (incl. mid-stream
-abort = truncated chunked body under gunicorn), and the admin users page
-end to end. Runbook: om-runbooks §6 (portal bullet); read paths:
-`cost-controls.md` §3.4.
-
-**Added 2026-07-28 (committed, NOT yet deployed): Linux client download —
-portal platform selector + `install-claude-code.sh` + Linux managed-settings
-runbook.** The download form gains a Platform pick (Windows 64-bit / Linux
-x64; server-side `validate_platform`, missing param defaults to windows so
-old bookmarks keep working). The Linux ZIP streams `releases/<ver>/claude`
-plus `client/install-claude-code.sh` (the PS1's Linux twin: no root,
-staged-copy SHA-256 verify, `~/.local/bin` install, PATH via `~/.bashrc`,
-python3-based settings.json env merge that refuses unparseable files;
-refuses root; bats-covered in `tests/bash/install-linux.bats` + exercised
-end-to-end locally incl. the portal-generated `install.sh` wrapper + bundled
-extra-CA path `~/.local/bin/claude-extra-ca.pem`).
-`publish-portal-release.sh` now REQUIRES + re-verifies + uploads both
-platform binaries and both installers — **re-run it before (or with) the
-portal image bump, or Linux downloads abort mid-stream** (old buckets lack
-`releases/<ver>/claude`). No template/IAM changes; audit records gain
-`platform`. Gateway login on Linux = the same managed-settings JSON in
-root-owned `/etc/claude-code/managed-settings.json` (client-config.md Part I
-§2.3 + Part II §8.5) — the path is **doc-verified against Anthropic's
-settings docs only**; the whole Linux flow needs live test-run confirmation.
-
-**Added 2026-07-28 (committed, NOT yet deployed): portal home page gets a
-group-gated Grafana dashboards link.** New optional `PORTAL_GRAFANA_GROUPS`
-(04 param `PortalGrafanaGroups`; empty default = no card) shows a card
-linking to `https://<GATEWAY_FQDN>/grafana` when the signed-in user is in
-any listed Okta group — set it to the union of the three `GRAFANA_*_GROUP`
-vars (the groups 03's strict role mapping admits); leave empty when 03 is
-not deployed. UX-only gate (Grafana re-checks membership at login); env
-`GRAFANA_URL` is template-derived; groups-without-URL is a portal boot
-failure. Deploy: bump+push portal image, re-run `deploy-download-portal.sh`.
-Full entry in the security-review fix log.
-
-The full security review (`docs/ato/security-review-2026-07.md`) is implemented:
-batches A (deploy-breakers), B (ZPA/landing-zone prerequisites), C (FedRAMP
-hardening C1–C11), D (correctness), and C12 (least-privilege app DB user +
-self-rolling rotation). **Deferred by decision:** C9 (S3 Object Lock).
-**Resolved by hop elimination — pending live verification (2026-07-22):** C2.
-The live run disproved the documented "plaintext-but-SG-scoped" gateway→collector
-posture — the gateway **refuses** a non-HTTPS `telemetry.forward_to` unless the
-host is localhost, so that network hop could never boot — so the accepted risk
-is **withdrawn as unimplementable**. The ADOT collector now runs as a
-**localhost sidecar** inside the gateway task (loopback within one Fargate
-network namespace), which satisfies SC-8 by absence of network transmission — a
-stronger posture than TLS, with no new PKI. The sidecar **fails closed by
-default** (`TelemetryFailClosed=true`, AU-5): it is Essential + health-checked
-and the gateway waits on it HEALTHY, so the gateway will not serve traffic while
-telemetry/audit processing is down; a **missing-telemetry alarm** (03,
-`AWS/Usage ResourceCount`/`IngestionRate` on the workspace) is the end-to-end
-backstop that container health cannot provide.
-
-**Added 2026-07-27 (committed): the ATO RESUBMISSION assessment —
-`docs/ato/security-review-2026-07-resubmission.md` (in the PDF set).**
-Point-in-time multi-agent review of the whole posture at `a3ba69f` (8
-dimensions; every finding adversarially verified with web-checked service
-semantics before inclusion). Result: 0 critical / 0 high / **5 medium** /
-20 low / 2 info. The mediums are four monitoring gaps (no RDS alarm for the
-fail-closed spend store; no automated `failed_translations` detection; the
-Firehose→S3 activity-archive leg unmonitored; portal audit writes fail open
-unalarmed) plus `mirror-collector.sh` missing the arch pin/assert its sibling
-has. Doc drift found+fixed in the same change: stack-04 portal SG added to
-`network-access-controls.md`'s tables; the two spend-admin keys added to
-om-runbooks §7's secrets inventory. Remediation sequence in that doc's §6;
-the living review doc stays the fix log — new findings live in the
-resubmission doc, not the A–E batches.
-
-**Fixed 2026-07-24 (committed, NOT yet deployed): client usage metrics were
-silently dropped at prometheus translation — delta temporality.** With the
-sidecar finally reachable, `otelcol_*` landed in AMP but zero `claude_code_*`
-did, while every counter looked healthy: delta points are dropped at
-TRANSLATION yet **still counted as sent**, `send_failed` 0, nothing logged
-(reproduced on the pinned ADOT v0.43.0; live giveaway =
-`otelcol_exporter_prometheusremotewrite_failed_translations` climbing with
-client activity — operator-found). Fix: the managed catch-all policy now pushes
-`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "cumulative"` to every
-client; a sidecar `deltatocumulative` processor was rejected (two sidecars
-behind the ALB would rebuild conflicting cumulative sums for the same series).
-Re-run `deploy-gateway.sh`; clients pick the env up on their next settings
-fetch; confirm `claude_code_*` appears and `failed_translations` goes flat.
-**DEPLOY-CONFIRMED metrics flowing.** Follow-up fix in the same area:
-`session.id` is now KEPT as a metric label (the sidecar previously deleted it
-for cardinality) - concurrent sessions from one user interleaved onto one
-series as a sawtooth and `increase()` inflated spend drastically (observed
-live). Each session is now its own monotonic series; dashboards unchanged;
-cardinality bounded by concurrent sessions.
-
-**Fixed 2026-07-24 (committed, NOT yet deployed): the loopback telemetry
-sidecar could never work.** Live symptom: `forward to http://localhost:4318
-failed: ECONNREFUSED_SSRF: blocked (cloud metadata / link-local): localhost ->
-127.0.0.1`. The gateway refuses a non-HTTPS `forward_to` unless the host is
-loopback — and then its SSRF guard blocks loopback — so C2's sidecar resolution
-was missing a half. Fix: `CLAUDE_GATEWAY_ALLOW_LOOPBACK=1` on the gateway
-container (gated on `HaveTelemetry`). It re-permits only loopback/unspecified;
-EC2 IMDS and the other metadata addresses stay blocked — probe-verified.
-Config validation cannot catch this (the static check sees the hostname
-`localhost`, not the resolved `127.0.0.1`), which is why it surfaced only in
-production.
-
-**Added 2026-07-24 (committed, NOT yet deployed): per-user / per-group spend
-caps; `MANAGED_CLI_GROUPS` retired.** 02 now configures the gateway's `admin:`
-block (the master switch for spend enforcement) + two CMK-encrypted generated
-admin keys, and sets `enforcement.fail_closed_on_error: true` — **an availability
-trade: a spend-store outage halts all inference fleet-wide** (recovery path in
-`docs/operations/cost-controls.md` §5). Caps are **data, not config**: rows in `spend_limits` set
-by `scripts/set-spend-limit.sh` (per user / per `rbac_group` / org-wide), so no
-cap rows = no enforcement. `MANAGED_CLI_GROUPS` is gone — its update lockdown now
-reaches every user via the catch-all policy — but the `groups` scope is now
-requested **unconditionally**, because per-group caps resolve against the Okta
-groups claim. Verified end to end against the mirrored gateway + a throwaway
-Postgres (both cap scopes created and listed; read key refused for writes).
-
-**Fixed 2026-07-24 (committed, NOT yet deployed): the client model picker
-offered models the gateway does not serve.** End-to-end login now works; the
-first real session showed Claude Code's own built-in `/model` menu, so every
-pick failed as unauthorized. `models:` only governs what the **gateway serves** —
-constraining the client's picker requires pushing `availableModels` via
-`/managed/settings`, which the template never rendered (it lived only in a
-comment). Worse, that comment put `availableModels` at the **policy** level,
-which the gateway rejects as an unrecognized key — a boot failure had anyone
-implemented it. Correct placement (binary-verified against the mirrored 2.1.211
-gateway) is **inside the policy's `cli:` object**, since
-`availableModels`/`enforceAvailableModels` are Claude Code `settings.json` keys.
-(`cli` is *not* an unvalidated passthrough: unknown keys there are fatal — but
-only checked once the Postgres store connects, so probes against a dead DB miss
-it entirely.)
-`GATEWAY_MANAGED_B64` is now always rendered, with an unconditional (no `match:`)
-allowlist policy that needs no Okta groups claim. **Policy order is load-bearing:**
-selection is first-match-wins and a `match:`-less policy matches everyone, so the
-catch-all allowlist must be **last** or the group-scoped update lockdown becomes
-dead config (caught pre-commit by multi-agent review; runtime-verified against a
-throwaway Postgres). **Next step: confirm the deployed gateway image contains the
-`GATEWAY_MANAGED_B64` stanza from `docker/entrypoint.sh` (added in `1f856ad`) -
-an older image ignores the env var SILENTLY - rebuilding with a bumped tag if
-not; then re-run `deploy-gateway.sh` and confirm `/model` in a live session.**
-
-**Added 2026-07-27 (committed, NOT yet deployed): the cost-change audit
-trail now names the Okta user by email.** The gateway's `admin_audit`
-records only `oidc:<sub>` and its schema is the binary's — so the email is
-captured alongside: the portal persists sub→email (session email +
-unverified-decoded gateway-token `sub`, attribution only) as per-sub JSON
-under the artifacts bucket's reserved `identity/principal-emails/` prefix at
-admin connect, and `/portal/admin/audit` gains an Email column joined from
-it (unmapped actors = dash); portal `portal_admin` audit lines add
-`gateway_actor`; `dump-usage.py` LEFT JOINs `admin_audit` to the gateway's
-own `principal_emails`. 04's task role gains `s3:PutObject` on that prefix
-only + `kms:GenerateDataKey`. Deploy: bump+push portal image, re-run
-`deploy-download-portal.sh`. Rebased onto the merged portal-v2 Flask
-restructure: capture lives in `docker/portal/portal/identity.py`, wired in
-`views/admin.py`/`gateway.py`/`audit.py`; Email column in
-`templates/admin_audit.html`. Full entry in the security-review fix log.
-
-**Fixed 2026-07-27 (committed; live repair NOT yet run): 01 DETACHED its own
-CMK on the first re-run — key-policy updates silently applied to nothing.**
-Found live enabling prompt logging: `PutModelInvocationLoggingConfiguration`
-failed blaming the S3 bucket policy, but the denial was at KMS — the CMK
-never got the Bedrock `GenerateDataKey` statement because
-`deploy-database.sh` fed the PERSISTED key ARN back as the `KmsKeyArn`
-parameter, flipping the stack to BYO mode on its first re-run
-(CloudFormation dropped the Retain'd key, deleted `alias/<prefix>`; every
-runbook-following deployment is affected). Fixes: `resolve_kms_param`
-(common.sh, bats-covered) — an existing stack keeps its own recorded
-parameter, `ALLOW_KMS_PARAM_CHANGE=1` overrides, unexpected lookup errors
-are fatal; a KMS preflight in `deploy-observability.sh` (fail-fast with the
-real cause); `KmsKeyAlias` DeletionPolicy Retain. Live repair (om-runbooks
-§11a): out-of-band `BedrockInvocationLogsWrite` now, optional CMK re-adoption
-via CloudFormation IMPORT changeset later — both need test-run confirmation.
-Bedrock's misleading bucket error + the KMS prerequisite are documented in
-§11.
-
-**Added 2026-07-28 (committed, NOT yet deployed): minimum client version
-enforcement — the managed catch-all policy pushes `requiredMinimumVersion`,
-defaulting to the gateway's own version.** New 02 param `MinClientVersion`
-(deploy.env `MIN_CLIENT_VERSION`: empty → `CLAUDE_VERSION`, `none` →
-disabled, else `X.Y.Z`; script + `AllowedPattern` both validate). A client
-older than the floor exits at startup with instructions to update; the key
-is honored only from managed settings, fails open on invalid values, and
-takes effect at a client's next start after a settings fetch. Because
-auto-updates are locked down, raise the floor only after
-`publish-portal-release.sh` has the matching installer up (om-runbooks §6;
-client-config.md §6e). Boot-verified against the mirrored 2.1.211 AND
-2.1.207 gateway binaries (typo'd key = boot failure, so the schema check is
-real). Deploy: re-run `deploy-gateway.sh`; live check = old client blocked
-at start, current client connects.
-
-**Added 2026-07-25 (committed, NOT yet deployed): Bedrock prompt logging,
-opt-in.** Bedrock model invocation logging = verbatim prompts+responses of
-EVERY bedrock-runtime call in the ACCOUNT+REGION (not just this gateway's),
-attributed to the gateway TASK ROLE (per-user stays the activity stream).
-No native CFN resource exists: 03 creates the destinations UNCONDITIONALLY
-(CMK CloudWatch group `/claude/<prefix>/bedrock-prompts` 14d window + CMK S3
-bucket 731d — the ONLY place >100KB bodies land; conditioning them on the
-flag was reviewed and rejected: fixed-name Retain group collides on
-re-enable, and dropping the role/grant while the account config points at
-them stops delivery silently), `deploy-observability.sh` applies the
-account-level setting from tri-state `BEDROCK_PROMPT_LOGGING` (empty=never
-touch; false=get-then-delete, no-op when already off). 01's CMK policy gains the
-docs-prescribed `kms:GenerateDataKey` for bedrock.amazonaws.com
-(SourceAccount/SourceArn-scoped, inert until enabled; BYO-key deployments
-add it themselves). Bucket grant is bucket-wide PutObject (conditions carry
-the restriction) because the large-data prefix is delivery-managed and
-undocumented — tighten after first live delivery. Enable order: 01 re-run →
-03 with the flag. Doc-verified only; GovCloud round-trip, SSE-KMS delivery,
-and the data prefix need the live run. Runbook: om-runbooks §11 (old 11/12
-renumbered 12/13); structural tests pin the condition keys + fixed stream
-name.
-
-**Upgraded 2026-07-25 (committed, NOT yet deployed): Grafana 11.5.1 → 13.1.1**
-(11.x left security support 2026-06-15). Three coupled changes: the OSS image
-is now `grafana/grafana` (the `grafana-oss` Docker Hub repo froze at 12.4);
-Grafana ≥13.1 **removed SigV4 from the core prometheus datasource**, so
-`build-and-push-grafana.sh` now bakes the Grafana-signed
-`grafana-amazonprometheus-datasource` plugin into the image (pinned +
-sha256-verified via `scripts/mirror/mirror-grafana-plugin.sh`, part of the
-central mirroring layer; the egress-less task can't fetch it at boot) and `amp.yaml`
-provisions that type (uid `amp` unchanged — dashboards unaffected); and 03
-sets `GF_PLUGINS_PREINSTALL_DISABLED=true` (the ≥12 background preinstaller
-dials grafana.com every boot — the #92707 crash-loop class). Runtime-verified
-against a throwaway 13.1.1 with `--network none` (boot, provisioning, plugin
-signature with key-retrieval disabled, uid-routed SigV4 query path); still
-needs live: Okta login on 13.1 (expect one-time re-login for all users) and
-the Fargate task-role credential path from the plugin subprocess. Full entry
-in the security-review fix log.
-
-**Added 2026-07-27 (committed): `scripts/mirror/mirror-base-images.sh` — one
-script mirrors all four container base images into ECR, digest-pinned.**
-Pulls (pinned `--platform linux/amd64` + post-pull arch assert — every
-consumer is X86_64), pushes into per-base CMK+IMMUTABLE repos
-(`<prefix>-base-{gateway,lambda,grafana,portal}`), and persists digest-pinned
-`GATEWAY/LAMBDA/GRAFANA/PORTAL_BASE_IMAGE` into `deploy.env`, which the
-build scripts consume. Local tags are `<upstream-tag>-<12-hex digest>` so
-floating upstream tags never collide with immutable repos and re-runs are
-idempotent (same content → same tag → push skipped). Fails closed without
-`KMS_KEY_ARN` (ECR encryption is creation-fixed; `ALLOW_NONCMK_BASE_REPOS=1`
-is the named override). Same dual-reach host profile as
-`mirror-collector.sh`; `set_env_var` persists locally, so runbooks + the
-script's own output say to copy the `*_BASE_IMAGE` lines over when hosts
-differ. **A pinned `*_BASE_IMAGE` beats the build script's version-derived
-default — Grafana version bumps now start with
-`GRAFANA_VERSION=<new> mirror-base-images.sh grafana`** (om-runbooks update
-section). New `split_image_ref` helper in common.sh (bats-covered).
-Runtime-UNVERIFIED against real registries: exercised only with stubbed
-docker/aws; the first target-profile run proves it.
-
-**Added 2026-07-26 (committed, NOT yet deployed): dashboard cumulative
-panels — stale clients no longer fall off the graphs; Sessions/Active-users
-tiles were silently broken.** The trailing-1h time-series drained a session's
-contribution within an hour of the client going quiet (operator-reported
-trend confusion). The dashboard now has a **Cumulative (selected range)**
-section (per-session in-range rise via
-`max_over_time[$__range] - (last_over_time[1h] offset $__range or 0)`;
-sessions freeze at their final value and hold to the right edge; right edge
-== tiles) plus the old panels retitled **Burn rate (trailing 1h)**; tiles run
-as instant queries with the same accounting. Validation against a real
-Prometheus (synthetic multi-session TSDB, 22 assertions) also exposed that
-the Sessions/Active-users tiles' `{__name__=~"claude_code_.+"}` selector
-ERRORS whenever one session emits two attribute-less counters (range
-functions drop the metric name → "vector cannot contain metrics with the
-same labelset") — tiles now count `claude_code_cost_usage` only, and
-`amp-query.py`'s identical probe now uses the series endpoint. Full entry +
-caveats (range-start-spanning sessions, >1h export gaps): the 2026-07-26
-note in `docs/operations/om-runbooks.md`. Deploy: bump `GRAFANA_IMAGE_TAG`,
-rebuild+push, re-run 03; live checks are listed in the runbook entry.
-
-**Fixed 2026-07-27 (committed, NOT yet deployed): cumulative panels ghosted
-sessions that ended BEFORE the range start.** Live 1/2/3-day screenshots: a
-07/25 session showed at full value at the left edge of the 2-day view then
-"dropped off" mid-graph (1-day and 3-day were clean) — any session dying
-within one range-width before the range start sits inside the per-plot-point
-`[$__range]` lookback while its `offset $__range` baseline window is empty.
-Tiles were always right. Fix: all seven cumulative time-series are gated
-per-session on having a sample inside the VISIBLE range —
-`and count_over_time(m[$__range] @ end())` (the `@ end()` window == the
-visible range at every plot step). Tiles/table untouched (instant eval makes
-the gate a no-op — asserted). Re-validated on a real Prometheus (5-session
-synthetic TSDB, 16 assertions: old expr reproduces the screenshot ghost, new
-drops it, everything else value-identical, right edge == tiles). **The `@`
-modifier is standard PromQL but UNVERIFIED against AMP from this host — if
-unsupported, panels fail LOUDLY with a parse error; rollback = drop the
-gate clause.** Deploy: bump `GRAFANA_IMAGE_TAG`, rebuild+push, re-run 03;
-live check = re-open the previously-failing 2-day window. Full entry in the
-2026-07-27 om-runbooks note.
-
-**Fixed 2026-07-28 (committed, NOT yet deployed): cumulative curves stepped
-DOWN for sessions spanning the range start.** Live 12h view: a session that
-started before the range start declined near the right edge (its early climb
-mirrored one range-width later); the 24h view of the same data was clean.
-Cause: the `last_over_time(m[1h] offset $__range)` baseline is evaluated per
-plot point — the window slides forward and grows as it crosses the session's
-pre-range climb. Fix: the seven cumulative time-series anchor the baseline
-at the visible range start — `last_over_time(m[1h] @ start())` — so each
-curve is exactly `counter(t) − counter(range start)`: monotonic, same right
-edge. Tiles/table untouched (instant eval already equals the anchored
-window). Re-validated on a real Prometheus (6-session synthetic TSDB, 26
-assertions: old expr reproduces the decline, new is non-decreasing
-everywhere, ghost gate intact, right edge == tiles). The live screenshots
-also settle the earlier caveat: AMP accepts the `@` modifier (the `@ end()`
-gate renders). Multi-day ranges rely on Cortex rewriting `@ start()/end()`
-to absolute times before its per-day split — re-check a 3-day view live.
-Deploy: bump `GRAFANA_IMAGE_TAG`, rebuild+push, re-run 03. Full entry in the
-2026-07-28 om-runbooks note.
-
-**Fixed 2026-07-26 (committed): build scripts fetched from the internet on
-the OFFLINE build machine.** The real build/deploy host reaches only AWS
-service endpoints (new rule: `.claude/rules/offline-build.md`) — but
-`build-and-push-grafana.sh` invoked `mirror-grafana-plugin.sh` (grafana.com
-when the artifact was missing) and the gateway + db-admin builds curled the
-RDS truststore. Now: mirroring happens ONLY on the egress host
-(`scripts/mirror/`, incl. new `mirror-rds-ca-bundle.sh`), `mirror/` is copied
-to the build machine, and build scripts consume it — failing closed with
-transfer instructions (`require_mirrored_file`/`verify_sha256` in common.sh,
-bats-covered) instead of fetching. The gateway build also stages `claude`
-from `mirror/<version>/` itself (re-verified against the mirror's
-`CHECKSUMS.txt`) — the manual `cp mirror/<ver>/claude docker/claude` step is
-gone from every runbook. The Grafana plugin pin moved to
-`scripts/mirror/grafana-plugin.pin`, sourced by both the mirror script and
-the build-side re-verification. Runbooks updated (greenfield Phase 4,
-test-run §3, om-runbooks §4/§5/§6). Offline fail paths exercised locally;
-the real two-host mirror→transfer→build chain is exercised by the test run.
-
-**Changed 2026-07-27 (committed, NOT yet deployed): portal dropdowns are now
-dependent — Cost Center first, then that cost center's Teams.** The flat
-`PORTAL_TEAMS`/`PORTAL_COST_CENTERS` lists are REPLACED by one mapping:
-`PORTAL_COST_CENTER_TEAMS="CC-1000:platform|data,CC-2000:security"` (04 param
-`PortalCostCenterTeams`); update deploy.env — `deploy-download-portal.sh`
-`require_vars` fails on the old names. Zero-JS page → the dependency is a
-two-step GET round-trip (stage 1 picks the cost center, stage 2 renders only
-its teams + hidden cost_center). Validation now rejects wrong team/cost-center
-PAIRS; a malformed mapping fails the task at boot. Deploy: bump+push portal
-image, re-run `deploy-download-portal.sh`. Full entry in the security-review
-fix log.
-
-**Added 2026-07-25 (committed, NOT yet deployed): portal spend-cap admin page
-+ set-spend-limit.sh TLS fix.** (1) `set-spend-limit.sh` failed TLS because
-`--cacert` REPLACES curl's trust store — one extra CA can't verify a chain
-that terminates in the *other* trusted root (internal PKI vs Zscaler
-inspection). New `combined_ca_bundle` helper (common.sh, bats-covered) builds
-system store + GATEWAY_CA_BUNDLE + EXTRA_CA_CERT_PATH into one bundle.
-(2) Spend caps are now manageable from the download portal at
-`/portal/admin`, gated by TWO aligned Okta-group settings:
-`SPEND_ADMIN_GROUPS` (02 → the gateway `admin:` block's `admin_groups`, a
-schema key present back to at least 2.1.204) and `PORTAL_ADMIN_GROUP` (04 →
-the page's visibility). Admins act AS THEMSELVES: the page runs the gateway's
-OAuth device flow (RFC 8628) to get the signed-in admin's own gateway session
-token, every admin call is Bearer-authenticated with it, the gateway
-re-checks the token's groups claim per call, and `admin_audit` records
-`oidc:<sub>` instead of a shared key id. The portal stores NO admin key or
-signing secret; tokens live in a signed HttpOnly cookie; pages stay
-JavaScript-free (meta-refresh device-flow polling; SameSite=Lax is the CSRF
-control). 04 adds ALB-443-ingress-from-portal-SG (the portal task is now an
-ALB client) + GatewayFqdn in NO_PROXY. RUNTIME-VERIFIED offline end to end
-(local 2.1.220 gateway + throwaway Postgres + fake RS256 Okta): device flow
-exactly as the portal drives it, in-group bearer = write + per-user audit
-actor, out-of-group bearer = 401 read AND write, refresh grant, and the three
-response-shape gotchas the UI now pins (nested `scope`, no `created_by`,
-cleared caps linger as `amount: null` rows). `set-spend-limit.sh` + keys stay
-as break-glass. Deploy: bump+push portal image, re-run `deploy-gateway.sh`
-and `deploy-download-portal.sh`; then confirm the flow through the real
-ALB/Okta.
-
-**Added 2026-07-24 (committed, NOT yet deployed): web/MCP tool denies +
-small-model override in the managed catch-all policy.** Two additions to the
-same `GATEWAY_MANAGED_B64` `cli:` block:
-`permissions: { deny: ["WebFetch", "WebSearch", "mcp__*"] }` (bare tool name =
-removed from the model's context entirely; `mcp__*` = every MCP tool; managed
-scope, so not user-overridable — WebFetch fetches locally on the client and
-would only fail slowly here; WebSearch is server-side and Bedrock doesn't
-expose it, so that deny is tidiness) and
-`env.ANTHROPIC_DEFAULT_HAIKU_MODEL: <SonnetModelId>` (since the 2026-07-27
-Sonnet 5 rollout this renders `<HaikuModelId>` — Sonnet 4.5 in the dedicated
-haiku slot) —
-without it the client's background/small-model calls request a Haiku-family
-model that neither GovCloud nor this gateway has, so they fail
-(`ANTHROPIC_SMALL_FAST_MODEL` is the deprecated name for the same knob).
-Subagents (`Agent`) deliberately NOT denied; `Bash` curl/wget remains the one
-web path, bounded by client-side Zscaler (user decisions 2026-07-24). BINARY-VERIFIED against the mirrored 2.1.211 build: `permissions`
-and `env` are in the managed-`cli` schema (no fatal-unknown-key), the env-var
-path uses the value verbatim with no allowlist check — which **closes the
-small-fast-model question the review doc had left open** — and the small-model
-value must be the GATEWAY-facing ID, not the Bedrock profile ID. Caveat: the
-gateway image default is 2.1.207, so run the throwaway-Postgres boot check
-against the deployed version before the 02 re-run. Deploy steps as with the
-allowlist: re-run `deploy-gateway.sh`; clients pick it up on their next
-settings fetch. Full entry in `docs/ato/security-review-2026-07.md`.
-
-**Fixed + LIVE-PROVEN 2026-07-23 (deployed): two AMP telemetry bugs.**
-(1) *CMK-encrypted AMP needs caller-side KMS.* Grafana ("Unable to retrieve
-metric names") and the sidecar (missing-telemetry ALARM) both got a server-side
-403. Querying a CMK-encrypted AMP workspace needs the *caller* to hold
-`kms:Decrypt`; remote-write needs `kms:GenerateDataKey` — the `aps.<region>`
-service grant covers only AMP's internal use, not the data-plane API. Fix
-(deployed): 03's `GrafanaTaskRole` gains `kms:Decrypt` (gated on `WantAmpCmk`),
-02's `telemetry-sidecar` role gains `kms:GenerateDataKey`, both scoped
-`kms:ViaService=aps.${AWS::Region}.amazonaws.com`. (2) *Alarm false-fired on
-idle fleet.* Client usage metrics are push-only/bursty, so an idle fleet
-produced no ingestion → `missing-telemetry` (TreatMissingData: breaching) would
-fire every quiet period. Fix (deployed): the sidecar's `prometheus` receiver
-now scrapes the collector's own `otelcol_*` self-metrics (loopback :8888) every
-30 s into the remote_write pipeline — a **continuous heartbeat** that also
-exercises the full SigV4+KMS+AMP write path (genuine AU-5 liveness). **Proven:**
-AMP now holds 20 `otelcol_*` series; alarm is OK. Still pending: fail-closed
-stop-on-broken-config, shutdown flush, alarm OK→ALARM→OK cycle (now cheap to
-test — stop the sidecar). Full proof in the 2026-07-23 fix-log entries of
-`docs/ato/security-review-2026-07.md`.
-
-**Added 2026-07-27 (committed, NOT yet deployed): Sonnet 5 — three-model
-menu; Sonnet 4.5 moves to the haiku slot.** Sonnet 5 became available in
-GovCloud Bedrock and is enabled in the account, so the served set is now
-three roles: Opus 4.8 (unchanged, still the client default), Sonnet 5
-(`SonnetModelId`/`SonnetBedrockModelId` defaults → `claude-sonnet-5` /
-`us-gov.anthropic.claude-sonnet-5`), and Sonnet 4.5 in the small/fast slot
-via NEW params `HaikuModelId`/`HaikuBedrockModelId` (deploy.env
-`HAIKU_MODEL_ID`/`HAIKU_BEDROCK_MODEL_ID`) — `ANTHROPIC_DEFAULT_HAIKU_MODEL`
-now follows `HaikuModelId`. `availableModels` carries all three; IAM +
-endpoint policies enumerate all three profile/foundation-model pairs; no new
-`cli:` keys (no boot-check needed). `deploy-gateway.sh` REFUSES duplicate
-gateway-facing IDs — a pre-Sonnet-5 deploy.env still setting
-`SONNET_MODEL_ID=claude-sonnet-4-5` collides with the haiku default; update
-deploy.env per the example, don't override the guard. The Sonnet 5 profile ID
-`us-gov.anthropic.claude-sonnet-5` (un-dated, like Opus 4.8) was CONFIRMED
-correct by the operator (2026-07-27). After the 02 re-run, check `/model`
-shows exactly three entries and background calls resolve to Sonnet 4.5. Full
-entry in the security-review fix log.
+Open security/technical findings (none critical or high) are tracked in
+`docs/ato/poam.md` — the source of truth for remediation status — derived
+from the point-in-time assessment `docs/ato/security-assessment-2026-07.md`,
+which also records the accepted risks (deferred S3 Object Lock, SSE-S3 ALB
+logs, the fail-closed spend-enforcement availability trade, and peers).
+ATO-package artifacts not yet authored are registered in
+`docs/ato/ato-package-gaps.md`.
 
 ## Repo map
 
 | Path | What |
 |---|---|
 | `cloudformation/01-database.yaml` | RDS PG16, the **KMS CMK** (created here, exported), db SGs, pgaudit |
-| `cloudformation/02-gateway.yaml` | ALB+TLS, ECS gateway (+ optional co-resident ADOT collector **sidecar** when telemetry is on), IAM, secrets, VPC endpoints, **db bootstrap + rotation Lambdas** |
-| `cloudformation/03-observability.yaml` | AMP, Grafana (Okta SSO), activity-archive chain; **outputs the AMP params the gateway sidecar consumes** (no standalone collector service — that moved into 02's task) |
+| `cloudformation/02-gateway.yaml` | ALB+TLS, ECS gateway (+ optional co-resident ADOT collector **sidecar** when telemetry is on), IAM, secrets, VPC endpoints, **db bootstrap + rotation Lambdas**, spend-cap admin keys, the managed client policy (`GATEWAY_MANAGED_B64`) |
+| `cloudformation/03-observability.yaml` | AMP, Grafana (Okta SSO), activity-archive chain, Bedrock prompt-log destinations; **outputs the AMP params the gateway sidecar consumes** (no standalone collector service — it lives in 02's task) |
 | `cloudformation/04-download-portal.yaml` | **optional** Okta-secured download portal (ECS Fargate at `/portal`, in-app OIDC + group auth, CMK S3 artifacts + audit log): installer downloads, self-usage, user guide, fingerprint, spend-cap admin. Imports 02's spend-read-key export |
-| `docker/` | gateway image + entrypoint; `db-admin/` (bootstrap+rotation Lambda); `grafana/`; `portal/` (download-portal **Flask package** `portal/` + `wsgi.py`, gunicorn, vendored wheels — since v2) |
+| `docker/` | gateway image + entrypoint; `db-admin/` (bootstrap+rotation Lambda); `grafana/`; `portal/` (download-portal **Flask package** `portal/` + `wsgi.py`, gunicorn, vendored wheels) |
 | `client/` | `Install-ClaudeCode.ps1` (non-admin Windows install) + `install-claude-code.sh` (no-root Linux install) |
 | `scripts/` | `deploy.env`-driven deploy/operate chain at the root (see `scripts/README.md`); `common.sh` holds the shared helpers |
-| `scripts/mirror/` | **all vendor mirroring**: Claude Code releases, ADOT collector image, the Grafana AMP datasource plugin, Python wheel vendor dirs (`mirror-python-deps.sh` + the per-image `requirements.txt`) |
+| `scripts/mirror/` | **all vendor mirroring**: Claude Code releases, ADOT collector image, base images, the Grafana AMP datasource plugin, the RDS CA bundle, Python wheel vendor dirs |
 | `scripts/diagnostics/` | telemetry/usage diagnostics (`diagnose-telemetry.sh`, `amp-query.py`, `dump-usage.sh`, …) |
-| `docs/README.md` | docs index: what lives where (`ato/`, `operations/`, `requests/`, `generated/`) |
-| `docs/ato/architecture.md` | review package: 8 SVG diagrams + secrets/SG/encryption inventories |
+| `docs/README.md` | docs index: what lives where (`ato/`, `operations/`, `requests/`, `generated/`) and the PDF-partner model |
+| `docs/ato/architecture.md` | ATO package: 8 SVG diagrams + secrets/SG/encryption inventories |
 | `docs/ato/conops.md` | ATO Concept of Operations: users/roles, operational scenarios, modes, accepted risks (references architecture, doesn't duplicate) |
+| `docs/ato/network-access-controls.md` | who-can-talk-to-what deep dive (SGs, endpoints, ingress/egress) |
+| `docs/ato/security-assessment-2026-07.md` | the point-in-time security assessment: methodology, findings, verified strengths, **accepted risks**, refuted claims |
+| `docs/ato/poam.md` | POA&M — **the source of truth for open findings**; update it when a change remediates one |
+| `docs/ato/control-implementation.md` | NIST 800-53 control → where implemented (template) / where documented (doc §) matrix |
+| `docs/ato/fips-199-categorization.md` | information types, C-I-A impacts, system categorization (org placeholders where only the org can decide) |
+| `docs/ato/ato-package-gaps.md` | register + stubs for ATO artifacts not yet authored, incl. org-level dependencies |
 | `docs/ato/diagrams/generate.py` | **source of the diagrams** — edit the script, re-run, commit both |
-| `docs/ato/security-review-2026-07.md` | finding-by-finding status; the source of truth for what's done |
-| `docs/ato/security-review-2026-07-resubmission.md` | point-in-time assessment for the ATO resubmission (methodology, accepted risks, confirmed findings, verification ledger); in the PDF set |
-| `docs/operations/greenfield-deployment.md` | **the reusable deploy runbook**: empty VPC → client authenticated, incl. the org-prerequisite request phase |
-| `docs/operations/test-run-runbook.md` | the dated first test-run log (2026-07) — historical checklist the greenfield runbook was distilled from |
+| `docs/operations/greenfield-deployment.md` | **the reusable deploy runbook**: empty VPC → client authenticated, incl. the org-prerequisite request phase and the Phase 11 end-to-end validation checklist |
 | `docs/operations/om-runbooks.md` | steady-state O&M runbooks (cert/secret rotation, CA refresh, updates, backup/restore, alarms, teardown) |
+| `docs/operations/troubleshooting.md` | symptom-indexed troubleshooting: what you see → cause → fix, by subsystem |
 | `docs/operations/cost-controls.md` | cost-control runbook: spend caps, dashboard walkthrough, fail-closed incident response |
 | `docs/operations/monitoring-and-retention.md` | product-owner summary: alarms, SNS contract, log/metric destinations + retention |
-| `docs/operations/client-config.md` | **client guide**: Part I = developer **user manual** (prereqs, install, sign-in walkthrough, troubleshooting — kept free of verification tags by user decision 2026-07-27); Part II = admin enforcement model (gateway `/managed/settings` push, **GPO/MDM forced-login** path). Ops how-to; not in the PDF set — but Part I is extracted to `docs/generated/user-manual.pdf` (the end-user handout, regenerated by `make docs-pdf`) |
-| `docs/requests/networking-request-email.md` | cert/DNS/Zscaler request template |
-| `docs/requests/okta-request-email.md` | Okta OIDC app request template (org server, Web app, groups) |
-| `docs/requests/ad-request-email.md` | AD/GPO request template — the machine-policy managed setting that enables gateway login |
+| `docs/operations/client-config.md` | **client guide**: Part I = developer **user manual** (prereqs, install, sign-in walkthrough, troubleshooting — kept free of verification tags by user decision), Part II = admin enforcement model (gateway `/managed/settings` push, **GPO/MDM forced-login** path). Part I is also extracted to `docs/generated/user-manual.pdf` (the end-user handout) |
+| `docs/requests/` | copy-paste request templates: networking (cert/DNS/Zscaler), Okta OIDC app, AD/GPO managed setting |
+| `docs/generated/` | PDF partners of every source doc, mirroring the source tree, plus `user-manual.pdf` (fixed path — `publish-portal-release.sh` uploads it). Regenerate with `make docs-pdf` in the same change |
 | `tests/` + `Makefile` | test suites (`make test`); CI in `.github/workflows/tests.yml` |
 
 ## Deploy model (details in the runbook)
 
-Order is load-bearing: **cert → 01 database → build all four images → 02
-gateway → DNS/Zscaler → verify → 03 observability → Grafana secret → 02
-re-run**. 01 is first because it creates and persists the CMK so the ECR
+Order is load-bearing: **cert → 01 database → build all four images →
+02 gateway → DNS/Zscaler → verify → 03 observability → Grafana secret →
+02 re-run**. 01 is first because it creates and persists the CMK so the ECR
 repos are born encrypted. Scripts persist their outputs back into
-`deploy.env` (`set_env_var`) so there are no copy-paste steps. **03 now emits
+`deploy.env` (`set_env_var`) so there are no copy-paste steps. **03 emits
 the AMP remote-write endpoint, workspace ARN, and activity-log-group name**
-(auto-persisted to `deploy.env`); the **02 re-run** picks them up and attaches
-the ADOT collector as a **localhost sidecar** in the gateway task — there is no
-separate collector service. 02 never imports from 03; the params flow via
-`deploy.env`, so the two-pass order is unchanged. The **optional
+(auto-persisted to `deploy.env`); the **02 re-run** picks them up and
+attaches the ADOT collector as a **localhost sidecar** in the gateway task —
+there is no separate collector service. 02 never imports from 03; the params
+flow via `deploy.env`, so the two-pass order is unchanged. The **optional
 download portal (04)** is a fifth image + stack that slots in any time after
-02 (independent of 03): `build-and-push-portal.sh → deploy-download-portal.sh
-→ publish-portal-release.sh → set-portal-oidc-secret.sh`; it reuses the ALB /
-FQDN / cert / Zscaler entry (path-based at `/portal`). **Since portal v2 the
-02 must carry the `${NamePrefix}-spend-read-key-arn` export** (any 02
-deployed from this commit on does) — when upgrading an older deployment,
-re-run `deploy-gateway.sh` before `deploy-download-portal.sh`. Teardown is
-the reverse (04 and 03 → 02 → 01).
+02 (independent of 03): `build-and-push-portal.sh →
+deploy-download-portal.sh → publish-portal-release.sh →
+set-portal-oidc-secret.sh`; it reuses the ALB / FQDN / cert / Zscaler entry
+(path-based at `/portal`) and **requires a 02 that carries the
+`${NamePrefix}-spend-read-key-arn` export** — when upgrading an older
+deployment, re-run `deploy-gateway.sh` before `deploy-download-portal.sh`.
+Teardown is the reverse (04 and 03 → 02 → 01).
+
+Version/update flows (publishing portal releases before raising the minimum
+client version, image-tag bumps before stack updates, Grafana/base-image
+bumps via the mirror layer) are in `docs/operations/om-runbooks.md`.
 
 ## How to work here
 
@@ -553,17 +103,17 @@ the reverse (04 and 03 → 02 → 01).
   deploy-breaking bugs that syntax checks and docs missed. It is the single
   highest-value habit in this repo.
 - **Run `make test` and keep it green before moving on / committing** (it's a
-  rule — see `.claude/rules/process.md`). Four fast suites:
+  rule — see `.claude/rules/process.md`). Five fast suites:
   - `tests/lambda` — pytest for the db-admin rotation/bootstrap Lambda (moto
     Secrets Manager + faked pg/ECS): alternating-user flip, idempotency
     guards, error propagation. **The code with real bug history — extend it
     when you touch `docker/db-admin/app.py`.**
   - `tests/portal` — pytest for the download-portal app (the
     `docker/portal/portal/` Flask package, driven via `create_app()` +
-    Flask's `test_client()`): OIDC/JWT verification (RS256 against a
-    `cryptography`-minted test JWKS), cookie/PKCE, group authz, dropdown
-    validation, install.cmd/ZIP generation, usage/admin/fingerprint/guide
-    pages, and full HTTP flows. Extend it when you touch the portal app.
+    Flask's `test_client()`): OIDC/JWT verification, cookie/PKCE, group
+    authz, dropdown validation, install.cmd/ZIP generation,
+    usage/admin/fingerprint/guide pages, and full HTTP flows. Extend it when
+    you touch the portal app.
   - `tests/bash` — bats for `common.sh` helpers (`proxy_port`, `set_env_var`,
     `require_vars`), cert import, and the Linux installer's sourceable
     functions (`install-linux.bats`).
@@ -579,38 +129,50 @@ the reverse (04 and 03 → 02 → 01).
   on `ubuntu-latest`.
 - Cheap extra checks outside the tested surface: `bash -n` each changed
   script, YAML-parse changed templates, `py_compile` the Lambda.
-- Diagrams are hand-laid-out SVGs from `docs/ato/diagrams/generate.py`; **rasterize
-  and look at them** (cairosvg) before committing. Never use Mermaid — its
-  auto-layout produced unreadable, sometimes non-rendering output here.
-- Keep `docs/ato/security-review-2026-07.md` in sync when a finding's status
-  changes; keep the Status section above honest.
+- Diagrams are hand-laid-out SVGs from `docs/ato/diagrams/generate.py`;
+  **rasterize and look at them** (cairosvg) before committing. Never use
+  Mermaid — its auto-layout produced unreadable, sometimes non-rendering
+  output here.
+- Keep `docs/ato/poam.md` in sync when a finding's status changes; keep the
+  Status section above honest. Every source-doc edit regenerates its PDF
+  partner (`make docs-pdf`) in the same change.
 - Commit trailers: end messages with
   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 
 ## Durable context that isn't obvious from the code
 
 - **GovCloud model availability:** Opus 4.8 (`us-gov.anthropic.claude-opus-4-8`,
-  un-dated ID), Sonnet 5 (available since 2026-07;
-  `us-gov.anthropic.claude-sonnet-5`, un-dated — operator-confirmed
-  2026-07-27), and Sonnet 4.5
-  (`us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`, dated). Sonnet 4.6 was
-  never offered in GovCloud. Verify model IDs against the Bedrock console
-  (`aws bedrock list-inference-profiles --region us-gov-west-1`) before
-  changing defaults.
-- **User decisions (2026-07-15):** precompiled native `claude` binary only (no
-  npm distribution); Grafana auth = Okta SSO; Object Lock deferred.
+  un-dated ID), Sonnet 5 (`us-gov.anthropic.claude-sonnet-5`, un-dated), and
+  Sonnet 4.5 (`us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`, dated) in
+  the small/fast "haiku" slot — GovCloud has no Haiku-family model, and
+  Sonnet 4.6 was never offered there. Verify model IDs against the Bedrock
+  console (`aws bedrock list-inference-profiles --region us-gov-west-1`)
+  before changing defaults.
+- **User decisions:** precompiled native `claude` binary only (no npm
+  distribution); Grafana auth = Okta SSO; S3 Object Lock deferred;
+  first-party JS allowed in the portal (inline still banned); `Bash`
+  curl/wget and subagents deliberately not denied in the managed policy.
 - **Landing zone:** hub-and-spoke with Transit Gateway (not peering); central
   egress; the workload VPC is a no-NAT spoke in the target profile.
-- **Some C12 assumptions are doc-verified, not deploy-verified** — the async
-  rotation's EventBridge/SecretId event shape especially. The test run is
-  where these get confirmed.
+- **Managed-policy ordering is load-bearing:** gateway policy selection is
+  first-match-wins and a `match:`-less policy matches everyone, so the
+  catch-all allowlist policy must stay **last** or group-scoped policies
+  become dead config. `availableModels`/`enforceAvailableModels` belong
+  **inside the policy's `cli:` object** (they are Claude Code settings
+  keys); unknown `cli:` keys are boot-fatal, but only validated once the
+  Postgres store connects — a probe against a dead DB misses them.
+- When something live misbehaves, check
+  `docs/operations/troubleshooting.md` first — the bring-up failure modes
+  (telemetry temporality, loopback SSRF guard, Zscaler/Okta egress, KMS
+  detachment, PromQL pitfalls, …) are all catalogued there.
 
 ## Rules
 
 Hard rules live in `.claude/rules/*.md` (`security`, `cloudformation`,
-`scripts`, `process`, `offline-build`). Claude Code **auto-loads** that directory at session
-start — no import needed — so they are always in effect. Follow them; add new
-cross-cutting rules there rather than inline here.
+`scripts`, `process`, `offline-build`). Claude Code **auto-loads** that
+directory at session start — no import needed — so they are always in
+effect. Follow them; add new cross-cutting rules there rather than inline
+here.
 
 To add a rule file, copy `.claude/rules/TEMPLATE.md.example` to a new `.md`
 file. It shows the house style and the optional `paths:` frontmatter that

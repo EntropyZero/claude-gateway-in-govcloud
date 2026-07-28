@@ -14,7 +14,8 @@ CloudFormation parameters), so the same repo deploys for any client.
   (imported into ACM), reached via a corporate CNAME such as
   `claude-gateway.example.com`
 - ECS Fargate gateway service, RDS PostgreSQL backing store, Okta OIDC sign-in
-- Offline Windows client rollout — laptops never contact Anthropic release hosts
+- Offline Windows and Linux client rollout — laptops never contact Anthropic
+  release hosts
 
 Deploy order is in [Quick start](#quick-start); the scripts under `scripts/`
 are the executable runbook — read them for the exact AWS calls they make.
@@ -33,12 +34,15 @@ secrets, security-group, and encryption inventories — see
 | `cloudformation/01-database.yaml` | RDS PostgreSQL store, managed master secret, client security group |
 | `cloudformation/02-gateway.yaml` | ALB + TLS listener, ECS Fargate service, IAM, secrets, optional VPC endpoints, cert-expiry alarm, ALB access logs |
 | `cloudformation/03-observability.yaml` | AMP workspace, activity-archive chain, Grafana usage/cost dashboard behind the ALB at `/grafana` (the ADOT collector runs as a loopback sidecar in the gateway task, not here) |
+| `cloudformation/04-download-portal.yaml` | Optional Okta-secured download portal at `/portal`: installer downloads, self-usage page, user guide, fingerprint, spend-cap admin |
 | `docker/Dockerfile` | Gateway container (Amazon Linux 2023 base) around the pinned, verified `claude` binary |
+| `docker/portal/` | Download-portal image: Flask package + gunicorn, vendored wheels |
 | `docker/entrypoint.sh` | Renders `gateway.yaml`, assembles the Postgres URL |
 | `docker/grafana/` | Grafana image: AMP datasource + provisioned Claude Code dashboard |
 | `docker/db-admin/` | Lambda image: app DB user bootstrap + alternating-users secret rotation |
 | `scripts/mirror/mirror-claude-release.sh` | Egress-side: download + verify a pinned release |
 | `client/Install-ClaudeCode.ps1` | Offline Windows install — non-admin, Intune/SCCM, or manual |
+| `client/install-claude-code.sh` | Offline Linux install — no root, staged-copy SHA-256 verify, `~/.local/bin` |
 | `scripts/deploy.env.example` | Per-environment parameters (copy to `deploy.env`) |
 | `scripts/import-enterprise-cert.sh` | CSR generation, ACM import, fingerprint output |
 | `scripts/build-and-push-image.sh` | Build the gateway image and push to ECR |
@@ -50,19 +54,21 @@ secrets, security-group, and encryption inventories — see
 | `scripts/deploy-gateway.sh` | Deploy the gateway stack |
 | `scripts/set-okta-secret.sh` | Set the real OIDC client secret and roll the service |
 | `scripts/set-grafana-oidc-secret.sh` | Set Grafana's Okta client secret and roll Grafana |
+| `scripts/build-and-push-portal.sh` + `deploy-download-portal.sh` + `publish-portal-release.sh` + `set-portal-oidc-secret.sh` | Build, deploy, and publish releases to the optional download portal (04) |
 | `scripts/stack-outputs.sh` | Print both stacks' outputs |
 | `scripts/verify-gateway.sh` | Post-deploy DNS / TLS / OAuth endpoint checks |
 | `tests/` + `Makefile` | Test suites (`make test`); CI in `.github/workflows/tests.yml` |
 
 ## Testing
 
-`make test` runs four fast suites (CI runs the same commands per job on
+`make test` runs five fast suites (CI runs the same commands per job on
 `ubuntu-latest`, on every push and PR — see `.github/workflows/tests.yml`):
 
 | Suite | Tooling | Covers |
 |---|---|---|
 | `tests/lambda` | pytest + moto | The db-admin rotation/bootstrap Lambda: alternating-user secret flip, rotation idempotency, error propagation, CFN-response handling |
-| `tests/bash` | bats | `scripts/common.sh` helpers — `proxy_port` (incl. credentialed URLs), `set_env_var`, `require_vars` |
+| `tests/portal` | pytest | The download-portal Flask app: OIDC/JWT verification, cookie/PKCE, group authz, dropdown validation, ZIP/installer generation, usage/admin/fingerprint pages |
+| `tests/bash` | bats | `scripts/common.sh` helpers — `proxy_port` (incl. credentialed URLs), `set_env_var`, `require_vars` — plus cert import and the Linux installer's sourceable functions |
 | `tests/cfn` | cfn-lint + cfn-guard | Template validity, and **policy gates** encoding the security rules — CMK on log groups & secrets, explicit SG egress, HTTPS target-group health-check protocol, RDS/S3/ALB posture |
 | `tests/powershell` | Pester | `Install-ClaudeCode.ps1` user-config assembly + merge into `%USERPROFILE%\.claude\settings.json` (update lockdown, telemetry attrs, `NODE_EXTRA_CA_CERTS`; BOM-less write; never emits managed-only keys) |
 
@@ -70,9 +76,10 @@ Install the toolchain (all standard): `pip install -r tests/requirements-test.tx
 `npm i -g bats`, cfn-guard via its
 [install script](https://github.com/aws-cloudformation/cloudformation-guard#installation),
 and `pwsh` + `Install-Module Pester`. Then `make test`, or a single suite with
-`make test-lambda` / `test-bash` / `test-cfn` / `test-powershell`. These are
-**unit** tests (no AWS calls, no deploy); the live end-to-end validation is the
-[test-run runbook](docs/operations/test-run-runbook.md).
+`make test-lambda` / `test-portal` / `test-bash` / `test-cfn` /
+`test-powershell`. These are **unit** tests (no AWS calls, no deploy); the
+live end-to-end validation is the Phase 11 checklist in the
+[greenfield deployment runbook](docs/operations/greenfield-deployment.md).
 
 ## Quick start
 
@@ -140,8 +147,11 @@ build-time install:
 - **db-admin** — installs `pg8000` + deps from vendored wheels in
   `docker/db-admin/vendor/` (`pip --no-index`).
 - **Grafana** — TLS cert generated on the build host and baked in (no `apk`).
+- **portal** — installs Flask/gunicorn + deps from vendored wheels in
+  `docker/portal/vendor/` (`pip --no-index`, mirrored by
+  `scripts/mirror/mirror-python-deps.sh portal`).
 
-All three verified building with networking disabled. Build-time inputs that
+All four verified building with networking disabled. Build-time inputs that
 *would* need internet (the Claude binary, the Grafana AMP plugin, the RDS CA
 trust bundle) are staged by `scripts/mirror/` on a separate egress host and
 transferred as the `mirror/` directory — the build machine itself reaches
@@ -187,7 +197,7 @@ let an attacker harvest corporate SSO). Those keys are honored **only** from a
 managed source (Windows `HKLM\SOFTWARE\Policies\ClaudeCode` or
 `%ProgramFiles%\ClaudeCode\managed-settings.json`; macOS plist; Linux
 `/etc/claude-code/managed-settings.json`) — **never** from user
-`settings.json` or HKCU. [BINARY-VERIFIED]
+`settings.json` or HKCU.
 
 So the split is: the **binary install is no-admin**, but the gateway **login
 requires the managed setting**, delivered by GPO/MDM (or self-served once by a
@@ -196,8 +206,7 @@ mechanisms and `docs/requests/ad-request-email.md` for the AD/GPO request. Once 
 managed setting is present, the developer just runs `claude`: the login screen
 is **locked to gateway** with the URL **pre-filled** (no menu choice, no URL
 typing — press Enter to connect), and the only interactive step is a **one-time
-Okta SSO** in the browser (+MFA); the token persists with refresh. [DOC-VERIFIED]
-The live gateway round-trip is [NEEDS TEST-RUN CONFIRMATION]. The user-scope
+Okta SSO** in the browser (+MFA); the token persists with refresh. The user-scope
 lockdown the installer writes (`DISABLE_UPDATES=1`, telemetry tags) is a
 convenience, not enforcement — the mirror-only network path (no reachable
 `downloads.claude.ai`) and the gateway's server-side controls are the real
@@ -245,8 +254,7 @@ terminal → `claude` → login is **locked to gateway** with the URL
 **pre-filled** (no picker, no URL typing — press Enter to connect) → **one-time
 Okta SSO** in the browser (+MFA) → compare the fingerprint prompt against the
 published value. A later re-login on expiry runs `/login`, still forced to
-gateway. [BINARY-VERIFIED] The live round-trip is [NEEDS TEST-RUN
-CONFIRMATION].
+gateway.
 
 ## Model configuration
 
@@ -257,7 +265,7 @@ Sonnet, and a small/fast "haiku"-role entry — each a pair of parameters
 It is a *menu* because the gateway pushes these three IDs to every client as
 an `availableModels` allowlist via `/managed/settings`; the `models:` block
 alone only governs what the gateway **serves**, leaving the client's own
-built-in menu in place (the bug fixed on 2026-07-24):
+built-in menu in place:
 
 | Role | Menu ID (`*_MODEL_ID`) | Bedrock profile (`*_BEDROCK_MODEL_ID`) |
 |---|---|---|
@@ -473,7 +481,7 @@ The observability stack imports the gateway stack's exports (`svc-sg`,
   `delete-secret --force-delete-without-recovery` first.
 - **HTTP→HTTPS target-group migration (one-time, existing deployments):**
   the internal-TLS change replaces both target groups. Push the rebuilt
-  images **first** (the new entrypoints generate the TLS certs the task
+  images **first** (they carry the baked-in listener TLS certs the task
   definitions expect — tags are immutable, so bump the tag), then update
   the stacks in a maintenance window: CloudFormation points the listener
   at the new empty target group before the first TLS task passes health
@@ -502,8 +510,9 @@ code, commits), and stamps each export with `user.id` / `user.email` /
 comes from. `team` and `cost_center` are workstation-level resource
 attributes: deploy them per fleet with the installer's `-CostCenter` /
 `-Team` parameters (they write `OTEL_RESOURCE_ATTRIBUTES` into managed
-settings). The collector drops `session.id` to keep Prometheus cardinality
-bounded, and AMP retains metrics 150 days.
+settings). The collector keeps `session.id` as a metric label so concurrent
+sessions from one user stay separate monotonic series (cardinality is
+bounded by concurrent sessions), and AMP retains metrics 150 days.
 
 Deploy order (see [Teardown & update order](#teardown--update-order) for why
 the gateway redeploy comes last):
@@ -576,7 +585,7 @@ obvious alternative?" question — revisit only with a concrete reason.
 | Area | Decision and rationale |
 |---|---|
 | Inference | Bedrock `us-gov-west-1`, `us-gov.anthropic.*` inference profiles, reached via a `bedrock-runtime` interface VPC endpoint — no NAT/IGW path needed. |
-| Gateway | Claude apps gateway (built into the `claude` binary ≥ 2.1.195) on ECS Fargate behind an **internal, IPv4-only** ALB. The ALB **re-encrypts to the tasks** (`listen.tls` with a per-task self-signed cert generated at startup — ALBs don't validate target certs, developers still pin the ALB's enterprise cert). Dual-stack is off deliberately: internal dual-stack ALBs publish public-range AAAA records, which fails Claude Code's `/login` private-network check. |
+| Gateway | Claude apps gateway (built into the `claude` binary ≥ 2.1.195) on ECS Fargate behind an **internal, IPv4-only** ALB. The ALB **re-encrypts to the tasks** (`listen.tls` with a self-signed cert generated on the build host and baked into the image — shared by tasks running the same image, rotated by image rebuild; ALBs don't validate target certs, developers still pin the ALB's enterprise cert). Dual-stack is off deliberately: internal dual-stack ALBs publish public-range AAAA records, which fails Claude Code's `/login` private-network check. |
 | TLS | Enterprise-CA-signed certificate, SAN = the corporate CNAME, imported into ACM. Public certs are impossible for `*.elb.amazonaws.com`, and the corporate name survives ALB recreation. Imported certs do **not** auto-renew — alarm on expiry; rotation re-triggers the client fingerprint prompt, so publish the new fingerprint first. |
 | DNS | Corporate-DNS CNAME → the ALB's default DNS name; resolves to private IPs, passing the `/login` check. No Route 53 private hosted zone required. |
 | Zscaler | The gateway FQDN is bypassed: ZIA SSL-inspection exemption + app bypass (TLS inspection breaks certificate fingerprint pinning; public proxy egress IPs fail `/login`), or a ZPA app segment (ZPA's synthetic CGNAT answers pass the check and ZPA doesn't intercept TLS). Add the FQDN to `NO_PROXY` on laptops if a PAC/explicit proxy is in use. |
@@ -657,9 +666,10 @@ obvious alternative?" question — revisit only with a concrete reason.
 
 ### Internal TLS (SC-8) status
 
-ALB→gateway and ALB→Grafana are **encrypted** (per-task self-signed certs;
-the ALB re-encrypts and does not validate target certs, so no cert
-distribution problem). There is **no remaining plaintext transmission hop**:
+ALB→gateway and ALB→Grafana are **encrypted** (self-signed certs generated
+on the build host and baked into each image; the ALB re-encrypts and does
+not validate target certs, so no cert distribution problem). There is **no
+remaining plaintext transmission hop**:
 the ADOT collector runs as a loopback **sidecar** inside the gateway task
 and binds `127.0.0.1:4317/4318` only, so the gateway forwards OTLP over the
 shared task-network namespace — the telemetry never leaves the task and there
@@ -669,7 +679,8 @@ transmission** (the gateway refuses a non-HTTPS `forward_to` unless the host
 is localhost, which is exactly the sidecar). The collector's onward
 `remote_write` to AMP and its activity-log write are ordinary TLS AWS API
 calls made with the task role. See the `otel-collector` container comment in
-`02-gateway.yaml` and `docs/ato/security-review-2026-07.md` (C2).
+`02-gateway.yaml` and the accepted-risks section of
+`docs/ato/security-assessment-2026-07.md`.
 
 The sidecar **fails closed by default** (`TELEMETRY_FAIL_CLOSED=true`, AU-5):
 it is marked Essential and health-checked, and the gateway container waits on
@@ -686,13 +697,12 @@ ResourceCount` / `Resource=IngestionRate` scoped to the workspace, fires after
 
 ### Hardening roadmap (post-deploy)
 
-Not yet wired in, planned as policy firms up: per-Okta-group
-`managed.policies` (model allowlists, locked CLI settings) and gateway spend
-limits in the `gateway.yaml` block of `02-gateway.yaml` (config deploys via a
-stack update — ECS rolls the service automatically); and egress blocking
-from developer subnets to Bedrock /
-`api.anthropic.com` (pair with `skipWebFetchPreflight: true`) so the gateway
-is the only inference path.
+Managed client policy (the model allowlist, update lockdown, tool denies,
+and minimum client version pushed via `/managed/settings`) and per-user /
+per-group **spend caps** are wired in — see `docs/operations/cost-controls.md`
+and `docs/operations/client-config.md` Part II. Still on the roadmap: egress
+blocking from developer subnets to Bedrock / `api.anthropic.com` (pair with
+`skipWebFetchPreflight: true`) so the gateway is the only inference path.
 
 ### Key references
 

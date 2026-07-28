@@ -34,7 +34,7 @@
 <text x="206.0" y="477" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >reached via the internal ALB</text>
 <text x="206.0" y="491" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >streams installer ZIP at /portal</text>
 <rect x="76" y="560" width="584" height="80" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
-<text x="368.0" y="581" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Interface VPC endpoints — each with a resource policy</text>
+<text x="368.0" y="581" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Interface VPC endpoints — resource policies (ecs: unsupported)</text>
 <text x="368.0" y="597" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bedrock-runtime (3 approved models only) · ecr.api · ecr.dkr · logs</text>
 <text x="368.0" y="611" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint</text>
 <rect x="780" y="96" width="680" height="570" rx="12" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.5"/>
@@ -101,7 +101,7 @@
 <path d="M244 520 L244 542 L712 542 L712 475 L1150 475" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
 <rect x="874.0" y="465" width="142.0" height="19" rx="5" fill="#FFFFFF" stroke="#CBD5E1"/>
 <text x="945" y="478.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#6D28D9" font-weight="normal" text-anchor="middle" >download-audit (CMK)</text>
-<text x="36" y="726" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#334155" font-weight="normal" text-anchor="start" >The ADOT collector is a co-resident loopback sidecar in the gateway task (OTLP over 127.0.0.1), so telemetry never crosses the network in the clear — the former plaintext OTLP hop is gone (C2 closed). Okta egress and the developer path are on the access view.</text>
+<text x="36" y="726" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#334155" font-weight="normal" text-anchor="start" >The ADOT collector is a co-resident loopback sidecar in the gateway task (OTLP over 127.0.0.1), so telemetry never crosses the network in the clear — there is no gateway-to-collector network hop. Okta egress and the developer path are on the access view.</text>
 <text x="36" y="748" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748B" font-weight="normal" text-anchor="start" >Secrets are injected into tasks at launch by ECS (execution roles hold GetSecretValue + kms:Decrypt on exactly their own secrets — see §6).</text>
 <text x="36" y="770" font-family="Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748B" font-weight="normal" text-anchor="start" >Download portal (04): serves the installer ZIP from the CMK-encrypted artifacts bucket via the S3 gateway endpoint and writes a download-audit stream; its Okta OIDC egress is on the access view.</text>
 </svg>

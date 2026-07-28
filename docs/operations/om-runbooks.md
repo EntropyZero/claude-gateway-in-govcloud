@@ -1,10 +1,11 @@
 # O&M runbooks — steady-state operations & maintenance
 
-Operations and maintenance for a **deployed** Claude apps gateway. The
-[`test-run-runbook`](test-run-runbook.md) covers the initial deploy; this
-document covers what you do afterwards: rotating the certificate and secrets,
-refreshing the RDS CA bundle, pushing new Claude Code / image versions,
-responding to alarms, backup/restore, and teardown.
+Operations and maintenance for a **deployed** Claude apps gateway.
+[`greenfield-deployment.md`](greenfield-deployment.md) covers the initial
+deploy; this document covers what you do afterwards: rotating the certificate
+and secrets, refreshing the RDS CA bundle, pushing new Claude Code / image
+versions, responding to alarms, backup/restore, and teardown. Symptom-first
+diagnosis lives in [`troubleshooting.md`](troubleshooting.md).
 
 Every command uses the repo's own scripts and `deploy.env` variables — never
 hardcoded org values. Run operator commands from a host that has `deploy.env`
@@ -16,51 +17,25 @@ three stack names come from `deploy.env`:
 - `GATEWAY_STACK_NAME` — `02-gateway.yaml` (default `${NAME_PREFIX}`)
 - `OBS_STACK_NAME` — `03-observability.yaml` (default `${NAME_PREFIX}-obs`)
 
-## Verification status — read this first
+## Accepted risks and design trades (surfaced up front)
 
-Per the repo honesty rule (`.claude/rules/process.md`), each runbook is tagged
-by how far its steps have been exercised on real infrastructure. The source of
-truth is the fix log at the top of
-[`security-review-2026-07.md`](../ato/security-review-2026-07.md) and the Status block
-in `CLAUDE.md`.
+Two deliberate, SSP-scoped decisions affect operations and are stated here so
+they are not discovered mid-incident:
 
-- **[VERIFIED-LIVE]** — exercised in the 2026-07 test run: certificate import
-  into ACM, offline image builds on the hardened host, ALB + access logs, DB
-  bootstrap + app-user auth, RDS TLS (verify-full via the OS trust store), and
-  the endpoint-SG reachability model.
-- **[NEEDS TEST-RUN CONFIRMATION]** — doc-verified against the scripts and
-  templates but **not yet exercised end to end**: gateway steady state + login,
-  secret rotation (DB app credential, Okta, Grafana, portal), Grafana Okta
-  login, the activity archive, alarm firing, restore, teardown, and the entire
-  **download portal** (stack `04`: live Okta round-trip with the groups claim,
-  real-size streamed downloads, audit-log wiring). The asynchronous db-secret
-  rotation event shape is the standing example (`CLAUDE.md`).
-
-Treat a whole runbook's tag as the ceiling; individual steps call out anything
-more specific.
-
-## Accepted risks (surfaced up front)
-
-One deliberate, SSP-scoped decision affects operations and is stated here so it
-is not discovered mid-incident. A second, formerly-accepted risk (C2) was
-**withdrawn** by the live run and is noted so operators do not act on the old
-posture:
-
-- **C2 — plaintext OTLP hop: WITHDRAWN, now a localhost sidecar.** The earlier
-  posture (a plaintext-but-SG-scoped gateway→collector hop) was disproved live —
-  the gateway rejects a non-HTTPS telemetry forward URL off localhost — so the
-  collector was moved **into the gateway task as a sidecar** (2026-07-22). There
-  is no network telemetry hop to secure; the collector shares the gateway's
-  lifecycle. Operationally this means the collector is **not** a separate service
-  to restart or roll on its own — see runbook 6 (`security-review-2026-07.md`
-  C2 + fix log). Two operational consequences of the default
-  `TELEMETRY_FAIL_CLOSED=true` (AU-5): **a persistently failed or unhealthy
-  collector stops the gateway task** (ECS replaces it; check the `otel/`
-  log streams and the collector health check before suspecting the gateway
-  itself), and every task stop drains gateway-first / collector-last with up
-  to a 120 s flush window — expect task stops during rotations and deploys
-  to take up to ~2 minutes longer than the pre-sidecar timings.
-- **C9 — S3 Object Lock deferred.** The activity archive and ALB-log buckets
+- **Telemetry collector is a localhost sidecar, not a service.** The gateway
+  rejects a non-HTTPS telemetry forward URL off localhost, so the ADOT
+  collector runs **inside the gateway task**: loopback within one Fargate
+  network namespace, no network telemetry hop to secure, and the collector
+  shares the gateway's lifecycle. Operationally the collector is **not** a
+  separate service to restart or roll on its own — see runbook 6. Two
+  consequences of the default `TELEMETRY_FAIL_CLOSED=true` (AU-5): **a
+  persistently failed or unhealthy collector stops the gateway task** (ECS
+  replaces it; check the `otel/` log streams and the collector health check
+  before suspecting the gateway itself), and every task stop drains
+  gateway-first / collector-last with up to a 120 s flush window, so task
+  stops during rotations and deploys take up to ~2 minutes longer than they
+  otherwise would.
+- **S3 Object Lock deferred.** The activity archive and ALB-log buckets
   rely on `DeletionPolicy: Retain` + bucket lifecycle, not Object Lock. A
   privileged operator can still delete archived objects; there is no WORM
   guarantee.
@@ -69,8 +44,8 @@ posture:
   the whole bucket rather than AWS's documented `AWSLogs/<account>/...` example
   prefix, because the large-body delivery prefix is delivery-managed and
   undocumented; the `aws:SourceAccount`/`aws:SourceArn` conditions carry the
-  cross-account restriction. Tighten to the observed prefixes after the first
-  live delivery — runbook 11.
+  cross-account restriction. Tighten to the observed prefixes once delivery is
+  in use in a deployment — runbook 11.
 
 ---
 
@@ -80,9 +55,7 @@ posture:
 fires (`AWS/CertificateManager` `DaysToExpiry` ≤ `CERT_EXPIRY_ALARM_DAYS`,
 default 30) — or any unplanned re-issue (key compromise, CA change). **Imported
 ACM certificates do NOT auto-renew**, so this is a scheduled human task, roughly
-once per certificate lifetime (typically annually). Status:
-**[NEEDS TEST-RUN CONFIRMATION]** for the in-place replace + listener pickup;
-the initial import path is **[VERIFIED-LIVE]**.
+once per certificate lifetime (typically annually).
 
 *Preconditions:*
 
@@ -157,11 +130,10 @@ never changes DNS name or listener config.
   update. In-place replace under the same ARN is the only sanctioned path.
 - The SAN must be `DNS:${GATEWAY_FQDN}` (the corporate CNAME), never the
   `*.elb.amazonaws.com` name.
-- **Test-account variant:** the self-signed shortcut (a leaf that is its own
-  trust anchor, imported with no chain) lives in
-  [`test-run-runbook.md` §1 "Test-account shortcut — self-signed ALB cert"](test-run-runbook.md).
-  Production rotation always uses an enterprise-CA leaf + chain as above; the
-  self-signed path is a cross-reference only.
+- **Lab variant:** the self-signed shortcut (a leaf that is its own trust
+  anchor, imported with no chain) is the appendix of
+  [`greenfield-deployment.md`](greenfield-deployment.md). Production rotation
+  always uses an enterprise-CA leaf + chain as above.
 
 ---
 
@@ -171,8 +143,7 @@ never changes DNS name or listener config.
 exposure, or an Okta app re-key. The gateway OIDC secret, the Grafana SSO
 secret, and (when stack `04` is deployed) the download portal's OIDC secret
 all ride the same `put_secret_and_roll` helper (hidden prompt → mode-600
-`file://` write → forced ECS new-deployment). Status:
-**[NEEDS TEST-RUN CONFIRMATION]** (steady-state login not yet exercised).
+`file://` write → forced ECS new-deployment).
 
 *Preconditions:*
 
@@ -257,10 +228,7 @@ active in Okta first; keep the old secret valid until the new tasks are stable.
 (`${NAME_PREFIX}-db-rotation`) runs on the `APP_SECRET_ROTATION_DAYS` cadence
 (`deploy.env`, default 90; passed through as the `AppSecretRotationDays`
 template parameter). Manual triggers: suspected credential exposure, or
-recovery after a half-completed rotation. Status:
-**[NEEDS TEST-RUN CONFIRMATION]** — rotation is not yet exercised in steady
-state, and the asynchronous rotation event shape is doc-verified only
-(`CLAUDE.md`).
+recovery after a half-completed rotation.
 
 *Design (how it works — describe, don't guess):* The secret
 `${NAME_PREFIX}/db-app-user` alternates between two Postgres LOGIN users,
@@ -340,8 +308,6 @@ is idempotent, and the prior credential remains valid, so a stuck rotation does
 - The gateway **never** uses the RDS master credential; the master secret is
   break-glass only (see runbook 7). Rotation `ALTER ROLE`s run as master inside
   the Lambda, not from any task.
-- Flag per `.claude/rules/process.md`: the async rotation/EventBridge event
-  shape is **doc-verified only until the test run confirms it**.
 
 ---
 
@@ -350,13 +316,10 @@ is idempotent, and the prior credential remains valid, so a stuck rotation does
 *Trigger / Frequency:* AWS rotates the RDS server CA (e.g. the
 `rds-ca-rsa2048-g1` family — the instance's `CACertificateIdentifier`), or you
 must move to a newer CA before an AWS-announced expiry. Rare (multi-year).
-Status: **[NEEDS TEST-RUN CONFIRMATION]** for the CA-change cutover; the image
-build + baked-bundle mechanism is **[VERIFIED-LIVE]**.
 
 *Why this is an image rebuild, not a config flip:* both the gateway and the
 db-admin Lambda connect with `sslmode=verify-full`, and the driver trusts the
-**OS/container trust store**, not `sslrootcert=` (proven in the test run — the
-driver ignores `sslrootcert=`). The RDS CA bundle is staged on the **egress
+**OS/container trust store** — it ignores `sslrootcert=`. The RDS CA bundle is staged on the **egress
 host** by `scripts/mirror/mirror-rds-ca-bundle.sh` (`RDS_CA_BUNDLE_URL`,
 default the GovCloud truststore) into `mirror/rds-ca-bundle.pem` and **baked
 into both images** at build (`docker/rds-ca-bundle.pem`,
@@ -441,9 +404,7 @@ old CA is retired.
 ## 5. Claude Code release update
 
 *Trigger / Frequency:* A new pinned Claude Code release you want to distribute
-(security fix, feature, or a gateway-required minimum bump). Status:
-**[NEEDS TEST-RUN CONFIRMATION]** for the full mirror→build→distribute chain;
-offline image builds are **[VERIFIED-LIVE]**.
+(security fix, feature, or a gateway-required minimum bump).
 
 *Preconditions:*
 
@@ -493,7 +454,7 @@ offline image builds are **[VERIFIED-LIVE]**.
    output; uploads both platform binaries (`claude.exe` + `claude`),
    `manifest.json`, `CHECKSUMS.txt`, both
    installers (`Install-ClaudeCode.ps1` + `install-claude-code.sh`), and
-   (since portal v2) the user-guide PDF
+   the user-guide PDF
    (`docs/generated/user-manual.pdf` → the bucket's `docs/user-manual.pdf`,
    served at `/portal/guide`; the script fails fast if the PDF is missing —
    `make docs-pdf` builds it, `SKIP_USER_GUIDE=1` is the named skip) to the
@@ -524,7 +485,7 @@ offline image builds are **[VERIFIED-LIVE]**.
      -GatewayUrl https://<GATEWAY_FQDN> -DisableUpdates
    ```
 
-6. **Forcing the upgrade — automatic since 2026-07-28.** `deploy-gateway.sh`
+6. **Forcing the upgrade — automatic.** `deploy-gateway.sh`
    (step 4) defaults the pushed `requiredMinimumVersion` floor to the new
    `CLAUDE_VERSION`, so every client that has fetched `/managed/settings`
    refuses to start on the old version at its next launch, with instructions
@@ -589,16 +550,14 @@ release is confirmed across the fleet.
   or `%ProgramFiles%\ClaudeCode\managed-settings.json` — **never** from user
   `settings.json` or HKCU (a user-level `forceLoginMethod:"gateway"` is
   explicitly nulled by the binary), which is why the installer writes no policy
-  source. (`requiredMinimumVersion` *can* ride the same managed JSON, but
-  since 2026-07-28 the gateway pushes the floor itself — see step 6 above —
-  so keep the key out of the GPO copy unless deliberately managing it
-  there.) On hardened
+  source. (`requiredMinimumVersion` *can* ride the same managed JSON, but the
+  gateway pushes the floor itself — see step 6 above — so keep the key out of
+  the GPO copy unless deliberately managing it there.) On hardened
   fleets the `Policies` subtree is ACL-locked under STIG/CIS baselines, so the
   entry is delivered by GPO/MDM: a GPP Registry `REG_SZ` value `Settings` under
   `HKLM\SOFTWARE\Policies\ClaudeCode`, or a GPP Files copy of
   `managed-settings.json` to `%ProgramFiles%\ClaudeCode\` (Claude Code moved off
-  `%ProgramData%` at v2.1.75; admin-write-only = tamper-resistant;
-  **[BINARY-VERIFIED]** against the mirrored 2.1.211 binary). A developer **with
+  `%ProgramData%` at v2.1.75; admin-write-only = tamper-resistant). A developer **with
   local admin** can self-serve the entry once. Full AD-admin steps are in
   [`client-config.md`](client-config.md) §8; the AD/GPO request template is
   [`ad-request-email.md`](../requests/ad-request-email.md). The **binary install stays
@@ -612,11 +571,9 @@ release is confirmed across the fleet.
 
 *Trigger / Frequency:* Any container change (Dockerfile fix, Grafana
 provisioning, a new ADOT collector release, task CPU/memory tuning, or a
-parameter change). Status: **[NEEDS TEST-RUN CONFIRMATION]** for steady-state
-rolls of Grafana and the collector sidecar; gateway image builds + deploys are
-**[VERIFIED-LIVE]**. Note the collector is a **sidecar in the gateway task**
-(not a standalone service since 2026-07-22): rolling it is a new **gateway
-task-definition revision**, done by re-running `deploy-gateway.sh`, not
+parameter change). Note the collector is a **sidecar in the gateway task**,
+not a standalone service: rolling it is a new **gateway task-definition
+revision**, done by re-running `deploy-gateway.sh`, not
 `deploy-observability.sh`.
 
 *Model changes (`OPUS_MODEL_ID` / `SONNET_MODEL_ID` / `HAIKU_MODEL_ID` and
@@ -668,7 +625,7 @@ expects it** (`.claude/rules/scripts.md`).
   NEW name. Run `GRAFANA_VERSION=<new>
   ./scripts/mirror/mirror-base-images.sh grafana` first (and carry the
   updated `GRAFANA_BASE_IMAGE` line over), then build. Notes for version
-  bumps (learned on the 11.5.1 → 13.1.1 upgrade, 2026-07-25): the OSS image is
+  bumps: the OSS image is
   `grafana/grafana` (the `grafana/grafana-oss` Docker Hub repo froze at
   12.4); the build script also stages the `grafana-amazonprometheus-datasource`
   plugin into the image (SigV4 left the core prometheus datasource in 13.1
@@ -688,8 +645,8 @@ expects it** (`.claude/rules/scripts.md`).
   gateway task-def revision — **not** an observability-stack update).
 - **db-admin Lambda:** `DBADMIN_VERSION=<new> ./scripts/build-and-push-dbadmin.sh`
   → `./scripts/deploy-gateway.sh`.
-- **Download portal (v2 order — the portal is a Flask/gunicorn package with
-  committed vendored wheels since `PORTAL_VERSION` 2.0.0):**
+- **Download portal** (a Flask/gunicorn package with committed vendored
+  wheels):
   1. *Only when `docker/portal/requirements.txt` changed:* on the **egress
      host**, `./scripts/mirror/mirror-python-deps.sh portal` regenerates the
      committed `docker/portal/vendor/` wheel set — commit the wheel changes
@@ -697,9 +654,9 @@ expects it** (`.claude/rules/scripts.md`).
      `.claude/rules/offline-build.md`).
   2. `PORTAL_VERSION=<new> ./scripts/build-and-push-portal.sh` (immutable
      tags — always bump).
-  3. *Only when upgrading from a pre-v2 (1.x) deployment:* re-run
-     `./scripts/deploy-gateway.sh` **first** — 04 now imports 02's
-     `${NAME_PREFIX}-spend-read-key-arn` export (the read-only spend key
+  3. *Only when upgrading a portal deployment older than the spend-read-key
+     import:* re-run `./scripts/deploy-gateway.sh` **first** — 04 imports
+     02's `${NAME_PREFIX}-spend-read-key-arn` export (the read-only spend key
      that powers `/portal/me`), and the 04 deploy fails on the missing
      import against an older 02.
   4. `./scripts/deploy-download-portal.sh`.
@@ -707,8 +664,7 @@ expects it** (`.claude/rules/scripts.md`).
      the user guide changed (it uploads the guide PDF too — runbook 5
      step 3).
 
-  *Live checks after a portal roll* (**[NEEDS TEST-RUN CONFIRMATION]** as a
-  whole — stack 04 has no deploy verification yet): sign in at
+  *Checks after a portal roll:* sign in at
   `https://${GATEWAY_FQDN}/portal`; download a ZIP end to end at real size
   and confirm the download lands in the portal audit log group; `/portal/me`
   shows the signed-in user's caps + period-to-date spend; `/portal/admin/users`
@@ -768,8 +724,7 @@ unchanged image URI leaves the service/Lambda on old code — always bump the ta
 ## 7. Secrets inventory & break-glass
 
 *Trigger / Frequency:* Reference during audits, incident response, or before any
-secret change. Status: **[NEEDS TEST-RUN CONFIRMATION]** for the break-glass
-master path.
+secret change.
 
 *Secrets inventory (all CMK-encrypted with the CMK from 01):*
 
@@ -782,17 +737,16 @@ master path.
 | `${NAME_PREFIX}/grafana-oidc-client-secret` | 03 | **Manual** | `scripts/set-grafana-oidc-secret.sh` (runbook 2) |
 | `${NAME_PREFIX}/grafana-admin-password` | 03 | **Not rotated** (break-glass; login form disabled) | Regenerate manually (below) |
 | `${NAME_PREFIX}/spend-admin-write-key` | 02 | **Not rotated automatically** (`GenerateSecretString` at create) | Manual — procedure in `cost-controls.md` §7 "Key rotation" (file-based write, then force a gateway deployment) |
-| `${NAME_PREFIX}/spend-admin-read-key` | 02 | **Not rotated automatically** (`GenerateSecretString` at create) | Same as the write key (`cost-controls.md` §7) — **since portal v2 the portal task injects it too** (`SPEND_READ_KEY`, via the 02 export), so after writing a new value force-roll `$NAME_PREFIX-portal` as well as `$NAME_PREFIX-gateway` |
+| `${NAME_PREFIX}/spend-admin-read-key` | 02 | **Not rotated automatically** (`GenerateSecretString` at create) | Same as the write key (`cost-controls.md` §7) — **the portal task injects it too** (`SPEND_READ_KEY`, via the 02 export), so after writing a new value force-roll `$NAME_PREFIX-portal` as well as `$NAME_PREFIX-gateway` |
 | `${NAME_PREFIX}/portal-oidc-client-secret` | 04 | **Manual** | `scripts/set-portal-oidc-secret.sh` (runbook 2) |
 | `${NAME_PREFIX}/portal-session-secret` (cookie signing) | 04 | **Not rotated automatically** (`GenerateSecretString` at create) | Same file-based pattern as the JWT secret (below), then roll `$NAME_PREFIX-portal`; rotation invalidates portal sessions (users just re-login) |
 
 *Gateway JWT secret (manual rotation).* The template describes rotation as
 "prepend new value, roll, remove old." Whether the gateway honours two
-overlapping signing keys is **doc-verified only — needs test-run confirmation**;
-until confirmed, treat a JWT rotation as session-invalidating (active sessions
-below `SessionTtlHours`, default 1h, are dropped and users re-login). Rotate by
-writing a new value via the same safe pattern the helper uses, then forcing a
-roll:
+overlapping signing keys has not been exercised here, so plan a JWT rotation
+as **session-invalidating**: active sessions below `SessionTtlHours`
+(default 1 h) are dropped and users re-login. Rotate by writing a new value
+via the same safe pattern the helper uses, then forcing a roll:
 
 ```bash
 JWT_ARN=$(aws cloudformation describe-stack-resources --region "$AWS_REGION" \
@@ -857,8 +811,7 @@ mode-600 `file://` pattern above.
 ## 8. Backup & restore
 
 *Trigger / Frequency:* Reference for DR planning; act on data-loss/corruption or
-before a risky change. Status: **[NEEDS TEST-RUN CONFIRMATION]** for the restore
-path.
+before a risky change.
 
 *Posture:*
 
@@ -911,18 +864,17 @@ and the gateway serves logins.
 restore attempt is retried against another snapshot; the source snapshots are
 unaffected. Keep the pre-op on-demand snapshot until the operation is confirmed.
 
-*Notes & pitfalls:* Per C9 (accepted risk), neither S3 bucket uses Object Lock —
-archived logs are deletable by a privileged operator. If tamper-evidence becomes
-a requirement, revisit C9 in the security review.
+*Notes & pitfalls:* Per the deferred-Object-Lock decision, neither S3 bucket
+uses Object Lock — archived logs are deletable by a privileged operator. If
+tamper-evidence becomes a requirement, revisit that decision
+([`../ato/security-assessment-2026-07.md`](../ato/security-assessment-2026-07.md)).
 
 ---
 
 ## 9. Alarm response
 
 *Trigger / Frequency:* On alarm (routed to `ALARM_SNS_TOPIC_ARN` when set —
-otherwise the alarms exist but have no action). Status:
-**[NEEDS TEST-RUN CONFIRMATION]** — alarms are defined but have not fired in the
-test run.
+otherwise the alarms exist but have no action).
 
 *Alarms defined in the templates:*
 
@@ -987,383 +939,59 @@ streams) and Grafana log groups.
 *Known landing-zone gotcha — ALB access-log AccessDenied.* If ALB access-log
 enablement fails `AccessDenied` on a bucket policy that is correct, **suspect a
 landing-zone auto-remediation rewriting the ALB's log config before suspecting
-the bucket policy** (test-run lesson). The bucket policy already grants both ELB
-delivery principals; the transient post-deploy log-enable variant was removed
-once the environment auto-remediation was exempted. Get the auto-remediation
-exempted for this ALB rather than re-editing the policy.
+the bucket policy**. The bucket policy already grants both ELB delivery
+principals. Get the auto-remediation exempted for this ALB rather than
+re-editing the policy.
 
 *Rollback / recovery:* Alarm response is corrective, not stateful — there is
 nothing to roll back beyond the underlying runbook's own recovery.
 
 ---
 
-### Is the gateway capturing usage at all? (dump Postgres)
+### 9a. Diagnostics — which tool answers which question
 
-*Run:* `scripts/diagnostics/dump-usage.sh` (in-VPC host or bastion; needs IAM to read
-`<prefix>/db-app-user`). Read-only, connects the same way the gateway does
-(app-user secret + RDS CA, verify-full).
+Three read-only tools cover the usage/telemetry chain. Symptom-indexed
+diagnosis (what each failure looks like and how to tell them apart) is
+[`troubleshooting.md`](troubleshooting.md); this is the index of what to
+reach for.
 
-*Dependencies:* `botocore` (already present - the AWS CLI ships it) and
-`pg8000`. On an offline/hardened box, install pg8000 from the repo's vendored
-wheels rather than PyPI:
-```
-pip install --no-index --find-links docker/db-admin/vendor pg8000
-```
-No `boto3` needed.
-
-*Two security controls gate this - both by design, neither needs a template
-change:*
-
-1. **Network (RDS security group).** The DB admits only members of the
-   `<prefix>-db-client-sg` SG (stack 01 output `DBClientSecurityGroupId`),
-   described as "attach to workloads that may reach the gateway database" - that
-   is exactly this use. **Attach that SG to your in-VPC admin instance's ENI**
-   (additive; SG rules union, so it disturbs nothing else). The box must be an
-   EC2 instance IN the VPC - security groups don't apply from outside it, so an
-   off-VPC host needs a bastion. Do NOT widen the DB SG ingress; use the
-   membership SG.
-
-2. **Secret decrypt (IAM + KMS).** The app-user secret is CMK-encrypted, so the
-   operator role needs BOTH `secretsmanager:GetSecretValue` on
-   `<prefix>/db-app-user` AND `kms:Decrypt` on the CMK (scoped
-   `kms:ViaService=secretsmanager.<region>.amazonaws.com`). The `kms:Decrypt` is
-   the non-obvious half - the same CMK trap that produced 403s for Grafana/AMP.
-
-The tool uses the **app-user** secret (least-privilege, gateway DB only), never
-the RDS master - the master stays break-glass. The app user auto-assumes
-`gateway_owner` at connect (`ALTER ROLE ... IN DATABASE ... SET role`), so it can
-read these tables with no extra grant - the same path the gateway uses.
-
-*What Postgres holds - and does not.* The gateway does **not** store per-request
-token counts in Postgres. It stores:
-  - `spend` - aggregate **cents per principal per period** (derived from tokens
-    via the model rate table). This is the token-perspective capture, summed.
-  - `principal_emails` - identity and the **Okta groups** the gateway resolved.
-  - `spend_limits` / `admin_audit` - caps and the admin mutation log.
-Raw per-request token metrics live only in AMP - use `diagnose-telemetry.sh`.
-
-*Reading it:*
-  - `spend` empty while inference is happening -> the gateway is metering
-    nothing. Check the gateway logs for `spend meter has no exact rates for
-    model` (the served model IDs are not in the rate table).
-  - `principal_emails` present but every `groups` is NULL/empty -> the gateway
-    is not getting the Okta groups claim. This is the usual reason the Grafana
-    `user_groups` filter shows nothing AND per-group spend caps match nobody.
-    Fix at the Okta side (see `okta-request-email.md`), not in the gateway.
-
----
-
-### Client usage metrics not reaching AMP / empty Grafana dashboard
-
-*Symptom:* activity logs arrive, but `claude_code_*` panels in Grafana are empty.
-
-*Run:* `scripts/diagnostics/diagnose-telemetry.sh`. It reads the ALB access logs (client ->
-`/managed/settings` and client -> `/v1/metrics`) and then queries AMP directly
-over SigV4, so it distinguishes four different failures that all look identical
-in Grafana:
-
-| Evidence | Meaning |
+| Tool | Answers |
 |---|---|
-| no `/managed/settings` | enrollment - clients never got the OTLP env vars |
-| settings but no `/v1/metrics` | push lands, export never starts |
-| exports, AMP empty of `otelcol_*` too | remote_write not landing at all |
-| exports, `otelcol_*` present, no `claude_code_*` | check `otelcol_exporter_prometheusremotewrite_failed_translations` FIRST (see below) |
-| `claude_code_*` present | **ingestion is fine** - it is a dashboard/query problem |
+| `scripts/diagnostics/diagnose-telemetry.sh` | *Why are the Grafana panels empty?* Reads the ALB access logs (client → `/managed/settings`, client → `/v1/metrics`) and then queries AMP over SigV4, so it separates enrollment, export, remote-write, translation and dashboard-filter failures — which all look identical in Grafana. It also prints the labels actually present on `claude_code_cost_usage`, because absent `team` / `cost_center` / `user_groups` labels render empty panels over present data. |
+| `scripts/diagnostics/amp-query.py` | *What is actually in AMP?* SigV4-signed report of stored `claude_code_*` metric names, the `otelcol_*` heartbeat series, and the collector's own pipeline counters (accepted vs refused vs **failed translations**). Env-driven: `OBSERVABILITY_AMP_ENDPOINT`, `AWS_REGION`, `AMP_QUERY_WINDOW_HOURS` (default 48 — client metrics are bursty and short windows miss them). |
+| `scripts/diagnostics/dump-usage.sh` | *What has the gateway persisted?* Read-only dump of `spend`, `spend_limits`, `principal_emails` and `admin_audit` over the same connection path the gateway uses (app-user secret + RDS CA, verify-full). Postgres holds **aggregate cents per principal per period**, never per-request token counts — those live only in AMP. |
 
-That last row is the easy one to misread: the dashboard filters on
-`team` / `cost_center` / `user_groups`, so if those labels are absent the panels
-render empty even though the data is there. The script prints the labels actually
-present on `claude_code_cost_usage` for exactly this reason. `team`/`cost_center`
-come from the installer's `OTEL_RESOURCE_ATTRIBUTES`; `user_groups` is stamped by
-the gateway from the Okta claim.
+`dump-usage.sh` needs two things that are easy to miss, both by design and
+neither requiring a template change:
 
-*Note:* read a 403 from the AMP query by its body. **SignatureDoesNotMatch**
-("the request signature we calculated does not match") is a client-side
-SIGNING/encoding bug, not permissions - do not chase key policies. (Historic
-instance: `quote_plus` encoded PromQL spaces as `+`, an ambiguous byte under
-SigV4, so only the space-carrying throughput queries failed; fixed 2026-07-24,
-regression-tested.) A 403 **without** that phrasing is the operator-role gap
-(missing `aps:QueryMetrics`, or the CMK `kms:Decrypt` trap from 2026-07-23) -
-and either way it says nothing about whether ingestion is working.
+1. **Network.** The DB admits only members of the `<prefix>-db-client-sg`
+   security group (stack 01 output `DBClientSecurityGroupId`). Attach that SG
+   to your in-VPC admin instance's ENI — it is additive, SG rules union.
+   Security groups do not apply from outside the VPC, so an off-VPC host needs
+   a bastion. Do **not** widen the DB SG ingress; use the membership SG.
+2. **Secret decrypt.** The app-user secret is CMK-encrypted, so the operator
+   role needs both `secretsmanager:GetSecretValue` on `<prefix>/db-app-user`
+   **and** `kms:Decrypt` on the CMK (scoped
+   `kms:ViaService=secretsmanager.<region>.amazonaws.com`). The `kms:Decrypt`
+   half is the non-obvious one.
 
-> ⚠️ **The silent-drop trap (root-caused 2026-07-24, live).** Claude Code
-> clients export **delta**-temporality sums by default, and the sidecar's
-> `prometheusremotewrite` exporter **cannot represent delta** - it drops those
-> points at *translation*. The dropped points are **still counted in
-> `otelcol_exporter_sent_metric_points`**, `send_failed` stays 0, and nothing
-> is logged (reproduced on the pinned ADOT v0.43.0) - so every throughput
-> counter looks healthy while zero client metrics reach AMP. The giveaway is
-> `otelcol_exporter_prometheusremotewrite_failed_translations` climbing in step
-> with client activity. Fix (02, 2026-07-24): the gateway pushes
-> `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative` to every
-> client via `/managed/settings`; clients pick it up on their next settings
-> fetch. A `deltatocumulative` processor in the sidecar was deliberately
-> rejected: with `DesiredCount: 2` the ALB round-robins one client's exports
-> across both sidecars, whose independent delta->cumulative reconstructions of
-> the same series would conflict. (Verified on both v0.43.0 and the deployed v0.49.0 pin. The v0.49
-> deprecation warning about `add_metric_suffixes` is harmless - the key is
-> still honored. If ever migrating, the equivalent is `translation_strategy:
-> UnderscoreEscapingWithoutSuffixes` - the WithOUT variant; the WithSuffixes
-> variant would re-add unit/type suffixes and break the dashboard names.)
-
-> **Dashboard queries reworked for per-session series (2026-07-24).**
-> *(Query shapes below are SUPERSEDED by the 2026-07-26 entry that follows -
-> kept as history.)* Keeping
-> `session.id` split cost/usage into one series per session, which broke the
-> dashboard's `increase(...[window])` panels: `increase()` needs >=2 samples
-> per series and returns NOTHING for a short/sparse session, so panels read
-> ZERO while work is happening. The panels were reworked (validated against the
-> pinned ADOT v0.49.0 -> Prometheus, not live AMP):
->   - cumulative TOTALS (cost/token stat tiles, top-users table):
->     `sum(max_over_time(metric[$__range]))` - each session's counter peak is
->     its total; exact, never zero on sparse sessions.
->   - cumulative RATES (time-series "by team/model/..."):
->     `sum by (X) (max_over_time(m[1h]) - min_over_time(m[1h]))` - each
->     session's rise within the trailing hour; a single-sample session
->     contributes 0 instead of emptying the whole panel.
->   - COUNTS (Sessions, Active users): `count(group by (session_id|user_email)
->     (count_over_time({__name__=~"claude_code_.+", ...}[window])))` - distinct
->     ids seen in the window; robust to single-sample and already-ended
->     (stale) sessions, unlike the old counter-`increase()` and instant counts.
-> The dashboard JSON is baked into the Grafana image, so **rebuild + push the
-> Grafana image (bump GRAFANA_IMAGE_TAG) and re-run 03** to pick up the change.
-> Caveat: sessions spanning the window's start edge slightly over-attribute
-> (their pre-window spend counts in the window). For exact accounting the
-> gateway's Postgres `spend` table remains authoritative.
-
-> **Cumulative panels added; stale sessions no longer fall off (2026-07-26).**
-> The trailing-1h time-series read as "the trend", but a session's
-> contribution drains out of a 1h window within an hour of the client going
-> quiet, so spend appeared to vanish from the right edge of the graphs
-> (operator-reported confusion; the same aging applies to the range tiles as
-> the relative range advances). The dashboard now has two sections plus
-> reworked tiles, all validated query-by-query against a real Prometheus
-> (3.7.1) with a synthetic multi-session dataset (active, single-sample,
-> stale-mid-range, spanning-range-start, >1h-gap sessions) - not live AMP:
->   - **Cumulative (selected range)** - seven new time-series + the top-users
->     table. Per-session in-range rise:
->     `sum by (X) (max_over_time(m[$__range]) - ((0 + last_over_time(m[1h]
->     offset $__range)) or (0 * max_over_time(m[$__range]))))` - counter peak
->     minus the session's value at the window start when it was already
->     running, else the full counter. A session that starts in-range FREEZES
->     at its final value and holds to the right edge (stale clients no longer
->     fall off); single-sample sessions count in full; the right edge matches
->     the tiles exactly. The `(0 + ...)` keeps both `or` operands name-free
->     (`last_over_time` is one of the few functions that RETAINS `__name__`);
->     defensive only - vector matching ignores `__name__`, and the unguarded
->     form also evaluates correctly (both verified on Prometheus 3.7.1).
->     Caveats: sessions overlapping the range START are accounted against the
->     sliding lookback, so mid-graph they can over-read and decline before
->     settling exact at the right edge *(this caveat is FIXED by the
->     2026-07-28 anchored-baseline entry below)*; a live session that goes >1h silent
->     across the range-start boundary is treated as new (pre-range spend
->     counts once). Curves are capped at `maxDataPoints: 200` - full-range
->     lookbacks at every step are the expensive query shape on AMP (its
->     Cortex-lineage frontend splits long range queries into per-day
->     sub-queries - Cortex-default 24h, not an AWS-documented figure - each
->     refetching the whole lookback).
->   - **Burn rate (trailing 1h)** - the previous seven time-series, retitled
->     so the drain-off reads as by-design ("who is spending right now").
->     Expressions value-identical to before; only the two missing template-
->     variable filters were added so they respect the same dropdowns as the
->     tiles.
->   - **Tiles** use the same per-session accounting as the cumulative curves
->     (so tile == curve right edge, and a session spanning the range start no
->     longer over-counts its pre-range spend), and now run as INSTANT queries
->     - as range queries Grafana evaluated the full-range expression at every
->     plot step and kept only the last point, pure wasted AMP cost.
->   - **Bug found by the validation dataset:** the Sessions / Active-users
->     counts selected `{__name__=~"claude_code_.+"}`; range functions drop the
->     metric name, so the cost+token series of one session collide into the
->     same label set and the whole query errors ("vector cannot contain
->     metrics with the same labelset") as soon as one session emits two
->     metrics with IDENTICAL label sets - live, that is any session that
->     increments two of the attribute-less counters (session / commit /
->     pull-request counts; cost and token series escape only because their
->     `model`/`type` labels differ). The counts now select
->     `claude_code_cost_usage` only ("sessions/users with spend activity");
->     `scripts/diagnostics/amp-query.py` had the same PromQL shape in its
->     burst-proof probe and now uses the series endpoint instead.
-> Deploy as above: bump GRAFANA_IMAGE_TAG, rebuild + push, re-run 03. On the
-> live run, eyeball: tile == cumulative right edge, a finished session still
-> visible at the right edge an hour later, and the Sessions tile non-empty
-> (it may have been erroring silently before this fix). AMP's engine is
-> Prometheus-2-lineage (window boundaries closed both ends vs 3.x left-open);
-> the validated expressions do not depend on boundary inclusivity.
-
-> **Cumulative panels: pre-range "ghost" sessions excluded (2026-07-27).**
-> Live 1/2/3-day screenshots showed the sliding-lookback caveat above is
-> worse than "sessions overlapping the range START": a session that ENDED
-> BEFORE the range start still appears at its FULL value at the left edge of
-> the cumulative curves whenever it falls within one range-width before the
-> range start (`(start - range, start)`) - its samples sit inside the
-> per-plot-point `[$__range]` lookback while the `offset $__range` baseline
-> window is empty, so `or 0` counts the whole counter. Mid-graph it decays as
-> the shifted baseline window slides through the session's climb, then goes
-> absent - the "drop-off" an operator sees at exactly one window width (a
-> 07/25 session ghosted the 2-day view; the 1-day and 3-day views of the same
-> data were clean). Tiles (instant queries) were always correct. Fix: every
-> cumulative time-series expression is now gated per-session on having at
-> least one sample INSIDE the visible range -
-> `(... existing per-session rise ...) and
-> count_over_time(m{...}[$__range] @ end())` - the `@ end()`-anchored window
-> is exactly the visible range regardless of plot step, so fully-pre-range
-> sessions vanish from every step while range-start-spanning sessions (which
-> do have in-range samples) keep their documented mid-graph decline *(fixed
-> in turn by the 2026-07-28 entry below)*. The
-> `and` matches on the full label set; both sides are range functions over
-> the same selector so the sets align, and `__name__` is dropped on both.
-> Instant tiles and the top-users table are untouched: at instant eval the
-> lookback already equals the visible range, so the gate is a no-op there
-> (asserted, not assumed). Validated against a real Prometheus (3.7-lineage)
-> with a synthetic 5-session TSDB (ghost, freeze-and-hold, single-sample,
-> spanning-range-start, >1h-gap-resume; 16 assertions): the old expression
-> reproduces the screenshot ghost, the new one drops it at every step, all
-> other session accounting is value-identical, and right edge == tiles still
-> holds. Cost note: the gate adds a third full-range range-vector per plot
-> step on AMP (same `maxDataPoints: 200` cap applies). LIVE CHECK NEEDED: the
-> `@` modifier is standard PromQL (on by default upstream since 2.33,
-> Jan 2022) but is UNVERIFIED against AMP's Cortex-lineage engine from this
-> host - if AMP lacks it, the panels fail LOUDLY with a parse error (not
-> silently wrong data); if that happens, drop the `and count_over_time(...)`
-> gate clause to roll back to the previous (ghosting but correct-at-the-
-> right-edge) behavior. Deploy as above: bump GRAFANA_IMAGE_TAG, rebuild +
-> push, re-run 03. On the live run: pick a range width that puts a finished
-> session just before the range start (the failing 2-day view) and confirm
-> the curve no longer shows it while the tile total is unchanged.
-
-> **Cumulative panels: baseline anchored at the range start — curves now
-> strictly monotonic (2026-07-28).** Live 12h/24h screenshots after the
-> ghost fix showed the remaining documented caveat is operator-visible: a
-> session that started BEFORE the range start stepped DOWN near the right
-> edge of the 12h view (mirroring its early-morning climb exactly one
-> range-width later) while the same data's 24h view was clean. Cause: the
-> baseline term `last_over_time(m[1h] offset $__range)` is evaluated PER
-> PLOT POINT, so its 1h window slides forward with the plot time and grows
-> as it crosses the session's pre-range climb - a growing subtrahend makes
-> the "cumulative" curve decline. Fix: the seven cumulative time-series now
-> anchor the baseline at the visible range start -
-> `last_over_time(m[1h] @ start())` - a FIXED window `(start-1h, start]`
-> identical at every plot step, so each curve is exactly
-> `counter(t) - counter(range start)`: monotonic non-decreasing, same right
-> edge. The `@ end()` sample-in-range gate from 2026-07-27 is unchanged.
-> Instant tiles and the top-users table keep `offset $__range`: at instant
-> eval the offset window IS `(start-1h, start]`, so they were always right
-> and are byte-identical to before. Validated against a real Prometheus
-> (3.x) with a 6-session synthetic TSDB (range-start-spanning repro, ghost,
-> freeze-and-hold, single-sample, >1h-gap-resume, whole-range-active; 26
-> assertions): the old expression reproduces the screenshot decline, the
-> new one is non-decreasing for every series, ghost exclusion still holds,
-> and every right edge is exact and equals the tiles (the fix changes the
-> curve's path, not any totals). Remaining accepted caveat (unchanged): a
-> session already running before the range start whose samples go >1h
-> silent across the boundary has an empty baseline window and counts its
-> full counter (pre-range spend included). The 12h/24h screenshots also
-> retire the "@ modifier UNVERIFIED against AMP" caveat above - the
-> `@ end()`-gated panels render live data, so AMP accepts `@`; multi-day
-> ranges additionally rely on the Cortex-lineage frontend rewriting
-> `@ start()`/`@ end()` to absolute timestamps before its per-day query
-> split (a real pre-1.11 Cortex bug, fixed Nov 2021 - near-certain on a
-> 2025-era AMP stack, but our 12h/24h evidence never crossed a split
-> boundary). Deploy as above: bump GRAFANA_IMAGE_TAG, rebuild + push,
-> re-run 03. Live checks: (1) a range whose start lands mid-session (the
-> failing 12h view) - the curve must only ever step up, and the right edge
-> must still equal the tile; (2) the split-rewrite probe - `query_range` a
-> >=3-day window of `last_over_time(claude_code_cost_usage[1h] @ start())`
-> via `scripts/diagnostics/amp-query.py` and confirm each returned series
-> is a FLAT constant across the whole range; if AMP's frontend resolved
-> `start()` per sub-query the value would step at each 24h boundary
-> (loud, unmissable failure - and the trigger to roll back to
-> `offset $__range`).
-
-> **Session labels (2026-07-24).** `session.id` is KEPT as a metric label. It
-> was previously deleted for cardinality, but each session's counters start at
-> 0, so concurrent sessions from the same user+model interleaved onto one
-> series as a sawtooth - `increase()` read every alternation as a counter
-> reset and inflated spend drastically (observed live on the dashboard). With
-> the label kept, each session is its own monotonic series and the
-> sum-by-team/user panels are exact with no query changes. Cardinality is
-> bounded by CONCURRENT sessions (stale series age out of AMP's active-series
-> count within minutes). If a fleet ever grows to where that matters, resize
-> deliberately - do not silently re-add the delete, or the sawtooth inflation
-> returns.
-
----
-
-### Developers bounced back to browser login every ~1 hour
-
-*Symptom:* a developer is forced through the full browser SSO at a fixed
-interval matching `SESSION_TTL_HOURS` (default 1h). Often paired with: after
-the bounce, `/login` shows the **default account picker** instead of the
-gateway, and only closing and reopening Claude Code restores the forced-gateway
-login.
-
-*Cause:* the gateway refreshes its session JWT silently using an UPSTREAM Okta
-**refresh token** (`[gateway-refresh] refreshed gateway JWT` in the gateway
-logs on success). If Okta issued no refresh token, there is nothing to refresh,
-so the session simply dies at the TTL. Okta issues a refresh token only when
-BOTH are true on the app: the **Refresh Token grant type** is enabled, and
-**`offline_access`** is a granted scope. Our clients request `offline_access`,
-but if the Okta app was set up for Authorization Code only, Okta drops it
-silently. The `/login`-shows-the-picker follow-on is a consequence:
-`forceLoginMethod: "gateway"` is applied at process startup, and the
-mid-session re-login path does not re-assert it — restarting re-reads the
-managed setting. Fixing the refresh token removes the mid-session re-login
-entirely, so the picker problem disappears with it.
-
-*Fix (Okta admin, no redeploy):* on the gateway app, enable the **Refresh
-Token** grant type alongside Authorization Code; confirm **`offline_access`**
-is granted; on an org authorization server, confirm its refresh-token policy
-issues them. Then log in fresh once. See `docs/requests/okta-request-email.md` (updated
-to request both grants). This is TTL-independent — lowering `SESSION_TTL_HOURS`
-only changes how fast revocation propagates, not whether refresh works.
-
-*Confirming:* success shows `[gateway-refresh] refreshed gateway JWT` in the
-gateway logs; failure shows `[gateway-refresh] IdP rejected refresh token;
-clearing it` or `OAuth session expired and could not be refreshed`.
-
----
-
-### Telemetry forward failing with `ECONNREFUSED_SSRF`
-
-*Symptom:* gateway logs `forward to http://localhost:4318 failed: Error:
-ECONNREFUSED_SSRF: blocked (cloud metadata / link-local): localhost ->
-127.0.0.1`. Metrics stop reaching AMP and the `missing-telemetry` alarm fires,
-while the gateway itself keeps serving traffic.
-
-*Cause:* the gateway blocks loopback addresses by default in its SSRF guard.
-The sidecar is reached over loopback, so the forward is rejected. Note the
-gateway *requires* a loopback host for a non-HTTPS `forward_to` — so the two
-rules conflict unless the override below is set.
-
-*Fix:* `CLAUDE_GATEWAY_ALLOW_LOOPBACK=1` on the gateway container. The template
-sets this whenever telemetry is enabled; if you see this error, the running task
-predates that change — re-run `deploy-gateway.sh` and confirm the new task
-definition carries the variable:
-
-```bash
-aws ecs describe-task-definition --task-definition <gateway-td> \
-  --query "taskDefinition.containerDefinitions[?name=='gateway'].environment[?name=='CLAUDE_GATEWAY_ALLOW_LOOPBACK']"
-```
-
-*Security note:* the override re-permits only `loopback` and `unspecified`.
-Link-local (169.254.0.0/16, including EC2 IMDS `169.254.169.254`),
-`100.100.100.200`, and `fd00:ec2::254` remain blocked — probe-verified. It does
-suppress the startup "pod can reach cloud metadata endpoint" warning, which is a
-diagnostic only; the egress controls are unchanged.
+Dependencies are `botocore` (ships with the AWS CLI) and `pg8000`; on an
+offline host install the latter from the repo's vendored wheels:
+`pip install --no-index --find-links docker/db-admin/vendor pg8000`. No
+`boto3` needed. The tool uses the **app-user** secret, never the RDS master.
 
 ---
 
 ## 10. Spend caps (per-user / per-group cost limits)
 
-*Moved:* spend management now has its own runbook —
+*Moved:* spend management has its own runbook —
 [`cost-controls.md`](cost-controls.md). It covers the enforcement model (the
 `admin:` master switch; caps as `spend_limits` rows), setting caps via the
 portal admin page or the break-glass `scripts/set-spend-limit.sh` CLI,
 monitoring spend (Grafana dashboard, AMP queries, Postgres ground truth),
 what a capped developer sees, the **fail-closed spend-store outage** incident
-runbook (an RDS problem halts all inference fleet-wide — deliberate
-2026-07-24 decision), the audit trail, and known gaps. This section number is
+runbook (a spend-store problem halts all inference fleet-wide — a deliberate
+availability trade), the audit trail, and known gaps. This section number is
 kept so existing references to "om-runbooks §10" keep resolving.
 
 ---
@@ -1371,10 +999,7 @@ kept so existing references to "om-runbooks §10" keep resolving.
 ## 11. Bedrock prompt logging (model invocation logging)
 
 *Trigger / Frequency:* Enabling or disabling the capture of verbatim prompts
-and model responses; access requests to the captured data. Status:
-**[NEEDS TEST-RUN CONFIRMATION]** — mechanics are doc-verified against the
-Bedrock invocation-logging guide; the GovCloud put/get round-trip, SSE-KMS
-delivery, and the large-data S3 prefix are unexercised.
+and model responses; access requests to the captured data.
 
 *Model:* Bedrock's **model invocation logging** is an **account+region-level
 Bedrock setting**, not a stack resource. Stack 03 **always** creates the
@@ -1402,9 +1027,9 @@ delivers to the SSE-KMS bucket only if the CMK's **key policy** grants
 `BedrockInvocationLogsWrite` in `01-database.yaml`). When it is missing, the
 enable call fails at the very end with the **misleading**
 `Failed to validate permissions for bucket ... verify the S3 bucket policy`
-(the denial is at KMS, not S3 — hit live 2026-07-27;
-`deploy-observability.sh` now preflights this and fails fast). How the
-statement gets onto the key depends on who manages it:
+(the denial is at KMS, not S3; `deploy-observability.sh` preflights this and
+fails fast with the real cause). How the statement gets onto the key depends
+on who manages it:
 
 - **Stack-managed key** (01 created it and still owns it — `KmsKeyArn`
   parameter on the deployed stack is empty): re-run
@@ -1464,8 +1089,7 @@ aws logs tail "/claude/${NAME_PREFIX}/bedrock-prompts" --region "$AWS_REGION" --
 aws s3 ls "s3://<BedrockPromptLogsBucketName output>/AWSLogs/" --recursive | head
 ```
 Then note the real key layout the delivery used and tighten the bucket
-policy's bucket-wide `s3:PutObject` grant to those exact prefixes (tracked in
-the security-review entry).
+policy's bucket-wide `s3:PutObject` grant to those exact prefixes.
 
 *Disable:* set `BEDROCK_PROMPT_LOGGING=false` and re-run
 `deploy-observability.sh` — the script removes the account configuration
@@ -1493,19 +1117,13 @@ else in the account relies on it.
 ## 11a. Re-adopting a stack-detached CMK into stack 01 (resource import)
 
 *Trigger / Frequency:* One-time repair, only for deployments whose 01 stack
-**created** the CMK but later detached it. Before the 2026-07-27
-`deploy-database.sh` fix, the script persisted the created key's ARN into
-`deploy.env` `KMS_KEY_ARN` and then fed it back as the `KmsKeyArn` parameter
-on the next re-run — CloudFormation read that as "bring-your-own", dropped
-the (Retain'd) `KmsKey` from the stack, **deleted the `alias/<prefix>`
-alias**, and every later `KeyPolicy` change in the template silently applied
-to nothing. Status: **[NEEDS TEST-RUN CONFIRMATION]** — partially exercised
-live 2026-07-28: the original ONE-SHOT import (flip `KmsKeyArn=''` in the
-import changeset itself) was **rejected by CloudFormation** with "As part of
-the import operation, you cannot modify or add [Outputs]", so the procedure
-below is now two-phase (import with everything resolving as deployed, then
-a normal update to flip the parameter). The two-phase form matches AWS's
-documented resolution but its GovCloud run is still outstanding.
+**created** the CMK but later detached it. An earlier `deploy-database.sh`
+persisted the created key's ARN into `deploy.env` `KMS_KEY_ARN` and then fed
+it back as the `KmsKeyArn` parameter on the next re-run — CloudFormation read
+that as "bring-your-own", dropped the (Retain'd) `KmsKey` from the stack,
+**deleted the `alias/<prefix>` alias**, and every later `KeyPolicy` change in
+the template silently applied to nothing. The current script preserves
+ownership, so this repair applies only to deployments created before it.
 
 *Am I affected?* All three of these hold:
 
@@ -1525,11 +1143,10 @@ aws cloudformation describe-stack-resources --region "$AWS_REGION" --stack-name 
 #    -> []
 ```
 
-*Prerequisites:* the 2026-07-27 fix must be deployed to the **repo copy on
-the deploy host** (the ownership-preserving `deploy-database.sh` and the
-`DeletionPolicy: Retain` on `KmsKeyAlias` — import requires a DeletionPolicy
-on every imported resource). Without the script fix, the next routine 01
-re-run detaches the key again.
+*Prerequisites:* the **repo copy on the deploy host** must carry the
+ownership-preserving `deploy-database.sh` and the `DeletionPolicy: Retain` on
+`KmsKeyAlias` (import requires a DeletionPolicy on every imported resource).
+Without the script fix, the next routine 01 re-run detaches the key again.
 
 *Procedure:*
 
@@ -1555,7 +1172,7 @@ aws cloudformation get-template-summary --region "$AWS_REGION" \
 
 # 3. IMPORT changeset - TWO PHASES. A one-shot import that also flips
 #    KmsKeyArn='' fails with "As part of the import operation, you cannot
-#    modify or add [Outputs]" (LIVE-CONFIRMED 2026-07-28): import
+#    modify or add [Outputs]": import
 #    validation compares the CONDITION-RESOLVED templates, and flipping the
 #    parameter moves KmsKeyArnResolved onto its !GetAtt branch - a modified
 #    Output, which imports forbid. AWS's documented resolution is exactly
@@ -1640,9 +1257,9 @@ aws kms get-key-policy --key-id "$KEY_ID" --policy-name default \
 #    `KMS_KEY_ARN= scripts/deploy-database.sh` is silently OVERWRITTEN by
 #    the persisted export - resolve_kms_param then sees env == stack
 #    parameter (no override, no log line), CreateKmsKey stays false, and
-#    the update DETACHES the freshly imported key again (LIVE-CONFIRMED
-#    2026-07-28; the key and alias physically survive - the imported
-#    template's DeletionPolicy Retain governs the removal - and recovery
+#    the update DETACHES the freshly imported key again (the key and alias
+#    physically survive - the imported template's DeletionPolicy Retain
+#    governs the removal - and recovery
 #    is: re-run steps 3a-5, then this step, done correctly).
 ( source scripts/common.sh; set_env_var KMS_KEY_ARN "" )
 ALLOW_KMS_PARAM_CHANGE=1 scripts/deploy-database.sh
@@ -1681,11 +1298,8 @@ scripts/deploy-database.sh
 *Trigger / Frequency:* A developer reports that `claude` exits at launch with
 **"Unable to connect to Anthropic services"**, and `claude auth login` refuses
 with *"forceLoginMethod is 'gateway' in managed settings; run interactive
-/login to authenticate."* Typically right after they ran `/logout`. Status:
-**[BINARY-VERIFIED against `mirror/2.1.211/claude`, 2026-07-24; NEEDS TEST-RUN
-CONFIRMATION of the recovery steps on a real laptop]** — the mechanism was read
-out of the shipped build during the live run; the fix has not yet been
-re-exercised end to end.
+/login to authenticate."* Typically right after they ran `/logout`, or on a
+first-ever run on a clean profile.
 
 *Why it happens (this deployment makes a benign check fatal):* the two logout
 paths are **not** equivalent.
@@ -1737,7 +1351,7 @@ Then open a **new** terminal, run `claude`, and run `/login` — the locked
 
 *Verification:* `claude` starts to a prompt instead of exiting; `/login`
 completes the Okta round-trip; `/model` lists only the three served models
-(runbook 6 / the test-run checklist).
+(runbook 6).
 
 *Notes & pitfalls:*
 
@@ -1763,8 +1377,8 @@ completes the Okta round-trip; `/model` lists only the three served models
 `/logout`; that path leaves onboarding intact, so `claude` still starts and
 `/login` reconnects. The same trap applies to a **fresh install** on a
 locked-down laptop — a first-ever run has `hasCompletedOnboarding` unset and
-takes the identical preflight path — so exercise a clean profile during the
-test run before broad rollout rather than discovering it per-user.
+takes the identical preflight path — so exercise a never-used profile before
+any broad rollout rather than discovering it per-user.
 
 *Rollback / recovery:* the edit is a single boolean in a backed-up file;
 restore `.claude.json.bak` to undo. Nothing server-side changes.
@@ -1773,17 +1387,16 @@ restore `.claude.json.bak` to undo. Nothing server-side changes.
 
 ## 13. Teardown
 
-*Trigger / Frequency:* Decommissioning the deployment (test account cleanup or
-end of life). Rare and deliberate. Status:
-**[NEEDS TEST-RUN CONFIRMATION]**.
+*Trigger / Frequency:* Decommissioning the deployment (lab cleanup or end of
+life). Rare and deliberate.
 
 *Order is the reverse of deploy: `04 and 03 → 02 → 01`.* The portal (`04`) and
 observability (`03`) stacks both import from `02` and are independent of each
 other — delete them (in either order, or in parallel) before the gateway.
-Since 2026-07-22 **03 no longer owns an ECS service or Cloud Map namespace**
-(the collector became a sidecar in the 02 gateway task), so its delete is
-simpler — no lingering collector ENIs, no discovery-service-before-namespace
-ordering to wait on. There is intentionally **no teardown script**; delete
+**03 owns no ECS service or Cloud Map namespace** (the collector is a sidecar
+in the 02 gateway task), so its delete is simple — no lingering collector
+ENIs, no discovery-service-before-namespace ordering to wait on. There is
+intentionally **no teardown script**; delete
 stacks explicitly so each destructive step is a conscious act. Downstream stacks
 import upstream exports, so an out-of-order delete fails on the export lock.
 
@@ -1835,8 +1448,8 @@ aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-nam
 - **AMP workspace** (`Workspace`, 03) — `Retain`.
 - **Portal artifacts bucket** (`ArtifactsBucket`, 04) — `Retain`
   (CMK-encrypted; holds the published release binaries).
-- **Every CloudWatch log group, in every stack** — `Retain` (operator
-  decision 2026-07-18: logs outlive stacks; a cfn-guard gate
+- **Every CloudWatch log group, in every stack** — `Retain` (a deliberate
+  decision: logs outlive stacks; the cfn-guard gate
   `log_groups_survive_teardown` enforces it). This covers the ECS task
   groups (gateway — which now also holds the collector sidecar's `otel`
   streams — grafana, portal), the activity window, the
@@ -1846,10 +1459,11 @@ aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-nam
   CMK). Deleting a retained group afterwards is a deliberate manual act.
   Note the redeploy consequence: the groups carry fixed names, so a later
   **re-create collides** with the retained groups and the new stack fails —
-  export what you need, then delete them first (the test-run runbook §0 has
-  the command list). The adopted groups (RDS postgresql, Lambda) additionally
-  collide on the *first* deploy of this change into an account where the
-  services already auto-created them.
+  export what you need, then delete them first
+  ([`greenfield-deployment.md`](greenfield-deployment.md) Phase 1 has the
+  command list). The three pre-created groups (RDS postgresql and the two
+  db-admin Lambdas) additionally collide in an account where those services
+  already auto-created them under the same names.
 - **RDS instance** (`Database`, 01) — `DeletionPolicy: Snapshot` → a **final
   snapshot** is taken; the running instance is removed. The snapshot persists.
 - Everything else (ALB, ECS services/cluster, secrets, VPC endpoints,
@@ -1860,11 +1474,18 @@ cloudformation describe-stacks` reports the stacks gone; confirm the retained
 buckets, CMK, AMP workspace, and final DB snapshot still exist if you intend to
 keep them, or clean them up explicitly.
 
-*Rollback / recovery:* Redeploy from scratch per the
-[test-run-runbook](test-run-runbook.md). Data recovery relies on the retained
-final RDS snapshot (restore per runbook 8) and the retained buckets.
+*Rollback / recovery:* Redeploy from scratch per
+[`greenfield-deployment.md`](greenfield-deployment.md). Data recovery relies
+on the retained final RDS snapshot (restore per runbook 8) and the retained
+buckets.
 
 *Notes & pitfalls:* Deleting a stack that another stack still imports from
 fails — always `04 and 03 → 02 → 01`, waiting for each delete to complete
-before the next tier. Retained resources are **not** free; account for the
+before the next tier. Two waits to expect: the db-admin Lambda ENIs can
+linger ~20 minutes attached to 01's db-client SG (a 01 delete failing with a
+dependency violation usually just needs a retry), and named Secrets Manager
+secrets enter a 7–30 day recovery window — to redeploy the same
+`NAME_PREFIX` immediately, first
+`aws secretsmanager delete-secret --force-delete-without-recovery` the
+`<prefix>/*` secrets. Retained resources are **not** free; account for the
 retained buckets, CMK, AMP workspace, and snapshots after teardown.

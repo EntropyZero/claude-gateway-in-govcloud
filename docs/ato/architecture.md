@@ -73,8 +73,8 @@ Every hop, its port, protocol, and where the TLS session terminates.
 | # | Hop | Port | Encryption | Server identity proven by |
 |---|---|---|---|---|
 | 1 | Laptop → ALB | 443 | TLS (FIPS policy) | Enterprise-CA cert; client pins SHA-256 fingerprint on first connect |
-| 2 | ALB → gateway | 8080 | TLS | Per-task ephemeral cert (ALB does not validate targets; key never leaves task) |
-| 3 | ALB → Grafana | 3000 | TLS | Per-task ephemeral cert (same model) |
+| 2 | ALB → gateway | 8080 | TLS | Self-signed leaf generated on the build host and baked into the image (ALB does not validate targets; the key is identical across every task running that image and rotates only on the next image rebuild) |
+| 3 | ALB → Grafana | 3000 | TLS | Self-signed leaf baked into the Grafana image (same build-time model) |
 | 4 | Gateway/Lambda → RDS | 5432 | TLS `verify-full` | RDS regional CA bundle baked into images; `rds.force_ssl=1` server-side |
 | 5 | Gateway → Bedrock | 443 | TLS + SigV4 | AWS cert; endpoint policy = 3 approved models only |
 | 6 | Gateway → collector (sidecar) | 4317–4318 | Loopback — no network hop | Same Fargate task; the collector is a localhost sidecar with its receiver bound to `127.0.0.1`, so nothing off-task can reach it (see §10) |
@@ -151,8 +151,10 @@ noted.
 | JWT session-signing secret | `<prefix>/jwt-secret` | Stack (generated) | Gateway tasks | Manual runbook: prepend → roll → remove |
 | Portal session-signing secret | `<prefix>/portal-session-secret` | Stack 04 (generated) | Portal tasks | Manual (regenerate + roll) |
 | Grafana `admin` password | `<prefix>/grafana-admin-password` | Stack (generated) | Break-glass only (login form disabled) | Manual |
+| Spend-admin write key | `<prefix>/spend-admin-write-key` | Stack (generated) | Gateway task only (config's `admin:` block recognizes it as the write-scope bearer token); break-glass via `set-spend-limit.sh` — no other task is ever handed this key | Manual, not automatic (`GenerateSecretString` at create); procedure in `cost-controls.md` §7 |
+| Spend-admin read key | `<prefix>/spend-admin-read-key` | Stack (generated) | Gateway task (`admin:` block) **and** the download portal (04, imported via the `<prefix>-spend-read-key-arn` export) for `/portal/me` self-usage and the admin listing view | Manual, not automatic; rolling it means re-deploying both the gateway and portal services (`cost-controls.md` §7) |
 | TLS: enterprise leaf + key | ACM import | Enterprise CA via `import-enterprise-cert.sh` | ALB listener | Manual re-import; `DaysToExpiry` alarm at 30 d |
-| TLS: per-task certs | Generated in-container at startup | Gateway / Grafana entrypoints | ALB target connections | Every task launch; keys never leave the task |
+| TLS: image-baked certs (gateway, Grafana, portal) | Self-signed leaf generated with `openssl` on the build host, then `COPY`-ed into the image at `docker build` time — the image itself carries no `openssl` | `build-and-push-image.sh` / `build-and-push-grafana.sh` / `build-and-push-portal.sh` | ALB target connections (hops 2–3 in §2) | Every image rebuild, not per task launch; the key is an ECR image-layer artifact, identical across every task running that image tag until the next rebuild |
 
 Handling rules embedded in tooling: secret values never appear on argv
 (`file://` + mode-600 temp files), never in CloudFormation parameters,
@@ -207,7 +209,7 @@ empty database) fails fast.
 |---|---|---|
 | RDS storage + snapshots | SSE | CMK |
 | RDS master secret / all Secrets Manager secrets | SSE | CMK |
-| CloudWatch log groups (ECS gateway [+ its collector sidecar, stream prefix `otel`], grafana/portal, activity, portal-audit, RDS postgresql/pgaudit, db-admin Lambdas) | SSE | CMK — every group is template-declared (never service-auto-created) precisely so the CMK and retention apply; all carry `DeletionPolicy: Retain` (operator decision 2026-07-18: no log group is destroyed by a teardown) |
+| CloudWatch log groups (ECS gateway [+ its collector sidecar, stream prefix `otel`], grafana/portal, activity, portal-audit, RDS postgresql/pgaudit, db-admin Lambdas) | SSE | CMK — every group is template-declared (never service-auto-created) precisely so the CMK and retention apply; all carry `DeletionPolicy: Retain`, so no log group is destroyed by a stack teardown |
 | Activity archive bucket | SSE-KMS + bucket key | CMK |
 | Portal artifacts bucket (04) | SSE-KMS + bucket key | CMK |
 | AMP workspace | SSE | CMK (`ENCRYPT_AMP_WITH_CMK`, creation-time) |
@@ -218,25 +220,25 @@ empty database) fails fast.
 
 ## 10. Known accepted risks / review notes
 
-Items a reviewer should see up front, with rationale (full history in
-`security-review-2026-07.md`):
+Items a reviewer should see up front, with rationale (finding-by-finding
+detail in `security-assessment-2026-07.md`):
 
-1. **Gateway→collector OTLP hop — formerly plaintext-but-SG-scoped, now
-   eliminated** (§2 hop 6). This was an accepted partial risk; the live run
-   withdrew it. The gateway refuses a non-HTTPS telemetry forward URL unless
-   the host is localhost, so the plaintext network hop could never boot, and
-   an internal-CA TLS listener would add a cert + CA the gateway must trust
-   (an SC-17/SC-12 burden the org declined). The collector was therefore moved
-   into the gateway task as a **localhost sidecar** (2026-07-22): the gateway
-   forwards over loopback (`http://localhost:4318`), so there is no network
-   telemetry leg and SC-8 is met by absence of transmission. The gateway task
-   role is now the telemetry writer to AMP + the activity log group (scoped to
-   this workspace and this log group). Pending live verification that metrics
-   reach AMP through the sidecar (`security-review-2026-07.md` C2 + fix log).
+1. **There is no gateway→collector OTLP network hop** (§2 hop 6). The
+   gateway refuses a non-HTTPS telemetry forward URL unless the host is
+   localhost, and an internal-CA TLS listener would add a cert + CA the
+   gateway must trust (an SC-17/SC-12 burden the org declined). The collector
+   therefore runs as a **localhost sidecar** inside the gateway task: the
+   gateway forwards over loopback (`http://localhost:4318`), so SC-8 is met by
+   absence of transmission rather than by encryption. This requires
+   `CLAUDE_GATEWAY_ALLOW_LOOPBACK=1` on the gateway container (its SSRF guard
+   blocks loopback by default); the override is gated on telemetry being
+   enabled and re-permits only loopback — EC2 IMDS and link-local addresses
+   stay blocked. The gateway task role is the telemetry writer to AMP + the
+   activity log group (scoped to this workspace and this log group).
 2. **ALB access logs cannot use the CMK** — AWS platform limitation;
    SSE-S3 with public access blocked and lifecycle expiry.
-3. **S3 Object Lock deferred** by decision (2026-07-15); revisit if AU-9
-   WORM retention is mandated.
+3. **S3 Object Lock deferred** by decision; revisit if AU-9 WORM retention
+   is mandated.
 4. **Egress 443 to 0.0.0.0/0 from tasks** — required for Okta (public
    SaaS, no VPC endpoint, IP ranges not pinnable); mitigated by port
    scoping, endpoint policies for all AWS traffic, and the central
@@ -247,6 +249,15 @@ Items a reviewer should see up front, with rationale (full history in
 6. **First app-secret rotation is asynchronous** — the stack goes green
    regardless; verify via the db-rotation log group / errors alarm after
    first deploy.
+7. **The ALB→task TLS key (§2 hops 2–3, §6) is an image-build artifact, not
+   a per-task secret.** It is generated once on the build host and baked
+   into the gateway/Grafana/portal images; every task running a given image
+   tag presents the identical key, and any principal able to pull that
+   image (ECR read access) can extract it. This only protects the
+   ALB-to-target hop — the ALB does not validate target certificates, and
+   client trust is anchored to the enterprise leaf on the ALB listener, not
+   this key — so the exposure is bounded to that hop; rotation is achieved
+   by rebuilding and re-pushing the image under a new tag.
 
 ---
 

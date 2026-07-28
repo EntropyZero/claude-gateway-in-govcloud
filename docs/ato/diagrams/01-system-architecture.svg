@@ -38,7 +38,7 @@
 <text x="595.0" y="215" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >stack-policy locked</text>
 <rect x="790" y="150" width="250" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="915.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Grafana  :3000 TLS</text>
-<text x="915.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >per-task self-signed cert</text>
+<text x="915.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >image-baked self-signed cert</text>
 <text x="915.0" y="201" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Okta SSO only, no local login</text>
 <rect x="470" y="284" width="570" height="104" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="755.0" y="305" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway task — ECS Fargate ×2</text>
@@ -64,9 +64,9 @@
 <rect x="470" y="540" width="250" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="595.0" y="561" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Download portal ×2</text>
 <text x="595.0" y="577" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Okta OIDC + group authz (PKCE)</text>
-<text x="595.0" y="591" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >TLS listener :8080, per-task cert</text>
+<text x="595.0" y="591" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >TLS listener :8080, image-baked cert</text>
 <rect x="470" y="646" width="570" height="90" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
-<text x="755.0" y="667" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Interface VPC endpoints — each with a resource policy</text>
+<text x="755.0" y="667" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Interface VPC endpoints — resource policies (ecs: unsupported)</text>
 <text x="755.0" y="683" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >bedrock-runtime (3 approved models only) · ecr.api · ecr.dkr · logs</text>
 <text x="755.0" y="697" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint</text>
 <rect x="470" y="760" width="570" height="76" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>

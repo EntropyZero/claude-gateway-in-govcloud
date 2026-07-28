@@ -582,8 +582,8 @@ Resources:
                 Fn::ImportValue: !Sub '${NamePrefix}-spend-read-key-arn'
 
   # No Name (a protocol change replaces the group; a fixed name self-collides
-  # mid-update). HTTPS: the portal image's TLS entrypoint serves a per-task
-  # self-signed cert; ALBs don't validate target certs. HealthCheckProtocol
+  # mid-update). HTTPS: the portal image serves the self-signed cert baked in
+  # at build; ALBs don't validate target certs. HealthCheckProtocol
   # HTTPS is explicit - ALB health checks default to HTTP even on an HTTPS
   # target group, so without it no target ever goes healthy.
   PortalTargetGroup:

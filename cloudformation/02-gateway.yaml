@@ -3,7 +3,8 @@ Description: >-
   Claude apps gateway on ECS Fargate behind an internal IPv4-only ALB
   (AWS GovCloud). TLS terminates at the ALB with a certificate signed by
   your enterprise CA (imported into ACM; pass its ARN) and is re-encrypted
-  to the tasks (per-task self-signed certs - SC-8 on the internal hop).
+  to the tasks (self-signed certs baked into each image at build - SC-8 on
+  the internal hop; rotated by image rebuild).
   Developers reach the gateway via a corporate-DNS CNAME that points at
   the ALB's default DNS name. Deploy 01-database.yaml first with the same
   NamePrefix.
@@ -400,7 +401,8 @@ Parameters:
       MinimumHealthyPercent 100 + no deployment circuit breaker a wrong
       health check would hang the rollout at services-stable. Deploy 'false'
       first, confirm the otel-collector container reports HEALTHY, then flip
-      to 'true' (test-run-runbook migration note).
+      to 'true' (see docs/operations/greenfield-deployment.md for the
+      migration sequence).
 
   ForwardActivityLogs:
     Type: String
@@ -714,15 +716,15 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          # BOTH delivery principals, deliberately. Test-run finding
-          # (us-gov-west-1): with only the service principal granted, the
-          # log-delivery test-write INTERMITTENTLY (then consistently) got
-          # AccessDenied on a verified-correct policy - GovCloud's writer
-          # still authenticates as the legacy regional ELB account. AWS's
-          # current recommendation is the service principal, and either
-          # writer may be used in a legacy region, so grant both and be
-          # correct regardless of which one shows up. The legacy writer's
-          # bucket-owner-full-control canned ACL is the one ACL that
+          # BOTH delivery principals, deliberately. In us-gov-west-1, with
+          # only the service principal granted, the log-delivery test-write
+          # INTERMITTENTLY (then consistently) got AccessDenied on a
+          # verified-correct policy - GovCloud's writer still authenticates
+          # as the legacy regional ELB account. AWS's current recommendation
+          # is the service principal, and either writer may be used in a
+          # legacy region, so grant both and be correct regardless of which
+          # one shows up. The legacy writer's bucket-owner-full-control canned
+          # ACL is the one ACL that
           # BucketOwnerEnforced still accepts, so ACLs-disabled is safe here.
           # Resource scopes both to this account's log path.
           - Sid: AllowElbLogDeliveryServicePrincipal
@@ -754,11 +756,11 @@ Resources:
       Subnets: !Ref PrivateSubnetIds
       SecurityGroups:
         - !Ref AlbSecurityGroup
-      # Test-run lesson: if a landing-zone auto-remediation also manages ALB
-      # access logs (pointing them at a central bucket), it will fight this
-      # template - the intermittent create-time AccessDenied we chased was
-      # that automation, not a policy bug. Exempt this ALB from any such
-      # rule (or adopt the central bucket) BEFORE deploying.
+      # If a landing-zone auto-remediation also manages ALB access logs
+      # (pointing them at a central bucket), it will fight this template - an
+      # intermittent create-time AccessDenied can be that automation, not a
+      # policy bug. Exempt this ALB from any such rule (or adopt the central
+      # bucket) BEFORE deploying.
       # deletion_protection at create no longer risks a DELETE_FAILED wedge:
       # deploy-gateway.sh uses --disable-rollback, so failed creates keep
       # resources instead of attempting an (un-deletable) rollback. Stack
@@ -780,7 +782,8 @@ Resources:
   # No Name: the HTTP->HTTPS protocol change (and any future protocol
   # change) replaces the target group, and a fixed name would collide with
   # itself mid-update. HTTPS to the target = the ALB re-encrypts; target
-  # certs are not validated by ALBs, so the per-task self-signed cert works.
+  # certs are not validated by ALBs, so the image-baked self-signed cert
+  # (generated on the build host) works.
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -926,8 +929,8 @@ Resources:
         # aps.<region> service grant on the key covers ingestion but the
         # data-plane write is charged to this task role - without it,
         # remote_write returns 403 "not authorized to perform
-        # kms:GenerateDataKey" and NO metrics ever land (test-run lesson).
-        # Scoped to aps via kms:ViaService.
+        # kms:GenerateDataKey" and NO metrics ever land. Scoped to aps via
+        # kms:ViaService.
         - !If
           - HaveTelemetry
           - PolicyName: telemetry-sidecar
