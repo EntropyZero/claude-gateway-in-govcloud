@@ -329,7 +329,18 @@ was not found and switches you to **Opus 4.8**. This is normal behavior, not
 an error — Opus 4.8 is the default here, and `/model` shows what you can
 switch to.
 
-### 5.8 Bounced to the browser sign-in every hour
+### 5.8 Startup fails: your Claude Code version is below the minimum
+
+The gateway enforces a minimum Claude Code version (normally the gateway's
+own version). If your installed client is older, Claude Code exits at
+startup with a message saying the version is below the required minimum.
+The built-in updater is disabled on this deployment, so the fix is to
+download and run the latest installer from the portal (§2.1) — no admin
+rights needed, same as the first install. Your sign-in, settings, and
+history are kept. You'll hit this after the platform team upgrades the
+gateway; the download portal always has the matching installer.
+
+### 5.9 Bounced to the browser sign-in every hour
 
 If you are pushed through the browser SSO at every session expiry (about
 hourly) and `/login` then shows the default picker until you restart Claude
