@@ -50,8 +50,11 @@
     cc.addEventListener("change", fillTeams);
     fillTeams();
 
-    form.insertBefore(label, submit);
-    form.insertBefore(team, submit);
+    /* Keep Team next to Cost center (before the Platform select, when the
+     * page ships one); fall back to just-before-submit otherwise. */
+    var anchor = document.getElementById("platform-label") || submit;
+    form.insertBefore(label, anchor);
+    form.insertBefore(team, anchor);
     /* Server-side validate_selection still re-checks the pair. */
     form.setAttribute("action", form.getAttribute("data-download-action"));
     submit.textContent = "Download pre-configured installer";

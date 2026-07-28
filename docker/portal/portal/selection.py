@@ -5,10 +5,39 @@ class SelectionError(Exception):
     pass
 
 
-# Mirrors Install-ClaudeCode.ps1's ValidatePattern('^[^,\s]*$'): a value that
-# would break OTEL_RESOURCE_ATTRIBUTES parsing or the install.cmd argument.
+# Download platforms the portal serves: form value -> release-manifest
+# platform key + the binary's name in the release (and in the ZIP).
+PLATFORMS = {
+    "windows": {"manifest_key": "win32-x64", "binary_name": "claude.exe"},
+    "linux": {"manifest_key": "linux-x64", "binary_name": "claude"},
+}
+
+
+def validate_platform(platform):
+    """Reject anything not a served platform. None (a pre-platform bookmark
+    or a hand-built URL without the parameter) defaults to windows - the only
+    platform the portal served before the selector existed."""
+    if platform is None:
+        return "windows"
+    if platform not in PLATFORMS:
+        raise SelectionError("platform %r is not an allowed value" % platform)
+    return platform
+
+
+# Mirrors Install-ClaudeCode.ps1's ValidatePattern('^[^,\s]*$') - a value
+# that would break OTEL_RESOURCE_ATTRIBUTES parsing or the install.cmd
+# argument - PLUS the shell metacharacters ($ " ` \ ' %) that the generated
+# install.sh / install.cmd wrappers interpolate into quoted shell/batch
+# context: values are admin-configured, but the boot-time validator must not
+# accept strings the wrapper generators cannot safely quote.
+_SHELL_UNSAFE = set('$"`\\\'%')
+
+
 def clean_token(value):
-    return value != "" and not any(c.isspace() for c in value) and "," not in value
+    return (value != ""
+            and not any(c.isspace() for c in value)
+            and "," not in value
+            and not any(c in _SHELL_UNSAFE for c in value))
 
 
 def parse_cost_center_teams(raw):
@@ -30,7 +59,8 @@ def parse_cost_center_teams(raw):
             if not clean_token(token) or ":" in token or "|" in token:
                 raise ValueError(
                     "PORTAL_COST_CENTER_TEAMS value %r must have no spaces, "
-                    "commas, colons or pipes" % token)
+                    "commas, colons, pipes, or shell metacharacters "
+                    "($ \" ` \\ ' %%)" % token)
         if cc in mapping:
             raise ValueError("PORTAL_COST_CENTER_TEAMS lists cost center %r twice" % cc)
         if len(set(teams)) != len(teams):

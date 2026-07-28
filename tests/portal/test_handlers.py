@@ -20,14 +20,19 @@ ISS = "https://issuer.example.com"
 AUD = "client-abc"
 GROUP = "claude-gateway-users"
 SHA = "3f1c" + "0" * 60
+LINUX_SHA = "9a2b" + "1" * 60
 
 
-def _release_s3(*, version="2.1.207", installer=b"<PS1>", exe=b"MZ\x00exe"):
-    manifest = {"platforms": {"win32-x64": {"checksum": SHA}}}
+def _release_s3(*, version="2.1.207", installer=b"<PS1>", exe=b"MZ\x00exe",
+                linux_installer=b"<SH>", linux_bin=b"\x7fELF\x00bin"):
+    manifest = {"platforms": {"win32-x64": {"checksum": SHA},
+                              "linux-x64": {"checksum": LINUX_SHA}}}
     return FakeS3({
         "releases/%s/manifest.json" % version: json.dumps(manifest).encode(),
         "releases/%s/claude.exe" % version: exe,
+        "releases/%s/claude" % version: linux_bin,
         "Install-ClaudeCode.ps1": installer,
+        "install-claude-code.sh": linux_installer,
     })
 
 
@@ -105,6 +110,25 @@ def test_download_page_stage2_renders_only_selected_cost_centers_teams():
     assert b'<option value="security"' not in resp.data
     # The download form carries the chosen cost center.
     assert b'name="cost_center" value="CC-1000"' in resp.data
+    # ...and offers the platform choice (windows preselected by default).
+    assert b'name="platform"' in resp.data
+    assert b'<option value="windows" selected' in resp.data
+    assert b'<option value="linux"' in resp.data
+
+
+def test_download_page_stage2_preselects_carried_platform():
+    """The noscript stage-1 GET carries platform to /portal/download-page;
+    stage 2 must preselect it instead of silently resetting to windows."""
+    resp = Harness().get("/portal/download-page?cost_center=CC-1000&platform=linux",
+                         cookies={"portal_session": session_cookie()})
+    assert resp.status_code == 200
+    assert b'<option value="linux" selected' in resp.data
+    assert b'<option value="windows" selected' not in resp.data
+    # Junk platform values fall back to the windows default, no error.
+    resp = Harness().get("/portal/download-page?cost_center=CC-1000&platform=darwin",
+                         cookies={"portal_session": session_cookie()})
+    assert resp.status_code == 200
+    assert b'<option value="windows" selected' in resp.data
 
 
 def test_download_page_invalid_cost_center_falls_back_to_stage1():
@@ -306,7 +330,7 @@ def test_download_streams_zip_and_audits_success():
                  cookies={"portal_session": session_cookie()})
     assert resp.status_code == 200
     assert resp.headers["Content-Type"] == "application/zip"
-    assert "claude-code-2.1.207.zip" in resp.headers["Content-Disposition"]
+    assert "claude-code-2.1.207-windows.zip" in resp.headers["Content-Disposition"]
     # No Content-Length: gunicorn then emits the body CHUNKED (HTTP/1.1), so a
     # truncated download is detectable by the missing 0-chunk terminator.
     assert "Content-Length" not in resp.headers
@@ -321,6 +345,66 @@ def test_download_streams_zip_and_audits_success():
     rec = h.audit.records[0]
     assert rec["outcome"] == "success" and rec["exe_sha256"] == SHA
     assert rec["team"] == "platform" and rec["cost_center"] == "CC-1000"
+    assert rec["platform"] == "windows"
+
+
+def test_download_without_platform_param_defaults_to_windows():
+    # Pre-platform bookmarks (no platform in the query) keep working.
+    h = Harness(s3=_release_s3())
+    resp = h.get("/portal/download?team=platform&cost_center=CC-1000",
+                 cookies={"portal_session": session_cookie()})
+    assert resp.status_code == 200
+    assert "windows" in resp.headers["Content-Disposition"]
+    assert h.audit.records[0]["platform"] == "windows"
+
+
+def test_download_linux_streams_zip_and_audits_success():
+    linux_bin = b"\x7fELF" + b"\x00" * 2048
+    h = Harness(s3=_release_s3(linux_bin=linux_bin, linux_installer=b"<sh installer>"))
+    resp = h.get("/portal/download?team=platform&cost_center=CC-1000&platform=linux",
+                 cookies={"portal_session": session_cookie()})
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"] == "application/zip"
+    assert "claude-code-2.1.207-linux.zip" in resp.headers["Content-Disposition"]
+    zf = zipfile.ZipFile(io.BytesIO(resp.data))
+    assert zf.testzip() is None
+    assert set(zf.namelist()) == {"claude", "install-claude-code.sh",
+                                  "install.sh", "README.txt"}
+    assert zf.read("claude") == linux_bin
+    assert zf.read("install-claude-code.sh") == b"<sh installer>"
+    wrapper = zf.read("install.sh").decode()
+    # The wrapper bakes the LINUX manifest sha, not the windows one.
+    assert LINUX_SHA in wrapper and SHA not in wrapper
+    assert "platform" in wrapper and "CC-1000" in wrapper
+    readme = zf.read("README.txt").decode()
+    assert "bash install.sh" in readme
+    rec = h.audit.records[0]
+    assert rec["outcome"] == "success" and rec["exe_sha256"] == LINUX_SHA
+    assert rec["platform"] == "linux"
+
+
+def test_download_linux_includes_extra_ca_when_configured(env):
+    env["BUNDLE_EXTRA_CA"] = "true"
+    s3 = _release_s3()
+    s3.objects["extra-ca.pem"] = b"---ENTERPRISE CA---"
+    h = Harness(env=env, s3=s3)
+    resp = h.get("/portal/download?team=platform&cost_center=CC-1000&platform=linux",
+                 cookies={"portal_session": session_cookie()})
+    zf = zipfile.ZipFile(io.BytesIO(resp.data))
+    assert zf.read("extra-ca.pem") == b"---ENTERPRISE CA---"
+    assert "--extra-ca-cert-path" in zf.read("install.sh").decode()
+
+
+def test_download_invalid_platform_is_400_and_audited():
+    h = Harness(s3=_release_s3())
+    resp = h.get("/portal/download?team=platform&cost_center=CC-1000&platform=darwin",
+                 cookies={"portal_session": session_cookie()})
+    assert resp.status_code == 400
+    assert len(h.audit.records) == 1
+    rec = h.audit.records[0]
+    assert rec["outcome"] == "denied" and "platform" in rec["reason"]
+    # The raw request value is recorded for the audit trail.
+    assert rec["platform"] == "darwin"
 
 
 def test_download_includes_extra_ca_when_configured(env):

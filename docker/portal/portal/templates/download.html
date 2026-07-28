@@ -20,6 +20,11 @@
  <select id="team" name="team" required>
   {% for t in teams %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
  </select>
+ <label for="platform">Platform</label>
+ <select id="platform" name="platform" required>
+  <option value="windows"{% if platform != 'linux' %} selected{% endif %}>Windows (64-bit)</option>
+  <option value="linux"{% if platform == 'linux' %} selected{% endif %}>Linux (x64)</option>
+ </select>
  <button type="submit">Download pre-configured installer</button>
 </form>
 {% else %}
@@ -31,6 +36,14 @@
  <label for="cost_center">Cost center</label>
  <select id="cost_center" name="cost_center" required>
   {% for cc in cost_centers %}<option value="{{ cc }}">{{ cc }}</option>{% endfor %}
+ </select>
+ {# Platform rides along on both paths: the JS-upgraded form submits it to
+    /portal/download directly; the noscript stage-1 GET carries it to
+    /portal/download-page, which passes it back as the stage-2 preselect. #}
+ <label for="platform" id="platform-label">Platform</label>
+ <select id="platform" name="platform" required>
+  <option value="windows"{% if platform != 'linux' %} selected{% endif %}>Windows (64-bit)</option>
+  <option value="linux"{% if platform == 'linux' %} selected{% endif %}>Linux (x64)</option>
  </select>
  <button type="submit" id="cc-submit">Continue</button>
 </form>

@@ -73,6 +73,26 @@ abort = truncated chunked body under gunicorn), and the admin users page
 end to end. Runbook: om-runbooks §6 (portal bullet); read paths:
 `cost-controls.md` §3.4.
 
+**Added 2026-07-28 (committed, NOT yet deployed): Linux client download —
+portal platform selector + `install-claude-code.sh` + Linux managed-settings
+runbook.** The download form gains a Platform pick (Windows 64-bit / Linux
+x64; server-side `validate_platform`, missing param defaults to windows so
+old bookmarks keep working). The Linux ZIP streams `releases/<ver>/claude`
+plus `client/install-claude-code.sh` (the PS1's Linux twin: no root,
+staged-copy SHA-256 verify, `~/.local/bin` install, PATH via `~/.bashrc`,
+python3-based settings.json env merge that refuses unparseable files;
+refuses root; bats-covered in `tests/bash/install-linux.bats` + exercised
+end-to-end locally incl. the portal-generated `install.sh` wrapper + bundled
+extra-CA path `~/.local/bin/claude-extra-ca.pem`).
+`publish-portal-release.sh` now REQUIRES + re-verifies + uploads both
+platform binaries and both installers — **re-run it before (or with) the
+portal image bump, or Linux downloads abort mid-stream** (old buckets lack
+`releases/<ver>/claude`). No template/IAM changes; audit records gain
+`platform`. Gateway login on Linux = the same managed-settings JSON in
+root-owned `/etc/claude-code/managed-settings.json` (client-config.md Part I
+§2.3 + Part II §8.5) — the path is **doc-verified against Anthropic's
+settings docs only**; the whole Linux flow needs live test-run confirmation.
+
 The full security review (`docs/ato/security-review-2026-07.md`) is implemented:
 batches A (deploy-breakers), B (ZPA/landing-zone prerequisites), C (FedRAMP
 hardening C1–C11), D (correctness), and C12 (least-privilege app DB user +
@@ -472,7 +492,7 @@ entry in the security-review fix log.
 | `cloudformation/03-observability.yaml` | AMP, Grafana (Okta SSO), activity-archive chain; **outputs the AMP params the gateway sidecar consumes** (no standalone collector service — that moved into 02's task) |
 | `cloudformation/04-download-portal.yaml` | **optional** Okta-secured download portal (ECS Fargate at `/portal`, in-app OIDC + group auth, CMK S3 artifacts + audit log): installer downloads, self-usage, user guide, fingerprint, spend-cap admin. Imports 02's spend-read-key export |
 | `docker/` | gateway image + entrypoint; `db-admin/` (bootstrap+rotation Lambda); `grafana/`; `portal/` (download-portal **Flask package** `portal/` + `wsgi.py`, gunicorn, vendored wheels — since v2) |
-| `client/` | `Install-ClaudeCode.ps1` (non-admin Windows install) |
+| `client/` | `Install-ClaudeCode.ps1` (non-admin Windows install) + `install-claude-code.sh` (no-root Linux install) |
 | `scripts/` | `deploy.env`-driven deploy/operate chain at the root (see `scripts/README.md`); `common.sh` holds the shared helpers |
 | `scripts/mirror/` | **all vendor mirroring**: Claude Code releases, ADOT collector image, the Grafana AMP datasource plugin, Python wheel vendor dirs (`mirror-python-deps.sh` + the per-image `requirements.txt`) |
 | `scripts/diagnostics/` | telemetry/usage diagnostics (`diagnose-telemetry.sh`, `amp-query.py`, `dump-usage.sh`, …) |
@@ -534,7 +554,8 @@ the reverse (04 and 03 → 02 → 01).
     validation, install.cmd/ZIP generation, usage/admin/fingerprint/guide
     pages, and full HTTP flows. Extend it when you touch the portal app.
   - `tests/bash` — bats for `common.sh` helpers (`proxy_port`, `set_env_var`,
-    `require_vars`).
+    `require_vars`), cert import, and the Linux installer's sourceable
+    functions (`install-linux.bats`).
   - `tests/cfn` — `cfn-lint` + a **cfn-guard** ruleset encoding the security
     rules as gates (CMK on log groups/secrets, explicit SG egress, HTTPS
     target-group health-check protocol, RDS/S3/ALB posture). A template

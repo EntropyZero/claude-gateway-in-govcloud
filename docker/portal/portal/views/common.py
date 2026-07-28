@@ -106,22 +106,23 @@ def denied_page(email):
 # ---------------------------------------------------------------- audit
 
 
-def audit_success(email, groups, team, cost_center, sha256):
+def audit_success(email, groups, team, cost_center, sha256, platform=None):
     c = cfg()
     ext()["audit"].write(build_audit_record(
         "success", email, groups, team, cost_center,
         c.release_version, sha256, client_ip(),
-        request.headers.get("User-Agent", ""),
+        request.headers.get("User-Agent", ""), platform=platform,
     ))
 
 
 def audit_denied(email, groups, reason, team=None, cost_center=None,
-                 event="portal_download"):
+                 event="portal_download", platform=None):
     c = cfg()
     ext()["audit"].write(build_audit_record(
         "denied", email, groups, team, cost_center,
         c.release_version, None, client_ip(),
         request.headers.get("User-Agent", ""), reason=reason, event=event,
+        platform=platform,
     ))
 
 

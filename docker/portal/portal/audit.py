@@ -17,7 +17,8 @@ log = logging.getLogger("portal")
 
 def build_audit_record(outcome, user_email, user_groups, team, cost_center,
                        version, sha256, source_ip, user_agent, reason=None,
-                       event="portal_download", gateway_actor=None):
+                       event="portal_download", gateway_actor=None,
+                       platform=None):
     rec = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "event": event,
@@ -26,6 +27,9 @@ def build_audit_record(outcome, user_email, user_groups, team, cost_center,
         "user_groups": user_groups,
         "team": team,
         "cost_center": cost_center,
+        # None on non-download events (and on denials where the request never
+        # named one); the raw request value on invalid-selection denials.
+        "platform": platform,
         "version": version,
         "exe_sha256": sha256,
         "source_ip": source_ip,

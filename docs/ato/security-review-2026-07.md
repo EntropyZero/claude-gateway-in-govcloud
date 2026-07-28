@@ -173,6 +173,34 @@ re-run, confirm an older client exits at startup, a current client
 startup-error text — it must not steer users at the disabled
 `claude update` path instead of the portal.
 
+**Linux client download added to the portal (2026-07-28, committed NOT yet
+deployed): platform selector + linux-x64 package + Linux installer +
+`/etc/claude-code` managed-settings runbook.** The download form gains a
+third pick — Platform (Windows 64-bit / Linux x64) — validated server-side
+like team/cost-center (`validate_platform`; missing parameter defaults to
+windows so pre-platform bookmarks keep working; anything else is a 400 +
+audit denial). The Linux ZIP streams `releases/<ver>/claude` (linux-x64,
+SHA-256 from the same GPG-verified manifest, per-platform lookup) with the
+new `client/install-claude-code.sh` (the PS1 installer's Linux twin:
+no-root, TOCTOU-safe local staging, checksum verify, `~/.local/bin` install,
+settings.json env merge that refuses unparseable files, refuses root runs;
+bats-covered incl. an end-to-end run) plus a generated `install.sh` wrapper
+(same baked options as `install.cmd`; bundled extra-CA copies to
+`~/.local/bin/claude-extra-ca.pem`). ZIP entries carry Unix modes
+(create_system=3, 0755 on binary+scripts) but nothing depends on them —
+the README instructs `bash install.sh`. `publish-portal-release.sh` now
+requires + re-verifies + uploads BOTH platform binaries and both installers
+(upgrade note: a portal image with the selector against a bucket published
+by the old script serves Linux downloads that abort mid-stream — re-run the
+publish before or with the portal image bump). Audit records gain a
+`platform` field. No new routes, secrets, IAM, or template changes
+(`LINUX_INSTALLER_KEY` defaults in app config like `INSTALLER_KEY`).
+Client-config.md: Part I §2.3 (Linux install) + Part II §8.5 (Linux
+managed-settings delivery: root-owned `/etc/claude-code/managed-settings.json`,
+0644 `root:root`, same JSON as the GPO value — the path is **doc-verified
+against Anthropic's settings docs, not yet live-exercised**, as is the
+whole Linux client flow: flagged for test-run confirmation).
+
 **Portal v2 (2026-07-27, committed NOT yet deployed): Flask restructure,
 self-service usage page, all-users admin spend table, user-guide PDF,
 gateway-fingerprint page — and one stated posture change: the READ-ONLY spend
@@ -1891,9 +1919,24 @@ log above; the §E-relevant changes:
   `publish-portal-release.sh`) — same CMK/S3 posture as the release
   artifacts; served only through the authenticated portal.
 
+**Linux download addition (2026-07-28) — surface delta.** Full entry in the
+fix log above. No new routes, secrets, or IAM: the existing `/portal/download`
+gains a validated `platform` parameter (default windows), the ZIP assembly
+adds a linux-x64 branch (binary + `install-claude-code.sh` +
+generated `install.sh`), the artifacts bucket gains
+`releases/<ver>/claude` + `install-claude-code.sh` (published by the same
+verified-mirror-only publish script), and download audit records carry
+`platform`. The integrity chain is unchanged (GPG-verified manifest →
+per-platform SHA-256 → client-side re-verify); Linux has no Authenticode, so
+the checksum chain **is** the binary integrity control there — same as the
+gateway image's own staging of the linux binary.
+
 **Deferred / not-yet-live:** the Okta OIDC round-trip and the streamed download
 at real (100+MB) size are not exercisable without a live deploy + the Zscaler
-exemption; both are flagged for test-run confirmation. Group-claim delivery
+exemption; both are flagged for test-run confirmation. The Linux client flow
+(portal Linux ZIP on a real laptop, `install-claude-code.sh` on a target
+distro, and the `/etc/claude-code/managed-settings.json` login policy — the
+path is doc-verified only) is likewise unexercised live. Group-claim delivery
 (ID token vs `/userinfo`) depends on the Okta app's claim config and is
 doc-verified only. The portal-v2 surface adds its own list — the
 `/v1/organizations/spend_limits/effective` contract against the deployed
