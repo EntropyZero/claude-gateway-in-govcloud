@@ -416,6 +416,26 @@ parse/boot-failure cases, wrong-pair rejection, both page stages); no ALB /
 IAM / secret / network changes. Deploy: bump + push the portal image, update
 deploy.env, re-run `deploy-download-portal.sh`.
 
+**Portal home page: group-gated Grafana dashboards link (2026-07-28,
+committed NOT yet deployed).** The home page grows a "Grafana dashboards"
+card linking to `https://<GatewayFqdn>/grafana` (where 03's listener rule
+serves Grafana), shown only when the signed-in user's Okta groups intersect
+the new optional `PORTAL_GRAFANA_GROUPS` (04 param `PortalGrafanaGroups`,
+comma-separated; empty default = no card — set it to the union of 03's
+`GrafanaAdminGroup`/`GrafanaEditorGroup`/`GrafanaViewerGroup`, the groups its
+strict role mapping admits, and leave it empty when 03 is not deployed). The
+gate is UX only, same posture as the spend-admin card: Grafana independently
+re-checks group membership at its own Okta login (`ROLE_ATTRIBUTE_STRICT`),
+so a stale session cookie or a misaligned group list can never grant access —
+worst case is a dead link. New env `GRAFANA_URL` is template-derived from
+`GatewayFqdn`; groups-set-with-empty-URL is a boot failure (dead-card
+misconfiguration, unreachable via the shipped template). No new endpoint,
+IAM, secret, or network surface — the card is an `<a href>` to an
+already-exposed same-FQDN path. Portal suite extended (member/non-member/
+feature-off rendering, config parse + boot-failure). Deploy: bump + push the
+portal image, re-run `deploy-download-portal.sh` with the new deploy.env
+var.
+
 **Sonnet 5 added; model set is now THREE models (2026-07-27, committed NOT
 yet deployed).** Claude Sonnet 5 became available in GovCloud Bedrock and was
 enabled in the account (operator confirmation), so the served set changed from

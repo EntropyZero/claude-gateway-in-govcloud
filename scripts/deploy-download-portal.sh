@@ -37,6 +37,7 @@ aws cloudformation deploy \
       "PortalOktaClientId=${PORTAL_OKTA_CLIENT_ID}" \
       "AccessGroup=${ACCESS_GROUP}" \
       "PortalAdminGroup=${PORTAL_ADMIN_GROUP:-}" \
+      "PortalGrafanaGroups=${PORTAL_GRAFANA_GROUPS:-}" \
       "PortalCostCenterTeams=${PORTAL_COST_CENTER_TEAMS}" \
       "ReleaseVersion=${PORTAL_RELEASE_VERSION:-${CLAUDE_VERSION}}" \
       "UserGuideKey=${PORTAL_USER_GUIDE_KEY:-docs/user-manual.pdf}" \
