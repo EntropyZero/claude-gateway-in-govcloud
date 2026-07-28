@@ -1553,12 +1553,34 @@ aws kms get-key-policy --key-id "$KEY_ID" --policy-name default \
 #    but resolve to the SAME ARN, so Database/log groups compute as no-ops
 #    (and the stack policy still denies Update:Replace on Database as the
 #    backstop). ALLOW_KMS_PARAM_CHANGE=1 is required - the ownership guard
-#    otherwise keeps the stack's recorded BYO parameter; the script then
-#    re-persists deploy.env KMS_KEY_ARN from KmsKeyArnResolved (same ARN).
-ALLOW_KMS_PARAM_CHANGE=1 KMS_KEY_ARN= scripts/deploy-database.sh
+#    otherwise keeps the stack's recorded BYO parameter.
+#
+#    The empty value MUST be set IN deploy.env, NOT as a command-line env
+#    var: common.sh does `source deploy.env` at load, so a prefix like
+#    `KMS_KEY_ARN= scripts/deploy-database.sh` is silently OVERWRITTEN by
+#    the persisted export - resolve_kms_param then sees env == stack
+#    parameter (no override, no log line), CreateKmsKey stays false, and
+#    the update DETACHES the freshly imported key again (LIVE-CONFIRMED
+#    2026-07-28; the key and alias physically survive - the imported
+#    template's DeletionPolicy Retain governs the removal - and recovery
+#    is: re-run steps 3a-5, then this step, done correctly).
+( source scripts/common.sh; set_env_var KMS_KEY_ARN "" )
+ALLOW_KMS_PARAM_CHANGE=1 scripts/deploy-database.sh
+#    EXPECT the log line "ALLOW_KMS_PARAM_CHANGE=1: overriding ... -> ''"
+#    before the deploy starts - if it is absent, STOP: the flip is not
+#    happening and the run will detach the key again. On success the
+#    script's tail re-persists KMS_KEY_ARN=<ARN> into deploy.env from
+#    KmsKeyArnResolved (it does so whenever the env value is empty). Do
+#    the blank + deploy in one sitting: while deploy.env holds an empty
+#    KMS_KEY_ARN, ensure_ecr_repo would create non-CMK repos.
 
-# 9. One plain re-run proves the fixed script now preserves ownership (a
-#    no-op update that leaves the KmsKeyArn parameter empty):
+# 9. Confirm the flip took, then one plain re-run proves the fixed script
+#    now preserves ownership (a no-op update leaving the parameter empty):
+grep '^export KMS_KEY_ARN=' scripts/deploy.env    # -> the key ARN again
+aws cloudformation describe-stack-resources --region "$AWS_REGION" \
+  --stack-name "$DB_STACK_NAME" \
+  --query "StackResources[?starts_with(LogicalResourceId,'KmsKey')].LogicalResourceId"
+#    -> ["KmsKey", "KmsKeyAlias"]
 scripts/deploy-database.sh
 ```
 
