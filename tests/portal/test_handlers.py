@@ -75,6 +75,36 @@ def test_home_legacy_cost_center_url_redirects_to_download_page():
     assert resp.headers["Location"] == "/portal/download-page?cost_center=CC-1000"
 
 
+def test_home_hides_grafana_card_for_non_member():
+    # Default session groups = [claude-gateway-users], not grafana-viewers.
+    resp = Harness().get("/portal", cookies={"portal_session": session_cookie()})
+    assert resp.status_code == 200
+    assert b"Grafana dashboards" not in resp.data
+    assert b'href="https://claude-gateway.example.com/grafana"' not in resp.data
+
+
+def test_home_shows_grafana_card_for_member():
+    resp = Harness().get(
+        "/portal",
+        cookies={"portal_session": session_cookie(
+            groups=["claude-gateway-users", "grafana-viewers"])})
+    assert resp.status_code == 200
+    assert b"Grafana dashboards" in resp.data
+    assert b'href="https://claude-gateway.example.com/grafana"' in resp.data
+
+
+def test_home_hides_grafana_card_when_feature_unset():
+    # No PORTAL_GRAFANA_GROUPS -> no link, even for a would-be member.
+    env = dict(TEST_ENV)
+    env["PORTAL_GRAFANA_GROUPS"] = ""
+    resp = Harness(env=env).get(
+        "/portal",
+        cookies={"portal_session": session_cookie(
+            groups=["claude-gateway-users", "grafana-viewers"])})
+    assert resp.status_code == 200
+    assert b"Grafana dashboards" not in resp.data
+
+
 def test_home_marks_self_usage_card_when_read_key_missing():
     env = dict(TEST_ENV)
     env["SPEND_READ_KEY"] = ""

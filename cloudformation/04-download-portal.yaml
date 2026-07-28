@@ -94,6 +94,19 @@ Parameters:
       holds no WRITE admin key (only the read-only key for usage display).
       Empty (default) disables the admin pages entirely.
 
+  PortalGrafanaGroups:
+    Type: String
+    Default: ''
+    Description: >-
+      Okta group(s) (comma-separated) whose members see a Grafana dashboards
+      link on the portal home page, pointing at
+      https://<GatewayFqdn>/grafana (where the observability stack serves
+      Grafana). Set it to the union of the observability stack's
+      GrafanaAdminGroup/GrafanaEditorGroup/GrafanaViewerGroup - the groups its
+      strict Okta role mapping actually admits. The link is UX only: Grafana
+      independently re-checks group membership at login. Empty (default) hides
+      the link - leave it empty when the observability stack is not deployed.
+
   PortalCostCenterTeams:
     Type: String
     Default: 'CC-1000:platform|data,CC-2000:security'
@@ -548,6 +561,12 @@ Resources:
               Value: '8080'
             - Name: PORTAL_ADMIN_GROUP
               Value: !Ref PortalAdminGroup
+            - Name: PORTAL_GRAFANA_GROUPS
+              Value: !Ref PortalGrafanaGroups
+            # Where 03's listener rule serves Grafana; consumed only when
+            # PORTAL_GRAFANA_GROUPS is non-empty.
+            - Name: GRAFANA_URL
+              Value: !Sub 'https://${GatewayFqdn}/grafana'
             - Name: USER_GUIDE_KEY
               Value: !Ref UserGuideKey
           Secrets:

@@ -4,7 +4,7 @@ import urllib.parse
 
 from flask import Blueprint, Response, g, redirect, render_template, request
 
-from .common import cfg, login_required, session_is_admin
+from .common import cfg, login_required, session_can_grafana, session_is_admin
 
 bp = Blueprint("home", __name__, url_prefix="/portal")
 
@@ -27,6 +27,8 @@ def home():
         version=c.release_version,
         is_admin=session_is_admin(session),
         spend_self_enabled=bool(c.spend_read_key),
+        show_grafana=session_can_grafana(session),
+        grafana_url=c.grafana_url,
     )
 
 

@@ -123,6 +123,11 @@ TEST_ENV = {
     # the user-guide object key.
     "SPEND_READ_KEY": "read-key-abc",
     "USER_GUIDE_KEY": "docs/user-manual.pdf",
+    # Grafana home-page link: gated on membership in PORTAL_GRAFANA_GROUPS.
+    # The default test session (groups=[GROUP]) is NOT a member, so the card
+    # stays hidden unless a test mints a member session.
+    "PORTAL_GRAFANA_GROUPS": "grafana-viewers",
+    "GRAFANA_URL": "https://claude-gateway.example.com/grafana",
 }
 
 SECRET = TEST_ENV["SESSION_SECRET"]

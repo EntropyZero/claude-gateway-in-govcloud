@@ -38,6 +38,21 @@ class Config:
         # every call, so this gate is UX + defense in depth, not the security
         # boundary.
         self.admin_groups = split_list(env.get("PORTAL_ADMIN_GROUP", ""))
+        # Okta group(s) whose members get a Grafana dashboards link on the
+        # home page. Empty (the default) hides the link - an optional feature
+        # like PORTAL_ADMIN_GROUP, since the observability stack itself is
+        # optional. Grafana independently enforces access (strict Okta
+        # role mapping in stack 03), so this gate is UX only, not the
+        # security boundary. Set it to the union of the Grafana role groups.
+        self.grafana_groups = split_list(env.get("PORTAL_GRAFANA_GROUPS", ""))
+        self.grafana_url = env.get("GRAFANA_URL", "").strip().rstrip("/")
+        # A groups gate with nowhere to link is a misconfiguration: fail at
+        # boot rather than render a dead card (the shipped 04 always derives
+        # GRAFANA_URL from the gateway FQDN, so this fires only for
+        # hand-modified templates or local/test runs).
+        if self.grafana_groups and not self.grafana_url:
+            raise ValueError("PORTAL_GRAFANA_GROUPS is set but GRAFANA_URL "
+                             "is empty")
         # Session TTL is configured in hours (CFN parameter); transaction
         # cookie lifetime stays in seconds (short, internal).
         self.session_ttl_seconds = int(env.get("SESSION_TTL_HOURS", "8")) * 3600

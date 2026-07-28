@@ -23,6 +23,12 @@
     <h2>Gateway fingerprint</h2>
     <p>The gateway TLS certificate fingerprint to confirm at first connect.</p>
   </a>
+  {% if show_grafana %}
+  <a class="card" href="{{ grafana_url }}">
+    <h2>Grafana dashboards</h2>
+    <p>Usage and cost dashboards for the Claude Code deployment.</p>
+  </a>
+  {% endif %}
   {% if is_admin %}
   <a class="card admin" href="/portal/admin">
     <h2>Spend-cap admin</h2>

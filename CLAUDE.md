@@ -93,6 +93,17 @@ root-owned `/etc/claude-code/managed-settings.json` (client-config.md Part I
 §2.3 + Part II §8.5) — the path is **doc-verified against Anthropic's
 settings docs only**; the whole Linux flow needs live test-run confirmation.
 
+**Added 2026-07-28 (committed, NOT yet deployed): portal home page gets a
+group-gated Grafana dashboards link.** New optional `PORTAL_GRAFANA_GROUPS`
+(04 param `PortalGrafanaGroups`; empty default = no card) shows a card
+linking to `https://<GATEWAY_FQDN>/grafana` when the signed-in user is in
+any listed Okta group — set it to the union of the three `GRAFANA_*_GROUP`
+vars (the groups 03's strict role mapping admits); leave empty when 03 is
+not deployed. UX-only gate (Grafana re-checks membership at login); env
+`GRAFANA_URL` is template-derived; groups-without-URL is a portal boot
+failure. Deploy: bump+push portal image, re-run `deploy-download-portal.sh`.
+Full entry in the security-review fix log.
+
 The full security review (`docs/ato/security-review-2026-07.md`) is implemented:
 batches A (deploy-breakers), B (ZPA/landing-zone prerequisites), C (FedRAMP
 hardening C1–C11), D (correctness), and C12 (least-privilege app DB user +

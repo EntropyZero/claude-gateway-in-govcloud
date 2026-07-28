@@ -34,6 +34,14 @@ def session_is_admin(session):
     return bool(c.admin_groups) and is_authorized(session.get("groups", []), c.admin_groups)
 
 
+def session_can_grafana(session):
+    """UX gate for the home page's Grafana link; Grafana itself re-checks
+    group membership at login (strict role mapping), so hiding the card is
+    presentation, not the security boundary."""
+    c = cfg()
+    return bool(c.grafana_groups) and is_authorized(session.get("groups", []), c.grafana_groups)
+
+
 def client_ip():
     # Behind the single ALB, the LAST X-Forwarded-For entry is the peer the
     # ALB itself saw (it appends the connection source) - trustworthy for

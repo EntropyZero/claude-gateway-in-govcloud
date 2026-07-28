@@ -77,6 +77,28 @@ def test_access_group_empty_fails_fast(env):
         Config(env)
 
 
+def test_grafana_groups_parse_and_url_trims(env):
+    env["PORTAL_GRAFANA_GROUPS"] = "grafana-admins, grafana-viewers"
+    env["GRAFANA_URL"] = "https://claude-gateway.example.com/grafana/"
+    c = Config(env)
+    assert c.grafana_groups == ["grafana-admins", "grafana-viewers"]
+    assert c.grafana_url == "https://claude-gateway.example.com/grafana"
+
+
+def test_grafana_groups_default_empty_disables_link(env):
+    env.pop("PORTAL_GRAFANA_GROUPS")
+    env.pop("GRAFANA_URL")
+    assert Config(env).grafana_groups == []
+
+
+def test_grafana_groups_without_url_fail_boot(env):
+    # A groups gate with nowhere to link is a dead card - boot failure.
+    env["PORTAL_GRAFANA_GROUPS"] = "grafana-viewers"
+    env["GRAFANA_URL"] = ""
+    with pytest.raises(ValueError, match="GRAFANA_URL"):
+        Config(env)
+
+
 def test_cost_center_teams_parses_mapping_ordered(config):
     assert config.cost_center_teams == {
         "CC-1000": ["platform", "data"], "CC-2000": ["security"]}
