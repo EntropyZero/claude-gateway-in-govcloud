@@ -1419,9 +1419,13 @@ else in the account relies on it.
 on the next re-run — CloudFormation read that as "bring-your-own", dropped
 the (Retain'd) `KmsKey` from the stack, **deleted the `alias/<prefix>`
 alias**, and every later `KeyPolicy` change in the template silently applied
-to nothing. Status: **[NEEDS TEST-RUN CONFIRMATION]** — the procedure is
-doc-verified against the CloudFormation resource-import guide; a GovCloud
-run has not exercised it.
+to nothing. Status: **[NEEDS TEST-RUN CONFIRMATION]** — partially exercised
+live 2026-07-28: the original ONE-SHOT import (flip `KmsKeyArn=''` in the
+import changeset itself) was **rejected by CloudFormation** with "As part of
+the import operation, you cannot modify or add [Outputs]", so the procedure
+below is now two-phase (import with everything resolving as deployed, then
+a normal update to flip the parameter). The two-phase form matches AWS's
+documented resolution but its GovCloud run is still outstanding.
 
 *Am I affected?* All three of these hold:
 
@@ -1469,18 +1473,31 @@ aws cloudformation get-template-summary --region "$AWS_REGION" \
   --template-body file://cloudformation/01-database.yaml \
   --query "ResourceIdentifierSummaries[?ResourceType=='AWS::KMS::Key' || ResourceType=='AWS::KMS::Alias']"
 
-# 3. IMPORT changeset: current template, every parameter at its current
-#    value EXCEPT KmsKeyArn='' (flips CreateKmsKey true so the template
-#    renders the two resources being imported). Safe by construction: the
-#    template resolves the key ARN identically both ways, so no OTHER
-#    resource may change - and CloudFormation REJECTS an import changeset
-#    that tries.
+# 3. IMPORT changeset - TWO PHASES. A one-shot import that also flips
+#    KmsKeyArn='' fails with "As part of the import operation, you cannot
+#    modify or add [Outputs]" (LIVE-CONFIRMED 2026-07-28): import
+#    validation compares the CONDITION-RESOLVED templates, and flipping the
+#    parameter moves KmsKeyArnResolved onto its !GetAtt branch - a modified
+#    Output, which imports forbid. AWS's documented resolution is exactly
+#    this split: import with everything resolving as deployed, THEN update.
+#
+# 3a. Build the import template: the deployed template with ONLY the two
+#     'Condition: CreateKmsKey' lines removed (KmsKey + KmsKeyAlias render
+#     even though the stack parameter stays in BYO mode; every !If in the
+#     rest of the template keeps resolving to its deployed branch). The
+#     line appears exactly twice; verify before and after.
+grep -c '^    Condition: CreateKmsKey$' cloudformation/01-database.yaml   # -> 2
+sed '/^    Condition: CreateKmsKey$/d' cloudformation/01-database.yaml > /tmp/01-import.yaml
+
+# 3b. IMPORT changeset: import template, EVERY parameter at its previous
+#     value - including KmsKeyArn (still the key's ARN). Do NOT flip it
+#     here; that is step 8.
 aws cloudformation create-change-set \
   --region "$AWS_REGION" \
   --stack-name "$DB_STACK_NAME" \
   --change-set-name kms-reimport \
   --change-set-type IMPORT \
-  --template-body file://cloudformation/01-database.yaml \
+  --template-body file:///tmp/01-import.yaml \
   --parameters \
     ParameterKey=NamePrefix,UsePreviousValue=true \
     ParameterKey=VpcId,UsePreviousValue=true \
@@ -1492,11 +1509,15 @@ aws cloudformation create-change-set \
     ParameterKey=BackupRetentionDays,UsePreviousValue=true \
     ParameterKey=PgauditLogClasses,UsePreviousValue=true \
     ParameterKey=PgauditLogRetentionDays,UsePreviousValue=true \
-    ParameterKey=KmsKeyArn,ParameterValue= \
+    ParameterKey=KmsKeyArn,UsePreviousValue=true \
   --resources-to-import "[
     {\"ResourceType\":\"AWS::KMS::Key\",\"LogicalResourceId\":\"KmsKey\",\"ResourceIdentifier\":{\"KeyId\":\"${KEY_ID}\"}},
     {\"ResourceType\":\"AWS::KMS::Alias\",\"LogicalResourceId\":\"KmsKeyAlias\",\"ResourceIdentifier\":{\"AliasName\":\"alias/${NAME_PREFIX}\"}}
   ]"
+#    If this STILL reports modified resources/outputs, the deploy host's
+#    01-database.yaml is not the revision the stack last deployed - diff
+#    `aws cloudformation get-template` against the repo file and rebase the
+#    sed edit on what the stack actually holds.
 
 # 4. Inspect BEFORE executing - EXACTLY two rows, both action "Import"
 #    (KmsKey, KmsKeyAlias). Anything else: delete-change-set, investigate.
@@ -1525,8 +1546,19 @@ aws cloudformation detect-stack-drift --region "$AWS_REGION" --stack-name "$DB_S
 #    out-of-band step - NOT by CloudFormation; see above):
 aws kms get-key-policy --key-id "$KEY_ID" --policy-name default \
   --region "$AWS_REGION" --query Policy --output text | grep -c BedrockInvocationLogsWrite   # -> 1
-# One normal deploy proves the fixed script preserves ownership (a no-op
-# update that leaves the KmsKeyArn parameter empty):
+
+# 8. Normalize back to created-key mode: the REPO template (conditions
+#    restored) with KmsKeyArn flipped to '' - the change the import refused
+#    to combine, legal in a normal update. The !If branches move to !GetAtt
+#    but resolve to the SAME ARN, so Database/log groups compute as no-ops
+#    (and the stack policy still denies Update:Replace on Database as the
+#    backstop). ALLOW_KMS_PARAM_CHANGE=1 is required - the ownership guard
+#    otherwise keeps the stack's recorded BYO parameter; the script then
+#    re-persists deploy.env KMS_KEY_ARN from KmsKeyArnResolved (same ARN).
+ALLOW_KMS_PARAM_CHANGE=1 KMS_KEY_ARN= scripts/deploy-database.sh
+
+# 9. One plain re-run proves the fixed script now preserves ownership (a
+#    no-op update that leaves the KmsKeyArn parameter empty):
 scripts/deploy-database.sh
 ```
 
