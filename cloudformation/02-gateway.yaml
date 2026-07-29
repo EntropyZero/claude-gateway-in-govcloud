@@ -690,6 +690,12 @@ Resources:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
+    # The named exemption from tests/cfn s3_buckets_use_cmk (SA-2026-07-60):
+    # this is the ONE bucket that cannot be SSE-KMS (comment above).
+    Metadata:
+      guard:
+        SuppressedRules:
+          - s3_buckets_use_cmk
     Properties:
       BucketEncryption:
         ServerSideEncryptionConfiguration:

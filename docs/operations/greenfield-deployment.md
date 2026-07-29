@@ -32,7 +32,8 @@ Phases: **0** org prerequisites → **1** account & workstation prep →
 **2** certificate → **3** database (01) → **4** mirror + images →
 **5** gateway (02) → **6** DNS + Zscaler activation → **7** verify + Okta
 secret → **8** observability (03) + 02 re-run → **9** optional portal (04) →
-**10** client rollout → **11** end-to-end validation.
+**9a** optional ALB log search (05) → **10** client rollout →
+**11** end-to-end validation.
 
 ---
 
@@ -447,6 +448,26 @@ platform binaries against the release manifest SHA-256 before upload — and
 must have run before the portal serves downloads, or a Linux download aborts
 mid-stream against a bucket with no `releases/<version>/claude`. End-to-end
 validation items are in Phase 11.
+
+---
+
+## Phase 9a — Optional: ALB access-log search (05)
+
+Any time after Phase 5; independent of 03/04; no image, no new org
+requests, no VPC presence (Athena and Glue are control-plane APIs the
+operator host calls like CloudFormation — if the org allowlists AWS
+endpoints per service, request `athena` + `glue` alongside the existing
+set). Idle cost is ~$0; Athena bills per query on data scanned.
+
+```bash
+./scripts/deploy-log-analytics.sh   # Athena workgroup + Glue table over the ALB logs bucket
+                                    # (persists ATHENA_WORKGROUP/DATABASE/TABLE/RESULTS_BUCKET)
+```
+🔎 One query returns rows over a day with known traffic, e.g.
+`./scripts/diagnostics/athena-alb-query.sh "SELECT count(*) FROM
+alb_access_logs WHERE day = '<yyyy/MM/dd>'"`, and its result CSV in the
+results bucket is SSE-KMS with the CMK. Runbook + example queries:
+[`om-runbooks.md`](om-runbooks.md) §14.
 
 ---
 

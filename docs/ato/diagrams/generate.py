@@ -554,6 +554,9 @@ def d6():
     s.node(980, 330, 230, 120, "04-download-portal",
            ["Okta OIDC + group authz", "S3 artifacts (CMK) · audit log",
             "ALB /portal rule · own SG"], border=GREEN)
+    s.node(1290, 330, 170, 120, "05-log-analytics",
+           ["Athena workgroup + Glue", "table over the ALB logs", "results bucket (CMK)"],
+           border=GREEN)
 
     s.arrow([(248, 195), (318, 195)])
     s.arrow([(433, 260), (433, 330)])
@@ -592,11 +595,18 @@ def d6():
     s.text(762, 444, "https-listener · cluster-arn", size=10.5, color=SLATE)
     s.text(1095, 472, "deploy after 02 · independent of 03",
            size=10, color=SLATE_LT, anchor="middle")
+    # 02 -> 05: the deploy script reads 02's AlbLogsBucketName OUTPUT and
+    # passes it as a parameter (not an export - deliberately, so 02's output
+    # stays unlocked); 05's only export import is 01's CMK.
+    s.arrow([(860, 260), (860, 315), (1375, 315), (1375, 330)])
+    s.text(872, 311, "ALB-logs bucket name: 02 output → parameter", size=10.5, color=BLUE)
+    s.text(1375, 472, "optional · imports only 01's kms-key-arn",
+           size=10, color=SLATE_LT, anchor="middle")
 
     s.text(48, 500, "Locks a reviewer should know: the RDS storage CMK is fixed at creation "
            "(plus 01↔02 export locks) — a day-one decision; 03 and 04 must be deleted "
-           "before 02 replacement-updates; the ALB and Database carry stack policies "
-           "denying Update:Replace / Update:Delete.", size=11.5, color=SLATE)
+           "before 02 replacement-updates, 05 before 01; the ALB and Database carry stack "
+           "policies denying Update:Replace / Update:Delete.", size=11.5, color=SLATE)
     s.text(48, 522, "Full teardown/update ordering: README — Teardown & update order.",
            size=11.5, color=SLATE_LT)
     s.write("06-stack-dependencies-deploy-order.svg")

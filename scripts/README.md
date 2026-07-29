@@ -43,6 +43,7 @@ for the full runbook.
 | `deploy-observability.sh` | Stack 03: AMP + Grafana + activity archive (emits the AMP params 02 consumes) |
 | `deploy-download-portal.sh` | Stack 04 (optional): download portal. Imports 02's spend-read-key export — when upgrading a pre-portal-v2 deployment, re-run `deploy-gateway.sh` first |
 | `publish-portal-release.sh` | Upload a verified release (both platform binaries) + both installers (PS1 + Linux sh) + the user-guide PDF (`docs/generated/user-manual.pdf`; `SKIP_USER_GUIDE=1` skips) to the portal artifacts bucket |
+| `deploy-log-analytics.sh` | Stack 05 (optional): Athena workgroup + Glue table over the ALB access logs (SQL log search, om-runbooks §14). Reads 02's `AlbLogsBucketName` output — no new export |
 
 ## Secret setters
 
@@ -89,6 +90,7 @@ image version → `build-and-push-*.sh` → `deploy-gateway.sh` /
 | `diagnostics/amp-query.py` | SigV4-signed PromQL query direct against AMP (needs `botocore`) |
 | `diagnostics/check-collector-config.py` | Parse a collector config from stdin, report per-pipeline receivers (needs `pyyaml`) |
 | `diagnostics/dump-usage.sh` / `dump-usage.py` | Read-only dump of the gateway's Postgres usage/identity/caps tables (needs `pg8000`, in-VPC reach to RDS) |
+| `diagnostics/athena-alb-query.sh` | Run one SQL query against the ALB access-log table (stack 05's workgroup/database) and stream the result CSV to stdout — example queries in om-runbooks §14 |
 
 Python deps for these (and for `docs/md-to-pdf.py`) are listed in
 `requirements-tools.txt` — `pip install -r scripts/requirements-tools.txt`

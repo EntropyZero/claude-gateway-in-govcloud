@@ -100,6 +100,25 @@ rule s3_blocks_public_access {
     }
 }
 
+# Every S3 bucket is SSE-KMS with an explicit key (SC-28; SA-2026-07-60).
+# The one legitimate exception is the ALB access-logs bucket (ELB log
+# delivery does not support KMS) - it carries the suppression metadata
+# below rather than a hardcoded name here, so the exemption is visible at
+# the resource it exempts:
+#   Metadata: { guard: { SuppressedRules: [ s3_buckets_use_cmk ] } }
+rule s3_buckets_use_cmk {
+    let buckets = Resources.*[ Type == 'AWS::S3::Bucket'
+        Metadata.guard.SuppressedRules not exists or
+        Metadata.guard.SuppressedRules.* != 's3_buckets_use_cmk'
+    ]
+    when %buckets !empty {
+        %buckets.Properties.BucketEncryption.ServerSideEncryptionConfiguration[*].ServerSideEncryptionByDefault.SSEAlgorithm == 'aws:kms'
+        <<Every S3 bucket must default to SSE-KMS (aws:kms); the ALB logs bucket is the only suppressed exception.>>
+        %buckets.Properties.BucketEncryption.ServerSideEncryptionConfiguration[*].ServerSideEncryptionByDefault.KMSMasterKeyID exists
+        <<Every SSE-KMS bucket must name the CMK in KMSMasterKeyID.>>
+    }
+}
+
 # The internal ALB stays internal + IPv4-only (dual-stack breaks /login).
 rule alb_internal_ipv4 {
     let albs = Resources.*[ Type == 'AWS::ElasticLoadBalancingV2::LoadBalancer' ]
