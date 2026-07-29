@@ -128,7 +128,7 @@ Two distinct streams with different sensitivity:
 | Data class | Contains | Store | Retention | Access path |
 |---|---|---|---|---|
 | Usage metrics | tokens, cost, sessions, LoC, model, user identity, team/cost-center | AMP (CMK) | 150 d (AMP fixed) | Grafana via Okta SSO, role-mapped |
-| Activity stream (opt-in) | bash commands, tool inputs, file paths, per user; prompt content redacted | CloudWatch (CMK) → S3 (SSE-KMS) | 14 d window / 731 d archive | IAM only; flagged for SIEM subscription |
+| Activity stream (opt-in) | bash commands, tool inputs, file paths, per user; prompt/response content redacted by default (full prompt text and model response text added only with the separate independent opt-ins `LOG_USER_PROMPTS=true` / `LOG_ASSISTANT_RESPONSES=true`) | CloudWatch (CMK) → S3 (SSE-KMS) | 14 d window / 731 d archive | IAM only; flagged for SIEM subscription |
 | ALB access logs | source connector IPs, URIs, timings | S3 (SSE-S3) | 90 d | IAM only |
 | DB audit (pgaudit) | DDL, role changes, writes (no bind values) | RDS → CloudWatch (CMK) | 365 d group | IAM only |
 | Session/spend store | sessions, spend counters | RDS (CMK) | live | app DB user only |

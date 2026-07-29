@@ -84,6 +84,20 @@ if [ -n "$MIN_CLIENT_VERSION" ] && ! [[ "$MIN_CLIENT_VERSION" =~ ^[0-9]+\.[0-9]+
   exit 1
 fi
 
+# Prompt/response-content capture (OTEL_LOG_USER_PROMPTS=1 /
+# OTEL_LOG_ASSISTANT_RESPONSES=1 pushed to every client) rides the
+# activity-log pipeline - without FORWARD_ACTIVITY_LOGS=true the clients
+# would attach the content to telemetry events the gateway never forwards:
+# the operator believes capture is on and nothing is landing. Refuse the
+# combination instead of deploying it.
+if { [ "${LOG_USER_PROMPTS:-false}" = "true" ] || [ "${LOG_ASSISTANT_RESPONSES:-false}" = "true" ]; } \
+    && [ "${FORWARD_ACTIVITY_LOGS:-false}" != "true" ]; then
+  echo "FATAL: LOG_USER_PROMPTS=true / LOG_ASSISTANT_RESPONSES=true require FORWARD_ACTIVITY_LOGS=true." >&2
+  echo "       The captured content travels inside the activity-log stream; with" >&2
+  echo "       forwarding off it is silently dropped at the gateway." >&2
+  exit 1
+fi
+
 ARTIFACTS_BUCKET="$(ensure_artifacts_bucket)"
 
 # On failure, KEEP successfully-created resources (the stack lands in
@@ -147,6 +161,8 @@ aws cloudformation deploy \
       "CollectorImage=${COLLECTOR_IMAGE:-}" \
       "TelemetryFailClosed=${TELEMETRY_FAIL_CLOSED:-true}" \
       "ForwardActivityLogs=${FORWARD_ACTIVITY_LOGS:-false}" \
+      "LogUserPrompts=${LOG_USER_PROMPTS:-false}" \
+      "LogAssistantResponses=${LOG_ASSISTANT_RESPONSES:-false}" \
       "OpusModelId=${OPUS_MODEL_ID}" \
       "OpusBedrockModelId=${OPUS_BEDROCK_MODEL_ID}" \
       "SonnetModelId=${SONNET_MODEL_ID}" \
