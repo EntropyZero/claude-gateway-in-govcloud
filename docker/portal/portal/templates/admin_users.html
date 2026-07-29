@@ -44,11 +44,8 @@
   <td>{% if row.cap_display %}{{ row.cap_display }}{% else %}<em>no cap</em>{% endif %}</td>
   <td>{{ row.period }}</td>
   <td data-sort="{{ row.spend_sort }}">{{ row.spend_display }}</td>
-  <td{% if row.percent %} data-sort="{{ row.percent.sort }}"{% endif %}>
-   {% if row.percent %}
-   <span class="pct">{{ row.percent.display }}</span>
-   <div class="bar mini"><span class="fill {{ row.percent.cls }} w{{ row.percent.width }}"></span></div>
-   {% else %}&mdash;{% endif %}
+  <td{% if row.percent %} class="fillcell {{ row.percent.cls }} w{{ row.percent.width }}" data-sort="{{ row.percent.sort }}"{% endif %}>
+   {% if row.percent %}<span class="pct">{{ row.percent.display }}</span>{% else %}&mdash;{% endif %}
   </td>
   <td>{{ row.source_label }}</td>
  </tr>

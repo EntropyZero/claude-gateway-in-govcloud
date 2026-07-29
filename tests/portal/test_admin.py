@@ -451,6 +451,9 @@ def test_admin_users_renders_table_defaults(admin_env):
     assert b"$50.00" in body            # cap
     assert b"$1.24" in body             # fractional-cents spend display
     assert b"2.5%" in body              # percent used
+    # Proportional cell fill: status + width classes on the % used cell
+    # itself (2.5% rounds HALF_UP to the w3 step).
+    assert b'class="fillcell ok w3"' in body
     assert b"group cap (claude-developers)" in body
     # No-cap row renders gracefully with null actor fields.
     assert b"00u456" in body and b"no cap" in body and b"$0.42" in body

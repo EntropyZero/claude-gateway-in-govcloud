@@ -1397,6 +1397,26 @@ connected through the portal, break-glass keys — render as a dash, which is
 expected, not a fault. Full description:
 [`cost-controls.md`](cost-controls.md) §7.
 
+### 11.5 The All-Users "% used" meter bears no relation to the percentages
+
+**Symptom.** On `/portal/admin/users` (portal image ≤ 2.0.0), the small usage
+bar under each percentage renders at essentially the same length for 0.4% and
+72%, and a 35% row can render *longer* than a 72% one.
+
+**Cause.** A CSS class collision, not bad data: the flash-notice rule `.ok`
+(padding + border) also matched the green fill span's `ok` status class,
+adding a constant ~26px to every sub-70% bar regardless of its width class.
+The percentages themselves — text, sorting, `/portal/me` figures — were
+always correct.
+
+**Fix.** Upgrade the portal image (bump `PORTAL_VERSION`, rebuild+push,
+re-run `deploy-download-portal.sh`). The flash rules are now scoped to their
+`<p>` elements, and the column renders as a proportional background fill of
+the "% used" cell itself (a status-colored wash up to the percentage, with a
+full-strength edge marker) instead of a separate mini bar.
+`tests/portal/test_static_css.py` gates the width ladder and the
+bare-status-selector collision so the class of bug can't silently return.
+
 ---
 
 ## 12. Bedrock prompt logging

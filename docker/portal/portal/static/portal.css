@@ -1,6 +1,7 @@
 /* Claude Code download portal - the one stylesheet.
    No inline styles anywhere (CSP: style-src 'self'); the .wN classes at the
-   bottom carry progress-bar fill widths so no style attribute is needed. */
+   bottom set a --pct custom property (0-100%) that drives progress-bar fill
+   widths and proportional cell fills, so no style attribute is needed. */
 
 body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:60rem;margin:2rem auto 3rem;padding:0 1rem;color:#1a1a1a;background:#fff}
 main{max-width:60rem}
@@ -39,9 +40,11 @@ form.inline button{margin-top:0;font-size:.85rem;padding:.35rem .7rem}
 .cc{margin:1rem 0 0}
 .cc a{font-size:.85rem;font-weight:400;margin-left:.5rem}
 
-/* flashes / notices */
-.err{background:#fee;border:1px solid #e99;padding:.75rem;border-radius:.35rem}
-.ok{background:#efe;border:1px solid #9e9;padding:.75rem;border-radius:.35rem}
+/* flashes / notices - scoped to the <p> flash elements: bare .ok would also
+   hit the progress fills' ok/warn/danger status classes (its padding+border
+   once inflated every green bar by 26px regardless of percentage) */
+p.err{background:#fee;border:1px solid #e99;padding:.75rem;border-radius:.35rem}
+p.ok{background:#efe;border:1px solid #9e9;padding:.75rem;border-radius:.35rem}
 .notice{background:#f5f8ff;border:1px solid #c9d8f0;padding:.75rem 1rem;border-radius:.35rem}
 
 /* tables */
@@ -70,113 +73,124 @@ pre.fp{background:#f4f4f4;padding:.75rem;border-radius:.35rem;overflow-x:auto;fo
 /* guide viewer */
 .guide-frame{width:100%;height:70vh;border:1px solid #ddd;border-radius:.35rem;margin-top:1rem}
 
-/* progress bars. Fill width comes from a .wN class (0-100), colors from
-   .ok/.warn/.danger - no inline styles, CSP-clean. */
+/* progress bars. Fill width comes from --pct (set by a .wN class, 0-100),
+   colors from .ok/.warn/.danger - no inline styles, CSP-clean. */
 .bar{background:#eee;border:1px solid #ddd;border-radius:.5rem;height:1rem;overflow:hidden;margin-top:.75rem}
-.bar.mini{height:.5rem;margin-top:.25rem;max-width:8rem}
-.bar .fill{display:block;height:100%;background:#0b5;border-radius:0}
+.bar .fill{display:block;height:100%;width:var(--pct,0%);background:#0b5;border-radius:0}
 .bar .fill.ok{background:#0b5}
 .bar .fill.warn{background:#e6a700}
 .bar .fill.danger{background:#c33}
 .pct{font-size:.85rem}
-.bar .fill.w0{width:0%}
-.bar .fill.w1{width:1%}
-.bar .fill.w2{width:2%}
-.bar .fill.w3{width:3%}
-.bar .fill.w4{width:4%}
-.bar .fill.w5{width:5%}
-.bar .fill.w6{width:6%}
-.bar .fill.w7{width:7%}
-.bar .fill.w8{width:8%}
-.bar .fill.w9{width:9%}
-.bar .fill.w10{width:10%}
-.bar .fill.w11{width:11%}
-.bar .fill.w12{width:12%}
-.bar .fill.w13{width:13%}
-.bar .fill.w14{width:14%}
-.bar .fill.w15{width:15%}
-.bar .fill.w16{width:16%}
-.bar .fill.w17{width:17%}
-.bar .fill.w18{width:18%}
-.bar .fill.w19{width:19%}
-.bar .fill.w20{width:20%}
-.bar .fill.w21{width:21%}
-.bar .fill.w22{width:22%}
-.bar .fill.w23{width:23%}
-.bar .fill.w24{width:24%}
-.bar .fill.w25{width:25%}
-.bar .fill.w26{width:26%}
-.bar .fill.w27{width:27%}
-.bar .fill.w28{width:28%}
-.bar .fill.w29{width:29%}
-.bar .fill.w30{width:30%}
-.bar .fill.w31{width:31%}
-.bar .fill.w32{width:32%}
-.bar .fill.w33{width:33%}
-.bar .fill.w34{width:34%}
-.bar .fill.w35{width:35%}
-.bar .fill.w36{width:36%}
-.bar .fill.w37{width:37%}
-.bar .fill.w38{width:38%}
-.bar .fill.w39{width:39%}
-.bar .fill.w40{width:40%}
-.bar .fill.w41{width:41%}
-.bar .fill.w42{width:42%}
-.bar .fill.w43{width:43%}
-.bar .fill.w44{width:44%}
-.bar .fill.w45{width:45%}
-.bar .fill.w46{width:46%}
-.bar .fill.w47{width:47%}
-.bar .fill.w48{width:48%}
-.bar .fill.w49{width:49%}
-.bar .fill.w50{width:50%}
-.bar .fill.w51{width:51%}
-.bar .fill.w52{width:52%}
-.bar .fill.w53{width:53%}
-.bar .fill.w54{width:54%}
-.bar .fill.w55{width:55%}
-.bar .fill.w56{width:56%}
-.bar .fill.w57{width:57%}
-.bar .fill.w58{width:58%}
-.bar .fill.w59{width:59%}
-.bar .fill.w60{width:60%}
-.bar .fill.w61{width:61%}
-.bar .fill.w62{width:62%}
-.bar .fill.w63{width:63%}
-.bar .fill.w64{width:64%}
-.bar .fill.w65{width:65%}
-.bar .fill.w66{width:66%}
-.bar .fill.w67{width:67%}
-.bar .fill.w68{width:68%}
-.bar .fill.w69{width:69%}
-.bar .fill.w70{width:70%}
-.bar .fill.w71{width:71%}
-.bar .fill.w72{width:72%}
-.bar .fill.w73{width:73%}
-.bar .fill.w74{width:74%}
-.bar .fill.w75{width:75%}
-.bar .fill.w76{width:76%}
-.bar .fill.w77{width:77%}
-.bar .fill.w78{width:78%}
-.bar .fill.w79{width:79%}
-.bar .fill.w80{width:80%}
-.bar .fill.w81{width:81%}
-.bar .fill.w82{width:82%}
-.bar .fill.w83{width:83%}
-.bar .fill.w84{width:84%}
-.bar .fill.w85{width:85%}
-.bar .fill.w86{width:86%}
-.bar .fill.w87{width:87%}
-.bar .fill.w88{width:88%}
-.bar .fill.w89{width:89%}
-.bar .fill.w90{width:90%}
-.bar .fill.w91{width:91%}
-.bar .fill.w92{width:92%}
-.bar .fill.w93{width:93%}
-.bar .fill.w94{width:94%}
-.bar .fill.w95{width:95%}
-.bar .fill.w96{width:96%}
-.bar .fill.w97{width:97%}
-.bar .fill.w98{width:98%}
-.bar .fill.w99{width:99%}
-.bar .fill.w100{width:100%}
+
+/* proportional cell fill (admin all-users "% used" column): a hard-stop
+   gradient washes the cell background up to --pct, capped by a 3px marker
+   in the full-strength status color; the percentage text sits on top in
+   normal ink. Same .wN + status classes as the bars. */
+td.fillcell{min-width:7rem;background-image:linear-gradient(90deg,
+  var(--fill-tint) 0,var(--fill-tint) calc(var(--pct,0%) - 3px),
+  var(--fill-edge) calc(var(--pct,0%) - 3px),var(--fill-edge) var(--pct,0%),
+  transparent var(--pct,0%))}
+td.fillcell.ok{--fill-tint:#cdeeda;--fill-edge:#0b5}
+td.fillcell.warn{--fill-tint:#fbe6b3;--fill-edge:#e6a700}
+td.fillcell.danger{--fill-tint:#f6cdc9;--fill-edge:#c33}
+.w0{--pct:0%}
+.w1{--pct:1%}
+.w2{--pct:2%}
+.w3{--pct:3%}
+.w4{--pct:4%}
+.w5{--pct:5%}
+.w6{--pct:6%}
+.w7{--pct:7%}
+.w8{--pct:8%}
+.w9{--pct:9%}
+.w10{--pct:10%}
+.w11{--pct:11%}
+.w12{--pct:12%}
+.w13{--pct:13%}
+.w14{--pct:14%}
+.w15{--pct:15%}
+.w16{--pct:16%}
+.w17{--pct:17%}
+.w18{--pct:18%}
+.w19{--pct:19%}
+.w20{--pct:20%}
+.w21{--pct:21%}
+.w22{--pct:22%}
+.w23{--pct:23%}
+.w24{--pct:24%}
+.w25{--pct:25%}
+.w26{--pct:26%}
+.w27{--pct:27%}
+.w28{--pct:28%}
+.w29{--pct:29%}
+.w30{--pct:30%}
+.w31{--pct:31%}
+.w32{--pct:32%}
+.w33{--pct:33%}
+.w34{--pct:34%}
+.w35{--pct:35%}
+.w36{--pct:36%}
+.w37{--pct:37%}
+.w38{--pct:38%}
+.w39{--pct:39%}
+.w40{--pct:40%}
+.w41{--pct:41%}
+.w42{--pct:42%}
+.w43{--pct:43%}
+.w44{--pct:44%}
+.w45{--pct:45%}
+.w46{--pct:46%}
+.w47{--pct:47%}
+.w48{--pct:48%}
+.w49{--pct:49%}
+.w50{--pct:50%}
+.w51{--pct:51%}
+.w52{--pct:52%}
+.w53{--pct:53%}
+.w54{--pct:54%}
+.w55{--pct:55%}
+.w56{--pct:56%}
+.w57{--pct:57%}
+.w58{--pct:58%}
+.w59{--pct:59%}
+.w60{--pct:60%}
+.w61{--pct:61%}
+.w62{--pct:62%}
+.w63{--pct:63%}
+.w64{--pct:64%}
+.w65{--pct:65%}
+.w66{--pct:66%}
+.w67{--pct:67%}
+.w68{--pct:68%}
+.w69{--pct:69%}
+.w70{--pct:70%}
+.w71{--pct:71%}
+.w72{--pct:72%}
+.w73{--pct:73%}
+.w74{--pct:74%}
+.w75{--pct:75%}
+.w76{--pct:76%}
+.w77{--pct:77%}
+.w78{--pct:78%}
+.w79{--pct:79%}
+.w80{--pct:80%}
+.w81{--pct:81%}
+.w82{--pct:82%}
+.w83{--pct:83%}
+.w84{--pct:84%}
+.w85{--pct:85%}
+.w86{--pct:86%}
+.w87{--pct:87%}
+.w88{--pct:88%}
+.w89{--pct:89%}
+.w90{--pct:90%}
+.w91{--pct:91%}
+.w92{--pct:92%}
+.w93{--pct:93%}
+.w94{--pct:94%}
+.w95{--pct:95%}
+.w96{--pct:96%}
+.w97{--pct:97%}
+.w98{--pct:98%}
+.w99{--pct:99%}
+.w100{--pct:100%}
