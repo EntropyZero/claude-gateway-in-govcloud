@@ -11,29 +11,40 @@ identity. <a href="/portal/admin/audit">Audit trail</a> |
 <table>
  <tr><th>Scope</th><th>Id</th><th>Cap</th><th>Period</th><th>Updated</th><th></th></tr>
  {# Runtime-verified item shape (gateway 2.1.220): scope is a NESTED object;
-    there is no created_by (attribution lives in the audit trail); a cleared
-    cap REMAINS as a row with amount null. #}
+    there is no created_by (attribution lives in the audit trail). A row with
+    amount null is an explicit UNLIMITED override (it beats group/org caps),
+    which is why Remove DELETES the row rather than nulling the amount, and
+    why null rows get a Remove button too. User caps match by EXACT principal
+    (oidc:<sub>); user_emails reverse-maps principals for display, and an
+    id containing '@' can never match a user (legacy email-keyed row). #}
  {% for item in limits %}
  {% set scope = item.get('scope') or {} %}
  {% set scope_type = scope.get('type', item.get('scope_type', '')) %}
  {% set scope_id = scope.get('user_id') or scope.get('rbac_group_id') or item.get('scope_id') or '' %}
  {% set period = item.get('period', 'monthly') %}
+ {% set resolved_email = user_emails.get(scope_id) if scope_type == 'user' else none %}
  <tr>
   <td>{{ scope_type }}</td>
-  <td>{{ scope_id }}</td>
-  <td>{% if item.get('amount') is none %}<em>(cleared)</em>{% else %}{{ cents_to_display(item.get('amount')) }}{% endif %}</td>
+  <td>
+   {% if resolved_email %}{{ resolved_email }}<br><small class="who">{{ scope_id }}</small>
+   {% elif scope_type == 'user' and not scope_id.startswith('oidc:') %}{{ scope_id }}
+    <br><small class="err">never matches a user - the gateway caps by the
+    exact oidc:&lt;sub&gt; principal, not an email or bare sub. Remove and
+    re-set by email (resolved automatically).</small>
+   {% else %}{{ scope_id }}{% endif %}
+  </td>
+  <td>{% if item.get('amount') is none %}<em>UNLIMITED override</em>{% else %}{{ cents_to_display(item.get('amount')) }}{% endif %}</td>
   <td>{{ period }}</td>
   <td>{{ item.get('updated_at', '') }}</td>
   <td>
-   {% if item.get('amount') is not none %}
    <form method="POST" action="/portal/admin/clear" class="inline">
     <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="limit_id" value="{{ item.get('id') or '' }}">
     <input type="hidden" name="scope_type" value="{{ scope_type }}">
     <input type="hidden" name="scope_id" value="{{ scope_id }}">
     <input type="hidden" name="period" value="{{ period }}">
-    <button type="submit" class="warn">Clear</button>
+    <button type="submit" class="warn">Remove</button>
    </form>
-   {% endif %}
   </td>
  </tr>
  {% else %}
@@ -41,7 +52,10 @@ identity. <a href="/portal/admin/audit">Audit trail</a> |
  {% endfor %}
 </table>
 <p class="who">Precedence: a per-user cap beats group caps; several group caps
-combine per the gateway's group_limit_mode. No rows = no enforcement.</p>
+combine per the gateway's group_limit_mode. No rows = no enforcement.
+Removing a cap deletes its row, so the user falls back to their group/org
+cap; a row shown as <em>UNLIMITED override</em> exempts that scope from
+every cap until removed.</p>
 
 <h2>Set / update a cap</h2>
 <form method="POST" action="/portal/admin/set">
@@ -53,7 +67,7 @@ combine per the gateway's group_limit_mode. No rows = no enforcement.</p>
     <option value="rbac_group">rbac_group (Okta group)</option>
     <option value="organization">organization</option>
    </select></span>
-  <span><label for="scope_id">User sub/email or group</label>
+  <span><label for="scope_id">User email (or oidc:&lt;sub&gt;) / group name</label>
    <input id="scope_id" name="scope_id" placeholder="empty for organization"></span>
   <span><label for="amount">Amount (US dollars)</label>
    <input id="amount" name="amount" placeholder="50.00" required></span>

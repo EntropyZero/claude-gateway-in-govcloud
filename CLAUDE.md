@@ -62,6 +62,20 @@ lands in the activity stream (env-var names and event semantics are
 doc-verified against Anthropic's monitoring docs, not yet exercised against
 this gateway).
 
+**Committed, NOT yet deployed (2026-07-29): user-spend-cap identity fix
+(portal + script).** Live-confirmed gateway contract: user caps match by
+EXACT principal `oidc:<sub>` only (an email/bare-sub `user_id` is accepted
+but never applies), and a cap row with `amount: null` is an UNLIMITED
+override that beats group/org caps — the old "clear" (POST null) created
+exactly those rows. Fix: portal caps page and `set-spend-limit.sh` resolve
+an entered email to the principal before writing, clear/Remove now
+`DELETE`s the cap row, the grid shows resolved emails and flags legacy
+dead rows / null rows. Contract details: troubleshooting §10.4–10.5,
+cost-controls §1/§2. Deploy = portal image rebuild (tag bump) +
+`deploy-download-portal.sh` (rides the same rebuild as #26/#27); the
+script fix is repo-side only. After deploy: sweep `--list` for
+email-keyed and `amount: null` rows and remove them.
+
 **Pending publish (2026-07-29):** both client installers now seed
 `hasCompletedOnboarding: true` in `.claude.json` at install time — without
 it every fresh install dies at the client's Anthropic connectivity preflight

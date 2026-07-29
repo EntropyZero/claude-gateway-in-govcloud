@@ -11,11 +11,11 @@ import pytest
 from portal.crypto import b64url_encode, verify_cookie
 from portal.gateway import (GW_COOKIE_BUDGET, SPEND_PERIODS, GatewayClient,
                             build_gw_cookie, build_spend_limit_body,
-                            gateway_token_exp)
+                            gateway_token_exp, lookup_user_emails)
 from portal.money import AmountError
 from portal.selection import SelectionError
 
-from conftest import TEST_ENV
+from conftest import TEST_ENV, StubGateway
 from portal.config import Config
 
 
@@ -35,9 +35,11 @@ def test_spend_body_group_and_org():
     assert org["scope"] == {"type": "organization"}
 
 
-def test_spend_body_clear_is_null_amount():
-    body = build_spend_limit_body("user", "00u123", None, "monthly")
-    assert body["amount"] is None
+def test_spend_body_refuses_null_amount():
+    # amount:null would store an UNLIMITED-override row, not clear the cap
+    # (verified 2.1.220) - removal is DELETE-by-id, never a null POST.
+    with pytest.raises(SelectionError):
+        build_spend_limit_body("user", "00u123", None, "monthly")
 
 
 @pytest.mark.parametrize("scope_type,scope_id,period", [
@@ -59,6 +61,33 @@ def test_spend_body_bad_amount_raises_amount_error():
 
 def test_spend_periods_are_the_gateway_triple():
     assert SPEND_PERIODS == ("daily", "weekly", "monthly")
+
+
+# ------------------------------------------------------- email reverse lookup
+
+
+def test_lookup_user_emails_batches_by_100_and_maps_actors():
+    # user_ids[] accepts <=100 per call, so 150 principals = two batches.
+    ids = ["oidc:%03d" % i for i in range(150)]
+    rows = [{"actor": {"user_id": u, "email_address": u + "@example.com"}}
+            for u in ids]
+    gw = StubGateway(effective=[
+        (200, {"data": rows[:100]}), (200, {"data": rows[100:]})])
+    emails = lookup_user_emails(gw, "tok", ids)
+    assert len(gw.effective_calls) == 2
+    assert all(len(kw["user_ids"]) <= 100 for _a, kw in gw.effective_calls)
+    assert emails["oidc:007"] == "oidc:007@example.com" and len(emails) == 150
+
+
+def test_lookup_user_emails_degrades_per_batch():
+    # A failed batch leaves its principals unmapped; the rest still resolve.
+    gw = StubGateway(effective=[
+        (500, None),
+        (200, {"data": [{"actor": {"user_id": "oidc:b",
+                                   "email_address": "b@example.com"}}]})])
+    ids = ["oidc:%03d" % i for i in range(101)] + ["oidc:b"]
+    emails = lookup_user_emails(gw, "tok", ids)
+    assert emails == {"oidc:b": "b@example.com"}
 
 
 # ------------------------------------------------------------- token exp

@@ -1331,16 +1331,50 @@ generated keys work; an empty `PORTAL_ADMIN_GROUP` hides the admin page.
 Note that this failure also has an identity cause: if the groups claim is
 not arriving at all, see §4.2.
 
-### 10.4 A cleared cap is still listed
+### 10.4 A "cleared" user is UNLIMITED instead of falling back to the org/group cap
 
-**Cause.** Cleared caps linger as rows with a null amount rather than
-disappearing, and list items carry a nested scope object with no
-created-by field. This is the gateway's API shape, not a portal bug.
+**Symptom.** A user whose cap was cleared shows unbounded spend; the caps
+list (portal grid or `set-spend-limit.sh --list`) still shows their row,
+with a null amount.
 
-**Fix.** Read a null amount as "no cap" (spend is still reported). Related
+**Cause.** A cap row with `amount: null` is not "no cap" — it is an
+**explicit unlimited override at that scope** and, for a user row, it wins
+over every group and org cap (user precedence). Binary-verified 2.1.220 and
+observed live 2026-07-29. Pre-2026-07-29 portal "Clear" and
+`set-spend-limit.sh --clear` created exactly these rows by POSTing
+`amount: null`; both now DELETE the row instead, and the portal renders
+surviving null rows as *UNLIMITED override*.
+
+**Fix.** Remove the row (portal **Remove** button, or `--clear`, both of
+which now issue `DELETE /v1/organizations/spend_limits/<id>`); the user
+falls back to group/org caps immediately. After upgrading, sweep `--list`
+for `"amount": null` rows — each one is an active exemption. Related
 authorization behaviour worth relying on when triaging: the **read key is
 refused for writes** (403), an unauthenticated call is 401, and a valid
 token whose identity is not in the admin groups is 401 on read *and* write.
+
+### 10.5 A user-scope cap never applies (set by email or bare sub)
+
+**Symptom.** A per-user cap is set and listed, but the user's spend sails
+past it; the All-users page shows their cap source as the group/org cap
+(or none), not the user cap.
+
+**Cause.** The gateway matches user caps by **exact string equality against
+the principal `oidc:<sub>`** — nothing else. The admin API accepts any
+string as `user_id` and returns success, so a cap keyed by the user's email
+or bare Okta sub is stored but matches nobody, with no error anywhere.
+Binary-verified 2.1.220, confirmed live 2026-07-29 (pre-fix portal and
+docs wrongly said "sub or email").
+
+**Fix.** Since 2026-07-29 the portal and `set-spend-limit.sh` resolve an
+entered email to the principal before writing, and the portal refuses a
+bare sub outright (the user must have signed in at least once for email
+resolution; an id already in `oidc:` form is written verbatim — in orgs
+whose Okta subs are emails, principals legitimately contain `@`). The
+portal grid flags any user row not in `oidc:` form with "never matches a
+user". Remove such dead rows (portal Remove, or `--clear` — the entered
+email matches the legacy row first) and re-set the cap by email (now
+resolved) or by the `oidc:<sub>` shown on the All-users page.
 
 ---
 

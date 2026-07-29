@@ -10,15 +10,30 @@
 # No cap rows = no enforcement.
 #
 # Usage:
-#   set-spend-limit.sh --scope user       --id <okta-sub|email> --amount 50.00 [--period monthly]
+#   set-spend-limit.sh --scope user       --id <email|oidc-sub> --amount 50.00 [--period monthly]
 #   set-spend-limit.sh --scope rbac_group --id claude-developers --amount 2500  [--period monthly]
 #   set-spend-limit.sh --scope organization                     --amount 10000 [--period monthly]
-#   set-spend-limit.sh --scope user --id <sub> --clear      # remove the cap
+#   set-spend-limit.sh --scope user --id <email|oidc-sub> --clear  # REMOVE the cap row
 #   set-spend-limit.sh --list                               # show current caps
 #
 # --amount is DOLLARS (accepts 50 or 50.00); the API takes a whole-number
 # decimal STRING of CENTS, which this script converts. Periods: daily | weekly
 # | monthly (default monthly). Currency is USD-only, enforced by the gateway.
+#
+# User-cap identity: the gateway matches user caps by EXACT principal
+# (oidc:<sub>) ONLY - an email- or bare-sub-keyed cap is stored but never
+# applies (binary-verified 2.1.220, live-confirmed 2026-07-29). An --id
+# containing '@' is therefore resolved to the principal first, via the
+# gateway's effective-usage search; the user must have signed in at least
+# once, else pass their oidc:<sub> directly. An --id already in oidc:...
+# form is used verbatim (never resolved - some orgs put emails in subs).
+#
+# --clear DELETES the cap row. It must: a row left behind with a null amount
+# is an explicit UNLIMITED override that beats group/org caps - the user
+# would stop falling back to the org quota entirely. When clearing by email,
+# a row keyed by the RAW email (a legacy dead row from the pre-2026-07-29
+# behavior) is matched before the resolved principal's row, so legacy rows
+# are removable here too; run --clear once per row.
 #
 # Precedence: a per-user cap wins over group caps. Multiple group caps combine
 # per the stack's SpendGroupLimitMode (`min` = most restrictive wins).
@@ -37,6 +52,77 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${HERE}/common.sh"
 [ -f "${HERE}/deploy.env" ] && . "${HERE}/deploy.env"
 
+# ---- pure helpers (sourceable for tests via CLAUDE_SETSPEND_DOTSOURCE) ----
+
+spend_urlencode() { # percent-encode $1 for a query-string value
+  python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
+}
+
+# stdin = /spend_limits/effective JSON; $1 = email. Prints the single
+# principal (oidc:<sub>) whose email matches exactly (case-insensitive), or
+# errors: the q= search is substring, so near-miss rows must be filtered out.
+parse_user_resolution() {
+  python3 -c '
+import json, sys
+email = sys.argv[1].lower()
+try:
+    doc = json.load(sys.stdin)
+except ValueError:
+    sys.exit("[spend-limit] ERROR: unparseable gateway response (HTTP error?)")
+found = {}
+for row in doc.get("data", []):
+    actor = (row or {}).get("actor") or {}
+    addr = actor.get("email_address") or ""
+    if addr.lower() == email and actor.get("user_id"):
+        found[actor["user_id"]] = addr
+if not found:
+    sys.exit("[spend-limit] ERROR: no gateway user has the email %r. The user "
+             "must have signed in at least once; otherwise pass their "
+             "oidc:<sub> id (see --list or the portal All-users page)." % sys.argv[1])
+if len(found) > 1:
+    sys.exit("[spend-limit] ERROR: email %r matches %d users (%s) - pass the "
+             "oidc:<sub> id instead." % (sys.argv[1], len(found), ", ".join(sorted(found))))
+print(next(iter(found)))
+' "$1"
+}
+
+# stdin = /spend_limits listing JSON; $1=scope $2=scope_id $3=period
+# [$4=alt_id]. Prints the matching cap row id - the entered id is preferred
+# over the resolved-principal alt, so a legacy email-keyed row is found
+# before (never shadowed by) the principal-keyed one. Errors when no row.
+parse_limit_row_id() {
+  python3 -c '
+import json, re, sys
+scope_type, scope_id, period = sys.argv[1:4]
+alt_id = sys.argv[4] if len(sys.argv) > 4 else ""
+try:
+    doc = json.load(sys.stdin)
+except ValueError:
+    sys.exit("[spend-limit] ERROR: unparseable gateway response (HTTP error?)")
+rows = {}
+for item in doc.get("data") or []:
+    scope = (item or {}).get("scope") or {}
+    item_id = scope.get("user_id") or scope.get("rbac_group_id") or ""
+    if (scope.get("type") == scope_type
+            and item.get("period", "monthly") == period and item.get("id")):
+        rows.setdefault(item_id, item["id"])
+for candidate in [scope_id] + ([alt_id] if alt_id else []):
+    if candidate in rows:
+        if not re.match(r"^[A-Za-z0-9_-]{1,64}$", rows[candidate]):
+            sys.exit("[spend-limit] ERROR: gateway returned an unexpected row id %r" % rows[candidate])
+        print(rows[candidate])
+        sys.exit(0)
+searched = scope_id + (" / " + alt_id if alt_id else "")
+sys.exit("[spend-limit] ERROR: no %s cap row for %s (%s) - nothing to remove. "
+         "Run --list to see the rows." % (scope_type, searched or "organization", period))
+' "$1" "$2" "$3" "${4:-}"
+}
+
+# Test hook: stop before argument parsing / network setup.
+if [ -n "${CLAUDE_SETSPEND_DOTSOURCE:-}" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 SCOPE=""; SCOPE_ID=""; AMOUNT=""; PERIOD="monthly"; CLEAR=0; LIST=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -46,7 +132,7 @@ while [ $# -gt 0 ]; do
     --period) PERIOD="${2:?--period needs a value}"; shift 2 ;;
     --clear)  CLEAR=1; shift ;;
     --list)   LIST=1; shift ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,47p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -72,10 +158,18 @@ if [ -n "${EXTRA_CA_CERT_PATH:-}" ] && [ "${EXTRA_CA_CERT_PATH}" != "${GATEWAY_C
 fi
 CURL_CA=()
 COMBINED_CA=""
+# Every mktemp in this script registers here so the EXIT trap sweeps them on
+# ANY exit - including Ctrl-C mid-curl, when the header file still holds the
+# admin key.
+API_TMPS=()
+api_tmp() { local f; f="$(mktemp)"; chmod 600 "$f"; API_TMPS+=("$f"); printf '%s' "$f"; }
 # [ -z ... ] || : the && form would make cleanup return 1 when COMBINED_CA is
 # empty, and an EXIT trap's status REPLACES the script's own exit code under
 # set -e - turning every successful run without CA extras into exit 1.
-cleanup() { [ -z "$COMBINED_CA" ] || rm -f "$COMBINED_CA"; }
+cleanup() {
+  [ -z "$COMBINED_CA" ] || rm -f "$COMBINED_CA"
+  rm -f ${API_TMPS[@]+"${API_TMPS[@]}"}
+}
 trap cleanup EXIT
 if [ "${#CA_EXTRAS[@]}" -gt 0 ]; then
   COMBINED_CA="$(mktemp)"
@@ -92,31 +186,30 @@ fetch_key() {
     --query SecretString --output text
 }
 
-api() { # $1=method $2=key-name; body on stdin (empty for GET)
-  local method="$1" keyname="$2" key hdr body rc
+api_raw() { # $1=method $2=key-name $3=path-suffix (may be ''/query); POST body on stdin.
+  # Prints the raw response body; curl's exit code passes through. NOTE: no
+  # set +e/-e sandwich here - an inner `set -e` would re-enable errexit in
+  # the CALLER's suppressed window (verified: it made api()'s whole error
+  # path unreachable). `|| rc=$?` captures the status without tripping errexit.
+  local method="$1" keyname="$2" path="${3:-}" key hdr rc=0
   key="$(fetch_key "$keyname")"
-  hdr="$(mktemp)"; chmod 600 "$hdr"
+  hdr="$(api_tmp)"
   printf 'x-api-key: %s\n' "$key" > "$hdr"
   unset key
-  body="$(mktemp)"; chmod 600 "$body"
   # ${arr[@]+"${arr[@]}"} - safe expansion of a possibly-empty array under set -u
-  if [ "$method" = "GET" ]; then
-    set +e
-    curl -sS --fail-with-body ${CURL_CA[@]+"${CURL_CA[@]}"} -X GET \
-      -H @"$hdr" \
-      "https://${GATEWAY_FQDN}/v1/organizations/spend_limits" > "$body"
-    rc=$?
-    set -e
-  else
-    set +e
-    curl -sS --fail-with-body ${CURL_CA[@]+"${CURL_CA[@]}"} -X "$method" \
-      -H @"$hdr" -H 'content-type: application/json' \
-      --data-binary @- \
-      "https://${GATEWAY_FQDN}/v1/organizations/spend_limits" > "$body"
-    rc=$?
-    set -e
-  fi
+  local args=(-sS --fail-with-body ${CURL_CA[@]+"${CURL_CA[@]}"} -X "$method" -H @"$hdr")
+  [ "$method" = "POST" ] && args+=(-H 'content-type: application/json' --data-binary @-)
+  curl "${args[@]}" "https://${GATEWAY_FQDN}/v1/organizations/spend_limits${path}" || rc=$?
   rm -f "$hdr"
+  return $rc
+}
+
+api() { # $1=method $2=key-name $3=path-suffix; body on stdin (empty unless POST)
+  local body rc=0
+  body="$(api_tmp)"
+  # `|| rc=$?`: capture the real status without tripping errexit on the
+  # failure this function exists to report.
+  api_raw "$1" "$2" "${3:-}" > "$body" || rc=$?
   cat "$body"; echo
   rm -f "$body"
   if [ "$rc" -ne 0 ]; then
@@ -153,11 +246,9 @@ case "$SCOPE" in
   *) echo "--scope must be user, rbac_group or organization" >&2; exit 2 ;;
 esac
 
-# amount: dollars -> whole cents (the API regex is ^\d{1,18}$ on a STRING),
-# or JSON null to clear the cap.
-if [ "$CLEAR" = "1" ]; then
-  AMOUNT_JSON='null'
-else
+# amount: dollars -> whole cents (the API regex is ^\d{1,18}$ on a STRING).
+# --clear takes no amount: it DELETES the cap row (below).
+if [ "$CLEAR" != "1" ]; then
   [ -n "$AMOUNT" ] || { echo "--amount is required (or use --clear)" >&2; exit 2; }
   case "$AMOUNT" in
     *[!0-9.]*|*.*.*|'') echo "--amount must be a plain dollar figure, e.g. 50 or 50.00" >&2; exit 2 ;;
@@ -167,17 +258,79 @@ else
   AMOUNT_JSON="\"${CENTS}\""
 fi
 
+require_vars GATEWAY_FQDN NAME_PREFIX
+
+# fetch_to FILE METHOD PATH - admin GET into FILE; on HTTP/network failure
+# prints the response body (the gateway's error JSON - distinguishes a bad
+# key or 403 from "user not found") and fails. Keeps auth errors from
+# masquerading as identity errors in the parsers downstream.
+fetch_to() {
+  local out="$1" path="$2"
+  if ! api_raw GET spend-admin-write-key "$path" < /dev/null > "$out"; then
+    echo "[spend-limit] ERROR: gateway request failed (${path}):" >&2
+    cat "$out" >&2; echo >&2
+    echo "[spend-limit] (connectivity/auth? try: $0 --list)" >&2
+    return 1
+  fi
+}
+
+# The gateway matches user caps by EXACT principal (oidc:<sub>) only, so an
+# email --id must be resolved before anything is written. An id already in
+# principal form (oidc:...) is NEVER resolved - in orgs whose Okta subs are
+# themselves emails, principals legitimately contain '@'. The write key is
+# accepted on the admin GETs (verified 2.1.220), so no read key is needed.
+resolve_needed() {
+  [ "$SCOPE" = "user" ] || return 1
+  case "$SCOPE_ID" in
+    oidc:*) return 1 ;;
+    *@*)    return 0 ;;
+    *)      return 1 ;;
+  esac
+}
+EFFECTIVE_PATH="/effective?q=$(spend_urlencode "$SCOPE_ID")&period%5B%5D=monthly&limit=100"
+
+if [ "$CLEAR" = "1" ]; then
+  # DELETE the row. POSTing amount null instead leaves an UNLIMITED-override
+  # row that beats group/org caps - the user stops falling back entirely.
+  # The ENTERED id is matched first (parse_limit_row_id's preference order):
+  # a legacy dead row is keyed by the raw email and must stay removable -
+  # and must not shadow-delete the principal-keyed cap. Resolution is
+  # best-effort here (an unresolvable email may still name a legacy row).
+  ALT_ID=""
+  if resolve_needed; then
+    RESP="$(api_tmp)"
+    if api_raw GET spend-admin-write-key "$EFFECTIVE_PATH" < /dev/null > "$RESP" 2>/dev/null; then
+      ALT_ID="$(parse_user_resolution "$SCOPE_ID" < "$RESP" 2>/dev/null || true)"
+    fi
+    rm -f "$RESP"
+  fi
+  LISTING="$(api_tmp)"
+  fetch_to "$LISTING" "?limit=200" || exit 1
+  LIMIT_ID="$(parse_limit_row_id "$SCOPE" "$SCOPE_ID" "$PERIOD" "$ALT_ID" < "$LISTING")" || exit 1
+  rm -f "$LISTING"
+  echo "[spend-limit] ${SCOPE}${SCOPE_ID:+ ($SCOPE_ID)} -> removing cap row ${LIMIT_ID} (${PERIOD})"
+  api DELETE spend-admin-write-key "/${LIMIT_ID}" < /dev/null
+  echo "[spend-limit] done. Verify with: $0 --list"
+  exit 0
+fi
+
+if resolve_needed; then
+  echo "[spend-limit] resolving '${SCOPE_ID}' to the gateway principal..."
+  RESP="$(api_tmp)"
+  fetch_to "$RESP" "$EFFECTIVE_PATH" || exit 1
+  PRINCIPAL="$(parse_user_resolution "$SCOPE_ID" < "$RESP")" || exit 1
+  rm -f "$RESP"
+  echo "[spend-limit] resolved to ${PRINCIPAL}"
+  SCOPE_ID="$PRINCIPAL"
+fi
+
 case "$SCOPE" in
   user)         SCOPE_JSON="{\"type\":\"user\",\"user_id\":\"${SCOPE_ID}\"}" ;;
   rbac_group)   SCOPE_JSON="{\"type\":\"rbac_group\",\"rbac_group_id\":\"${SCOPE_ID}\"}" ;;
   organization) SCOPE_JSON="{\"type\":\"organization\"}" ;;
 esac
 
-require_vars GATEWAY_FQDN NAME_PREFIX
-
-# $CLEAR is "0" or "1" (never empty), so ${CLEAR:+...} would ALWAYS expand.
-CLEAR_TXT=""; [ "$CLEAR" = "1" ] && CLEAR_TXT="(cleared)"
-echo "[spend-limit] ${SCOPE}${SCOPE_ID:+ ($SCOPE_ID)} -> ${CLEAR_TXT}${AMOUNT:+\$$AMOUNT} per ${PERIOD}"
+echo "[spend-limit] ${SCOPE}${SCOPE_ID:+ ($SCOPE_ID)} -> \$${AMOUNT} per ${PERIOD}"
 printf '{"scope":%s,"amount":%s,"period":"%s","currency":"USD"}' \
   "$SCOPE_JSON" "$AMOUNT_JSON" "$PERIOD" \
   | api POST spend-admin-write-key

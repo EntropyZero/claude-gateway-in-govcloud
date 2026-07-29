@@ -171,7 +171,8 @@ def test_poll_success_with_oversized_token_renders_explicit_error(admin_env):
 
 def test_connected_lists_caps(admin_env):
     # Item shape as returned by the real gateway (runtime-verified 2.1.220):
-    # nested scope object, no created_by, cleared rows linger with null amount.
+    # nested scope object, no created_by; a null-amount row is an UNLIMITED
+    # override and must be named as such, never "(cleared)".
     gw = StubGateway(api={("GET", ""): (200, {"data": [
         {"type": "spend_limit", "id": "spl_1",
          "scope": {"type": "user", "user_id": "00u123"}, "amount": "5000",
@@ -187,7 +188,7 @@ def test_connected_lists_caps(admin_env):
                                            "portal_gw": _gw_cookie()})
     assert resp.status_code == 200
     assert b"$50.00" in resp.data and b"00u123" in resp.data
-    assert b"(cleared)" in resp.data and b"claude-developers" in resp.data
+    assert b"UNLIMITED override" in resp.data and b"claude-developers" in resp.data
     # header release tag renders on admin pages too (shared base.html who-line)
     assert b"release 2.1.207" in resp.data
     # the call rode the admin's own token, no API key anywhere
@@ -264,13 +265,13 @@ def test_set_cap_posts_body_and_flashes_success(admin_env):
     h = _harness(admin_env, gw)
     cookie, csrf = _admin_session()
     resp = h.post("/portal/admin/set",
-                  form={"scope_type": "user", "scope_id": "00u123",
+                  form={"scope_type": "user", "scope_id": "oidc:00u123",
                         "amount": "50.00", "period": "monthly", "csrf": csrf},
                   cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
     assert resp.status_code == 302 and resp.headers["Location"] == "/portal/admin"
     method, token, path, body = gw.api_calls[0]
     assert (method, token) == ("POST", "gw-token-abc")
-    assert body["amount"] == "5000" and body["scope"]["user_id"] == "00u123"
+    assert body["amount"] == "5000" and body["scope"]["user_id"] == "oidc:00u123"
     flash = verify_cookie(cookie_value(set_cookies_of(resp), "portal_flash"), SECRET)
     assert flash["ok"] is True
     assert any(r["event"] == "portal_admin" and r["outcome"] == "success"
@@ -282,7 +283,7 @@ def test_set_cap_invalid_amount_never_reaches_gateway(admin_env):
     h = _harness(admin_env, gw)
     cookie, csrf = _admin_session()
     resp = h.post("/portal/admin/set",
-                  form={"scope_type": "user", "scope_id": "00u123",
+                  form={"scope_type": "user", "scope_id": "oidc:00u123",
                         "amount": "1.2.3", "period": "monthly", "csrf": csrf},
                   cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
     assert resp.status_code == 302
@@ -291,16 +292,284 @@ def test_set_cap_invalid_amount_never_reaches_gateway(admin_env):
     assert flash["ok"] is False
 
 
-def test_clear_cap_sends_null_amount(admin_env):
+def _eff_row(user_id, email, name="X"):
+    """One effective-usage item as the gateway returns it (runtime-verified
+    shape, 2.1.220)."""
+    return {"scope": {"type": "user", "user_id": user_id}, "groups": [],
+            "actor": {"type": "user_actor", "user_id": user_id, "name": name,
+                      "email_address": email, "deleted": False},
+            "amount": None, "currency": "USD", "period": "monthly",
+            "source": None, "spend_limit_id": None,
+            "period_to_date_spend": "0"}
+
+
+def test_set_cap_by_email_resolves_to_principal(admin_env):
+    # The gateway matches user caps by EXACT principal (oidc:<sub>) only - an
+    # email-keyed cap is stored but never applies - so the portal must write
+    # the resolved principal, never the raw email.
+    gw = StubGateway(api={("POST", ""): (200, {"id": "spl_1"})},
+                     effective=[(200, {"data": [
+                         _eff_row("oidc:00uAlice", "alice@example.com")]})])
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    resp = h.post("/portal/admin/set",
+                  form={"scope_type": "user", "scope_id": "alice@example.com",
+                        "amount": "50.00", "period": "monthly", "csrf": csrf},
+                  cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert gw.effective_calls[0][1]["q"] == "alice@example.com"
+    method, _tok, _path, body = gw.api_calls[0]
+    assert method == "POST"
+    assert body["scope"]["user_id"] == "oidc:00uAlice"
+    flash = verify_cookie(cookie_value(set_cookies_of(resp), "portal_flash"), SECRET)
+    assert flash["ok"] is True and "oidc:00uAlice" in flash["msg"]
+
+
+def test_email_resolution_is_exact_match_and_case_insensitive(admin_env):
+    # q= is a substring search: bob.alice@example.com would come back for
+    # q=alice@example.com. Only the exact (case-insensitive) email may win.
+    gw = StubGateway(api={("POST", ""): (200, {})},
+                     effective=[(200, {"data": [
+                         _eff_row("oidc:00uBob", "bob.alice@example.com"),
+                         _eff_row("oidc:00uAlice", "Alice@Example.com")]})])
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    h.post("/portal/admin/set",
+           form={"scope_type": "user", "scope_id": "alice@example.com",
+                 "amount": "50", "period": "monthly", "csrf": csrf},
+           cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert gw.api_calls[0][3]["scope"]["user_id"] == "oidc:00uAlice"
+
+
+def test_email_resolution_no_match_blocks_the_write(admin_env):
+    gw = StubGateway(effective=[(200, {"data": []})])
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    resp = h.post("/portal/admin/set",
+                  form={"scope_type": "user", "scope_id": "ghost@example.com",
+                        "amount": "50", "period": "monthly", "csrf": csrf},
+                  cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert gw.api_calls == []
+    flash = verify_cookie(cookie_value(set_cookies_of(resp), "portal_flash"), SECRET)
+    assert flash["ok"] is False and "signed in" in flash["msg"]
+
+
+def test_email_resolution_ambiguous_blocks_the_write(admin_env):
+    gw = StubGateway(effective=[(200, {"data": [
+        _eff_row("oidc:00uA", "dupe@example.com"),
+        _eff_row("oidc:00uB", "dupe@example.com")]})])
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    resp = h.post("/portal/admin/set",
+                  form={"scope_type": "user", "scope_id": "dupe@example.com",
+                        "amount": "50", "period": "monthly", "csrf": csrf},
+                  cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert gw.api_calls == []
+    flash = verify_cookie(cookie_value(set_cookies_of(resp), "portal_flash"), SECRET)
+    assert flash["ok"] is False and "oidc:00uA" in flash["msg"]
+
+
+def test_remove_deletes_the_row_by_form_limit_id(admin_env):
+    # Remove must DELETE the row: a row left with amount null is an explicit
+    # UNLIMITED override that beats group/org caps (verified 2.1.220).
+    gw = StubGateway(api={("DELETE", "/spl_1"):
+                          (200, {"type": "spend_limit_deleted", "id": "spl_1"})})
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    resp = h.post("/portal/admin/clear",
+                  form={"limit_id": "spl_1", "scope_type": "user",
+                        "scope_id": "oidc:00uAlice", "period": "monthly",
+                        "csrf": csrf},
+                  cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert gw.api_calls == [("DELETE", "gw-token-abc", "/spl_1", None)]
+    flash = verify_cookie(cookie_value(set_cookies_of(resp), "portal_flash"), SECRET)
+    assert flash["ok"] is True
+
+
+def test_remove_with_legacy_email_row_skips_resolution(admin_env):
+    # A legacy dead row is keyed by an email that resolves to nothing; with
+    # the row id in hand the portal must not try (and fail) to resolve it.
+    gw = StubGateway(api={("DELETE", "/spl_9"):
+                          (200, {"type": "spend_limit_deleted", "id": "spl_9"})})
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    resp = h.post("/portal/admin/clear",
+                  form={"limit_id": "spl_9", "scope_type": "user",
+                        "scope_id": "ghost@example.com", "period": "monthly",
+                        "csrf": csrf},
+                  cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert gw.effective_calls == []
+    assert gw.api_calls == [("DELETE", "gw-token-abc", "/spl_9", None)]
+    flash = verify_cookie(cookie_value(set_cookies_of(resp), "portal_flash"), SECRET)
+    assert flash["ok"] is True
+
+
+def test_gateway_error_during_resolution_flashes_not_500(admin_env):
+    # resolve_user_email rides the network; a gateway blip must produce the
+    # same flash-with-reason contract as every other call site, never the
+    # generic 500 (which would leave "was it applied?" unanswered).
+    gw = StubGateway(effective=[GatewayError("gateway unreachable: blip")])
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    resp = h.post("/portal/admin/set",
+                  form={"scope_type": "user", "scope_id": "alice@example.com",
+                        "amount": "50", "period": "monthly", "csrf": csrf},
+                  cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert resp.status_code == 302
+    assert gw.api_calls == []
+    flash = verify_cookie(cookie_value(set_cookies_of(resp), "portal_flash"), SECRET)
+    assert flash["ok"] is False and "unreachable" in flash["msg"]
+
+
+def test_set_cap_by_bare_sub_is_refused(admin_env):
+    # A bare Okta sub is the second dead-key shape (stored, never applies);
+    # only an email (resolved) or an oidc:<sub> principal may be written.
+    gw = StubGateway()
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    resp = h.post("/portal/admin/set",
+                  form={"scope_type": "user", "scope_id": "00u12345",
+                        "amount": "50", "period": "monthly", "csrf": csrf},
+                  cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert gw.api_calls == [] and gw.effective_calls == []
+    flash = verify_cookie(cookie_value(set_cookies_of(resp), "portal_flash"), SECRET)
+    assert flash["ok"] is False and "oidc:<sub>" in flash["msg"]
+
+
+def test_oidc_principal_containing_at_is_never_resolved(admin_env):
+    # Orgs can put emails in Okta subs; a principal oidc:alice@example.com
+    # must be written verbatim, not bounced through email resolution.
     gw = StubGateway(api={("POST", ""): (200, {})})
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    h.post("/portal/admin/set",
+           form={"scope_type": "user", "scope_id": "oidc:alice@example.com",
+                 "amount": "50", "period": "monthly", "csrf": csrf},
+           cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert gw.effective_calls == []
+    assert gw.api_calls[0][3]["scope"]["user_id"] == "oidc:alice@example.com"
+
+
+def test_remove_by_email_matches_the_legacy_row_first(admin_env):
+    # Both a legacy email-keyed row and the principal's own cap exist for
+    # the same period: clearing by email must remove the LEGACY row, never
+    # shadow-delete the real cap.
+    listing = {"data": [
+        {"id": "spl_real", "scope": {"type": "user",
+                                     "user_id": "oidc:00uAlice"},
+         "amount": "5000", "period": "monthly"},
+        {"id": "spl_dead", "scope": {"type": "user",
+                                     "user_id": "alice@example.com"},
+         "amount": "5000", "period": "monthly"}]}
+    gw = StubGateway(
+        api={("GET", ""): (200, listing),
+             ("DELETE", "/spl_dead"):
+             (200, {"type": "spend_limit_deleted", "id": "spl_dead"})},
+        effective=[(200, {"data": [
+            _eff_row("oidc:00uAlice", "alice@example.com")]})])
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    h.post("/portal/admin/clear",
+           form={"scope_type": "user", "scope_id": "alice@example.com",
+                 "period": "monthly", "csrf": csrf},
+           cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert ("DELETE", "gw-token-abc", "/spl_dead", None) in gw.api_calls
+    assert all(c[2] != "/spl_real" for c in gw.api_calls)
+
+
+def test_remove_by_unresolvable_email_still_removes_the_legacy_row(admin_env):
+    # The email resolves to nothing (user never signed in / identity aged
+    # out) - the legacy row keyed by the raw email must still be removable
+    # through the lookup path.
+    listing = {"data": [
+        {"id": "spl_dead", "scope": {"type": "user",
+                                     "user_id": "ghost@example.com"},
+         "amount": "5000", "period": "monthly"}]}
+    gw = StubGateway(
+        api={("GET", ""): (200, listing),
+             ("DELETE", "/spl_dead"):
+             (200, {"type": "spend_limit_deleted", "id": "spl_dead"})},
+        effective=[(200, {"data": []})])
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    resp = h.post("/portal/admin/clear",
+                  form={"scope_type": "user", "scope_id": "ghost@example.com",
+                        "period": "monthly", "csrf": csrf},
+                  cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert ("DELETE", "gw-token-abc", "/spl_dead", None) in gw.api_calls
+    flash = verify_cookie(cookie_value(set_cookies_of(resp), "portal_flash"), SECRET)
+    assert flash["ok"] is True
+
+
+def test_remove_rejects_malformed_limit_id(admin_env):
+    gw = StubGateway()
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    resp = h.post("/portal/admin/clear",
+                  form={"limit_id": "spl_1/../../oauth", "scope_type": "user",
+                        "scope_id": "oidc:00uA", "period": "monthly",
+                        "csrf": csrf},
+                  cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert gw.api_calls == []
+    flash = verify_cookie(cookie_value(set_cookies_of(resp), "portal_flash"), SECRET)
+    assert flash["ok"] is False
+
+
+def test_remove_without_limit_id_looks_up_the_row(admin_env):
+    listing = {"data": [
+        {"id": "spl_7", "scope": {"type": "rbac_group",
+                                  "rbac_group_id": "claude-developers"},
+         "amount": "2500", "period": "monthly"}]}
+    gw = StubGateway(api={("GET", ""): (200, listing),
+                          ("DELETE", "/spl_7"):
+                          (200, {"type": "spend_limit_deleted", "id": "spl_7"})})
     h = _harness(admin_env, gw)
     cookie, csrf = _admin_session()
     h.post("/portal/admin/clear",
            form={"scope_type": "rbac_group", "scope_id": "claude-developers",
                  "period": "monthly", "csrf": csrf},
            cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
-    assert gw.api_calls[0][3]["amount"] is None
-    assert gw.api_calls[0][3]["scope"]["rbac_group_id"] == "claude-developers"
+    assert ("DELETE", "gw-token-abc", "/spl_7", None) in gw.api_calls
+
+
+def test_remove_without_matching_row_flashes_and_deletes_nothing(admin_env):
+    gw = StubGateway(api={("GET", ""): (200, {"data": []})})
+    h = _harness(admin_env, gw)
+    cookie, csrf = _admin_session()
+    resp = h.post("/portal/admin/clear",
+                  form={"scope_type": "user", "scope_id": "oidc:00uA",
+                        "period": "monthly", "csrf": csrf},
+                  cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
+    assert all(call[0] != "DELETE" for call in gw.api_calls)
+    flash = verify_cookie(cookie_value(set_cookies_of(resp), "portal_flash"), SECRET)
+    assert flash["ok"] is False and "nothing was removed" in flash["msg"]
+
+
+def test_caps_grid_resolves_emails_and_flags_legacy_rows(admin_env):
+    listing = {"data": [
+        {"id": "spl_1", "scope": {"type": "user", "user_id": "oidc:00uAlice"},
+         "amount": "5000", "period": "monthly", "updated_at": "2026-07-29"},
+        {"id": "spl_2", "scope": {"type": "user",
+                                  "user_id": "dead@example.com"},
+         "amount": "5000", "period": "monthly", "updated_at": "2026-07-29"},
+        {"id": "spl_3", "scope": {"type": "user", "user_id": "oidc:00uNull"},
+         "amount": None, "period": "monthly", "updated_at": "2026-07-29"}]}
+    gw = StubGateway(api={("GET", ""): (200, listing)},
+                     effective=[(200, {"data": [
+                         _eff_row("oidc:00uAlice", "alice@example.com")]})])
+    h = _harness(admin_env, gw)
+    resp = h.get("/portal/admin", cookies={"portal_session": _session(),
+                                           "portal_gw": _gw_cookie()})
+    assert resp.status_code == 200
+    # the lookup batches every user-scope id from the grid
+    assert sorted(gw.effective_calls[0][1]["user_ids"]) == [
+        "dead@example.com", "oidc:00uAlice", "oidc:00uNull"]
+    body = resp.data
+    assert b"alice@example.com" in body          # resolved email shown
+    assert b"oidc:00uAlice" in body              # principal still visible
+    assert b"never matches a user" in body       # legacy email-keyed row flagged
+    assert b"UNLIMITED override" in body         # null-amount row named for what it is
+    # every row gets a Remove button carrying its id (null rows included)
+    assert body.count(b'name="limit_id"') == 3 and b'value="spl_3"' in body
 
 
 def test_set_without_gateway_session_redirects_and_flashes_not_applied(admin_env):
@@ -700,7 +969,7 @@ def test_set_cap_audit_records_gateway_actor(admin_env):
     h = _harness(admin_env, gw)
     cookie, csrf = _admin_session()
     h.post("/portal/admin/set",
-           form={"scope_type": "user", "scope_id": "00u123", "amount": "50",
+           form={"scope_type": "user", "scope_id": "oidc:00u123", "amount": "50",
                  "period": "monthly", "csrf": csrf},
            cookies={"portal_session": cookie, "portal_gw": _gw_cookie_sub()})
     success = [r for r in h.audit.records if r["outcome"] == "success"]
@@ -714,7 +983,7 @@ def test_legacy_gw_cookie_without_sub_still_works(admin_env):
     h = _harness(admin_env, gw)
     cookie, csrf = _admin_session()
     resp = h.post("/portal/admin/set",
-                  form={"scope_type": "user", "scope_id": "00u123",
+                  form={"scope_type": "user", "scope_id": "oidc:00u123",
                         "amount": "50", "period": "monthly", "csrf": csrf},
                   cookies={"portal_session": cookie, "portal_gw": _gw_cookie()})
     assert resp.status_code == 302
