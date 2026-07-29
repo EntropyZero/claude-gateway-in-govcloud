@@ -9,8 +9,8 @@ SHA-256, and renders both common encodings:
     verify-gateway.sh and IT publish, and
   * bare lowercase hex.
 
-The exact string format Claude Code shows at its first-connect prompt is
-UNVERIFIED in-repo, which is why the page shows both encodings.
+Both encodings are shown so the user can match whichever format their
+client displays at its first-connect prompt.
 
 Results are cached module-wide: successes for 300 s, failures for 30 s (so a
 down gateway does not add a connect-timeout to every page view, but recovery

@@ -121,7 +121,7 @@ Best,
 | `<OKTA_DOMAIN>` | your Okta org domain, e.g. `customerlogin.thecustomer.gov` |
 | `<GRAFANA_ADMIN_GROUP>` | `GRAFANA_ADMIN_GROUP` in `deploy.env` (default `grafana-admins`) |
 | `<ACCESS_GROUP>` | `ACCESS_GROUP` in `deploy.env` (default `claude-gateway-users`; gates the download portal) |
-| `<TEST_USER>` | the user you'll log in with during the test run |
+| `<TEST_USER>` | the user you'll log in with when validating the deployment |
 | `<ALLOWED_EMAIL_DOMAINS>` | `ALLOWED_EMAIL_DOMAINS` in `deploy.env` |
 
 What you'll receive maps to `deploy.env` as: Client ID → `OKTA_CLIENT_ID`

@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
-"""Render the review-package Markdown docs to PDF (make docs-pdf).
+"""Render the docs tree to PDF (make docs-pdf).
 
 Markdown -> HTML (python-markdown) -> PDF (weasyprint), landscape letter so
 the wide SVG diagrams and rule tables stay readable. Diagrams embed as
 VECTORS - they zoom losslessly in the PDF, so keep referencing the .svg
 files, never pre-rasterized PNGs.
 
+Every source .md under docs/ato, docs/operations, and docs/requests gets a
+PDF partner at the mirrored path under docs/generated (generated/ato/*.pdf,
+generated/operations/*.pdf, generated/requests/*.pdf) - sources are
+discovered automatically, so adding a doc needs no change here. One extra
+output lives at the generated/ root: user-manual.pdf (Part I of
+client-config.md), whose path is fixed because publish-portal-release.sh
+uploads it to the portal artifacts bucket.
+
 Deps (not part of the test toolchain):  pip install weasyprint markdown
 Usage:  python3 docs/md-to-pdf.py [doc.md | user-manual ...]
-        default: docs/ato/architecture.md docs/ato/network-access-controls.md
-                 docs/operations/om-runbooks.md docs/operations/cost-controls.md
-                 docs/operations/monitoring-and-retention.md
-                 docs/ato/conops.md docs/ato/security-review-2026-07-resubmission.md
-                 + user-manual (Part I of client-config.md -> user-manual.pdf;
-                 the full client-config.md is deliberately not rendered)
-Output: docs/generated/<doc>.pdf. Committed alongside the sources -
-        regenerate in the same change whenever a doc or diagram changes.
+        default: every .md under docs/{ato,operations,requests} + user-manual
+Output: docs/generated/<subdir>/<doc>.pdf (user-manual.pdf at the root).
+        Committed alongside the sources - regenerate in the same change
+        whenever a doc or diagram changes.
 """
 
 import pathlib
@@ -25,14 +29,9 @@ import markdown
 import weasyprint
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-OUT_DIR = REPO / "docs" / "generated"
-DEFAULT = [REPO / "docs" / "ato" / "architecture.md",
-           REPO / "docs" / "ato" / "network-access-controls.md",
-           REPO / "docs" / "operations" / "om-runbooks.md",
-           REPO / "docs" / "operations" / "cost-controls.md",
-           REPO / "docs" / "operations" / "monitoring-and-retention.md",
-           REPO / "docs" / "ato" / "conops.md",
-           REPO / "docs" / "ato" / "security-review-2026-07-resubmission.md"]
+DOCS = REPO / "docs"
+OUT_DIR = DOCS / "generated"
+SOURCE_DIRS = ["ato", "operations", "requests"]
 
 CSS = """
 @page { size: letter landscape; margin: 14mm 12mm 16mm 12mm;
@@ -59,10 +58,20 @@ a { color: #2563EB; text-decoration: none; }
 """
 
 
+def sources() -> list[pathlib.Path]:
+    """Every source doc, in a stable order: docs/{ato,operations,requests}/*.md."""
+    return [p for d in SOURCE_DIRS for p in sorted((DOCS / d).glob("*.md"))]
+
+
+def out_path(src: pathlib.Path) -> pathlib.Path:
+    """Mirror the source's path under docs/ into generated/ (.md -> .pdf)."""
+    return OUT_DIR / src.relative_to(DOCS).with_suffix(".pdf")
+
+
 def convert(src: pathlib.Path, text: str | None = None,
-            out_name: str | None = None) -> pathlib.Path:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / ((out_name or src.stem) + ".pdf")
+            out: pathlib.Path | None = None) -> pathlib.Path:
+    out = out or out_path(src)
+    out.parent.mkdir(parents=True, exist_ok=True)
     body = markdown.markdown(
         text if text is not None else src.read_text(),
         extensions=["tables", "fenced_code", "toc"])
@@ -78,8 +87,9 @@ def user_manual() -> pathlib.Path:
     extracted between its Part I / Part II H1s so the developer-facing manual
     can be handed out without the administrator reference. The source stays
     one file (no content duplication to drift); regenerate here whenever
-    client-config.md changes."""
-    src = REPO / "docs" / "operations" / "client-config.md"
+    client-config.md changes. Path is fixed at the generated/ root —
+    publish-portal-release.sh uploads exactly this file."""
+    src = DOCS / "operations" / "client-config.md"
     text = src.read_text()
     start = text.index("# Part I — Developer user manual")
     end = text.index("# Part II — Administrators")
@@ -88,13 +98,13 @@ def user_manual() -> pathlib.Path:
             "`docs/operations/client-config.md`. References to §6–§9 point "
             "at Part II — Administrators — in the full document; end users "
             "normally don't need it (§8 self-service requires local admin).*\n")
-    return convert(src, text=part1 + note, out_name="user-manual")
+    return convert(src, text=part1 + note, out=OUT_DIR / "user-manual.pdf")
 
 
 if __name__ == "__main__":
     args = sys.argv[1:]
     if not args:
-        for t in DEFAULT:
+        for t in sources():
             convert(t)
         user_manual()
     else:

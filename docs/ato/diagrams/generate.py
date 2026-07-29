@@ -145,7 +145,7 @@ def d1():
            ["enterprise-CA cert (ACM import)", "IPv4-only · deletion-protected",
             "stack-policy locked"], border=GREEN)
     s.node(790, 150, 250, 76, "Grafana  :3000 TLS",
-           ["per-task self-signed cert", "Okta SSO only, no local login"],
+           ["image-baked self-signed cert", "Okta SSO only, no local login"],
            border=GREEN)
     # Gateway task ×2 — the ADOT collector runs co-resident as a loopback sidecar
     s.node(470, 284, 570, 104, "Gateway task — ECS Fargate ×2", [], border=GREEN)
@@ -162,9 +162,9 @@ def d1():
            ["bootstrap app DB users +", "rotate secret & roll service"],
            border=GREEN)
     s.node(470, 540, 250, 76, "Download portal ×2",
-           ["Okta OIDC + group authz (PKCE)", "TLS listener :8080, per-task cert"],
+           ["Okta OIDC + group authz (PKCE)", "TLS listener :8080, image-baked cert"],
            border=GREEN)
-    s.node(470, 646, 570, 90, "Interface VPC endpoints — each with a resource policy",
+    s.node(470, 646, 570, 90, "Interface VPC endpoints — resource policies (ecs: unsupported)",
            ["bedrock-runtime (3 approved models only) · ecr.api · ecr.dkr · logs",
             "secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint"],
            border=GREEN)
@@ -262,10 +262,10 @@ def d2():
          "TLS :443 — enterprise cert, fingerprint-pinned · ZPA carries, never inspects",
          "Internal ALB", GREEN, False),
         (2, "Internal ALB", GREEN,
-         "TLS :8080 — ALB re-encrypt, per-task self-signed cert",
+         "TLS :8080 — ALB re-encrypt, image-baked self-signed cert",
          "Gateway task", GREEN, False),
         (3, "Internal ALB", GREEN,
-         "TLS :3000 — ALB re-encrypt, per-task self-signed cert",
+         "TLS :3000 — ALB re-encrypt, image-baked self-signed cert",
          "Grafana task", GREEN, False),
         (4, "Gateway task", GREEN,
          "TLS :5432 — sslmode=verify-full, RDS CA bundle baked into the image",
@@ -293,7 +293,7 @@ def d2():
          "TLS :443 — enterprise cert · GET https://<fqdn>/portal (path rule, pri 20)",
          "Internal ALB", GREEN, False),
         (12, "Internal ALB", GREEN,
-         "TLS :8080 — ALB re-encrypt, per-task self-signed cert",
+         "TLS :8080 — ALB re-encrypt, image-baked self-signed cert",
          "Portal task", GREEN, False),
         (13, "Portal task", GREEN,
          "TLS :443 — OIDC auth-code + PKCE + JWKS (TGW central egress or proxy)",
@@ -341,8 +341,8 @@ def d2():
     fy = top + step * len(hops) + gap + 36
     s.text(48, fy, "TLS termination points: developer→ALB terminates on the "
            "enterprise cert (developers pin its fingerprint); ALB→task hops "
-           "terminate on per-task ephemeral certs (ALBs do not validate "
-           "target certs; keys never leave the task).", size=11.5, color=SLATE)
+           "terminate on self-signed certs baked into each image at build "
+           "(ALBs do not validate target certs; rotated by image rebuild).", size=11.5, color=SLATE)
     s.text(48, fy + 20, "All AWS-service hops (5, 7, 8, 14, 15) also carry SigV4 "
            "request signing on top of TLS. DNS to the VPC resolver is exempt "
            "from security-group evaluation (AWS platform behavior).",
@@ -634,10 +634,10 @@ def d1a():
            ["enterprise-CA cert (ACM import)", "IPv4-only · deletion-protected",
             "stack-policy locked"], border=GREEN)
     s.node(760, 160, 250, 80, "Grafana  :3000 TLS",
-           ["per-task self-signed cert", "Okta SSO only, no local login"],
+           ["image-baked self-signed cert", "Okta SSO only, no local login"],
            border=GREEN)
     s.node(480, 320, 250, 80, "Gateway — ECS Fargate ×2",
-           ["claude gateway (pinned binary)", "TLS listener :8080, per-task cert"],
+           ["claude gateway (pinned binary)", "TLS listener :8080, image-baked cert"],
            border=GREEN)
     s.node(480, 480, 250, 90, "RDS PostgreSQL 16",
            ["Multi-AZ · CMK · pgaudit", "app-user login only"],
@@ -714,7 +714,7 @@ def d1b():
     s.node(76, 440, 260, 80, "Download portal ×2",
            ["reached via the internal ALB", "streams installer ZIP at /portal"],
            border=GREEN)
-    s.node(76, 560, 584, 80, "Interface VPC endpoints — each with a resource policy",
+    s.node(76, 560, 584, 80, "Interface VPC endpoints — resource policies (ecs: unsupported)",
            ["bedrock-runtime (3 approved models only) · ecr.api · ecr.dkr · logs",
             "secretsmanager · ecs · aps-workspaces  +  S3 gateway endpoint"],
            border=GREEN)
@@ -774,8 +774,8 @@ def d1b():
 
     s.text(36, 726, "The ADOT collector is a co-resident loopback sidecar in the "
            "gateway task (OTLP over 127.0.0.1), so telemetry never crosses the "
-           "network in the clear — the former plaintext OTLP hop is gone (C2 "
-           "closed). Okta egress and the developer path are on the access view.",
+           "network in the clear — there is no gateway-to-collector network "
+           "hop. Okta egress and the developer path are on the access view.",
            size=11.5, color=SLATE)
     s.text(36, 748, "Secrets are injected into tasks at launch by ECS "
            "(execution roles hold GetSecretValue + kms:Decrypt on exactly "
@@ -952,6 +952,7 @@ def d8():
     card(c2, 524, "amp-endpoint  (aps-workspaces endpoint)", "03", [
         "IN   443  from svc (gateway task - remote_write)",
         "IN   443  from grafana (queries)",
+        "IN   443  from AdminClientSecurityGroupId (optional param)",
         "OUT  none"])
 
     s.node(c3, 96, 470, 300, "Cross-stack rule writers", [], border=SLATE)
@@ -960,6 +961,7 @@ def d8():
             "  - AlbToGrafanaEgress:         alb OUT 3000 -> grafana",
             "  - GatewayToAmpEndpointEgress: svc OUT 443 -> amp-endpoint",
             "  - GrafanaToEndpointsIngress:  endpoint IN 443",
+            "  - AdminToAmpEndpointIngress: amp-endpoint IN 443",
             "04 adds rules to SGs it imports from 02:",
             "  - AlbToPortalEgress:        alb  OUT 8080 -> portal",
             "  - PortalToEndpointsIngress: endpoint IN 443 (when shared)",
@@ -980,10 +982,10 @@ def d8():
             "that suppress the default allow-all egress."]):
         s.text(c3 + 18, 464 + i * 17, ln, size=10.8, color=SLATE)
 
-    s.text(36, 908, "Resolved (was accepted risk C2): the gateway->collector OTLP "
-           "hop is no longer on the network - the ADOT collector runs as a "
-           "co-resident sidecar in the gateway task, reached over loopback "
-           "(127.0.0.1:4318). No SG rule exists or is needed for it.",
+    s.text(36, 908, "The gateway->collector OTLP hop is not on the network - "
+           "the ADOT collector runs as a co-resident sidecar in the gateway "
+           "task, reached over loopback (127.0.0.1:4318). No SG rule exists "
+           "or is needed for it.",
            size=11, color=SLATE_LT)
     s.write("08-security-group-rules.svg")
 

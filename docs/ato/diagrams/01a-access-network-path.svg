@@ -38,12 +38,12 @@
 <text x="605.0" y="225" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >stack-policy locked</text>
 <rect x="760" y="160" width="250" height="80" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="885.0" y="181" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Grafana  :3000 TLS</text>
-<text x="885.0" y="197" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >per-task self-signed cert</text>
+<text x="885.0" y="197" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >image-baked self-signed cert</text>
 <text x="885.0" y="211" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >Okta SSO only, no local login</text>
 <rect x="480" y="320" width="250" height="80" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <text x="605.0" y="341" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Gateway — ECS Fargate ×2</text>
 <text x="605.0" y="357" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >claude gateway (pinned binary)</text>
-<text x="605.0" y="371" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >TLS listener :8080, per-task cert</text>
+<text x="605.0" y="371" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >TLS listener :8080, image-baked cert</text>
 <path d="M480 489 a 125.0 9 0 0 1 250 0 v 72 a 125.0 9 0 0 1 -250 0 Z" fill="#FFFFFF" stroke="#047857" stroke-width="1.4"/>
 <path d="M480 489 a 125.0 9 0 0 0 250 0" fill="none" stroke="#047857" stroke-width="1.4"/>
 <text x="605.0" y="511" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >RDS PostgreSQL 16</text>

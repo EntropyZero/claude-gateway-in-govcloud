@@ -131,7 +131,7 @@ segment; for ZIA (option B) it requires the exemption above.
   `<OKTA_ISSUER_FQDN>` for OIDC discovery and OAuth **token exchange**.
   This is **server-originated** traffic: it carries no Zscaler user
   identity, so default ZIA policy both intercepts it AND blocks it
-  (observed in the first test run: TLS failure from the derived cert, then
+  (the observed failure sequence: a TLS failure from the derived cert, then
   **403 Forbidden** from policy once the cert was trusted).
 - **Request (two parts, for the ZIA location/sub-location that carries the
   workload VPC's central egress):**

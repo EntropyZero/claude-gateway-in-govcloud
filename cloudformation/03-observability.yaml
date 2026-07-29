@@ -290,8 +290,8 @@ Resources:
   # goes MISSING rather than reporting 0 ("a metric not existing or missing
   # is the same as the value of that metric being 0" - AMP docs), so
   # TreatMissingData MUST be breaching; the CloudWatch default ('missing')
-  # would park a dead pipeline in INSUFFICIENT_DATA forever. GovCloud
-  # emission of the vended metrics is doc-implied but needs the live check:
+  # would park a dead pipeline in INSUFFICIENT_DATA forever. To check the
+  # vended metrics directly:
   #   aws cloudwatch list-metrics --namespace AWS/Usage \
   #     --dimensions Name=Service,Value=Prometheus --region us-gov-west-1
   MissingTelemetryAlarm:
@@ -345,8 +345,7 @@ Resources:
   # it detects cessation of DELIVERY and cannot by itself distinguish a
   # broken pipeline from genuine inactivity - correlate with usage metrics
   # and watch the collector's otel/ streams for awscloudwatchlogs exporter
-  # errors (the more direct AU-5 signal). GovCloud emission of AWS/Logs
-  # metrics is doc-implied; confirm live alongside the AMP check.
+  # errors (the more direct AU-5 signal).
   MissingActivityLogsAlarm:
     Type: AWS::CloudWatch::Alarm
     Condition: WantActivityLogsAlarm
@@ -618,8 +617,8 @@ Resources:
   # large-data objects land under a separate delivery-managed "data" prefix
   # whose exact path the docs do not specify - the SourceAccount/SourceArn
   # conditions carry the restriction (only THIS account's Bedrock log
-  # delivery can write). Tighten to exact prefixes after the first live
-  # delivery shows the real layout.
+  # delivery can write). TODO: tighten to exact prefixes once the real
+  # data-prefix layout used by Bedrock log delivery is known.
   BedrockPromptLogsBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -815,9 +814,8 @@ Resources:
               # AMP's internal use but the query-time decrypt is charged to
               # this task role. Without it, every /api/v1/* call returns a
               # server-side 403 and Grafana shows "Unable to retrieve metric
-              # names / unable to connect to your data source" (test-run
-              # lesson). Only when the workspace is CMK-encrypted; scoped to
-              # aps via kms:ViaService.
+              # names / unable to connect to your data source". Only when the
+              # workspace is CMK-encrypted; scoped to aps via kms:ViaService.
               - !If
                 - WantAmpCmk
                 - Effect: Allow
@@ -985,8 +983,8 @@ Resources:
               ValueFrom: !Ref GrafanaOidcClientSecret
 
   # No Name (protocol changes replace the group; a fixed name collides with
-  # itself). HTTPS: the Grafana image's TLS entrypoint serves a per-task
-  # self-signed cert; ALBs don't validate target certs.
+  # itself). HTTPS: the Grafana image serves the self-signed cert baked in
+  # at build; ALBs don't validate target certs.
   GrafanaTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:

@@ -2,16 +2,14 @@
 
 The reusable, org-agnostic path from **an empty VPC in a GovCloud
 landing-zone spoke account** to **a Windows client installed and
-authenticated end to end** against the Claude apps gateway. It differs from
-its two siblings: [`test-run-runbook.md`](test-run-runbook.md) is the
-**dated log of the first live run** (test-account shortcuts, self-signed
-certs, migration notes for pre-sidecar deployments — consult it when a step
-here breaks, its §10 is the troubleshooting index), and
+authenticated end to end** against the Claude apps gateway. Its siblings:
 [`om-runbooks.md`](om-runbooks.md) covers **steady state after** this runbook
-finishes (rotations, updates, alarms, teardown). Deep explanations are
-linked, not duplicated — this document is the spine: every command in order,
-with the org-prerequisite lead times sequenced first because they, not AWS,
-set the calendar.
+finishes (rotations, updates, alarms, teardown), and
+[`troubleshooting.md`](troubleshooting.md) is the symptom-indexed
+troubleshooting reference — go there when a step here fails. Deep
+explanations are linked, not duplicated: this document is the spine, every
+command in order, with the org-prerequisite lead times sequenced first
+because they, not AWS, set the calendar.
 
 Two hosts (`.claude/rules/offline-build.md`): an **egress host** (internet,
 no AWS needed) runs the `scripts/mirror/` tools, and the **build/deploy
@@ -28,13 +26,7 @@ Shell convention: command examples expand variables like `$GATEWAY_FQDN` and
 internally, but argument expansion does not, so load it first:
 `set -a; . scripts/deploy.env; set +a`.
 
-Legend: ☐ = do it · 🔎 = checkpoint, confirm before moving on ·
-**[NEEDS TEST-RUN CONFIRMATION]** = per the repo honesty rule, a step whose
-behavior is script/doc-verified but has never been exercised live (the
-tags track the fix log in
-[`../ato/security-review-2026-07.md`](../ato/security-review-2026-07.md) and
-the Status block in `CLAUDE.md` — keep them in sync as your run proves
-things).
+Legend: ☐ = do it · 🔎 = checkpoint, confirm before moving on.
 
 Phases: **0** org prerequisites → **1** account & workstation prep →
 **2** certificate → **3** database (01) → **4** mirror + images →
@@ -66,10 +58,11 @@ one; send them before touching AWS. Templates (fill placeholders from
   2. the **server-side egress** ALLOW **plus SSL-inspection exemption** for
      the **Okta issuer FQDN** on the ZIA location that carries the workload
      VPC's central egress. This is server-originated traffic with no Zscaler
-     user identity, so default policy both intercepts and blocks it. **This
-     exact item blocked the first live run**: the gateway boot failed at
-     OIDC discovery with a 403 until it landed. Do not treat it as optional
-     or as covered by half 1 — it is a separate rule on a separate path.
+     user identity, so default policy both intercepts and blocks it.
+     **Without it the gateway does not boot** — it fails at OIDC discovery
+     with a 403. Do not treat it as optional or as covered by half 1: it is a
+     separate rule on a separate path, and it is the single most common
+     schedule blocker for a new deployment.
 - ☐ **Okta administrator** —
   [`../requests/okta-request-email.md`](../requests/okta-request-email.md).
   An OIDC **Web** app (confidential — it must have a client secret) on the
@@ -136,10 +129,9 @@ renewal owner.
     --query "inferenceProfileSummaries[?contains(inferenceProfileId,'anthropic')].inferenceProfileId"
   ```
   If they differ, set `OPUS_BEDROCK_MODEL_ID` / `SONNET_BEDROCK_MODEL_ID` /
-  `HAIKU_BEDROCK_MODEL_ID` in `deploy.env`. Sonnet 5 became available in
-  GovCloud in 2026-07 and is the Sonnet-tier default; Sonnet 4.6 was never
-  offered in GovCloud — do not change the defaults without checking this
-  output.
+  `HAIKU_BEDROCK_MODEL_ID` in `deploy.env`. Sonnet 5 is the Sonnet-tier
+  default; Sonnet 4.6 was never offered in GovCloud — do not change the
+  defaults without checking this output.
 
 **deploy.env**
 - ☐ `cp scripts/deploy.env.example scripts/deploy.env` and fill (the
@@ -183,6 +175,30 @@ renewal owner.
     --query 'ServiceDetails[].VpcEndpointPolicySupported'
   ```
 
+**Okta groups pre-check**
+- ☐ Confirm groups actually come back **from a token**, not from metadata:
+  use the Okta app's token preview (or a real login) for a user in the admin
+  group and check that a `groups` array is present. Discovery metadata never
+  lists the claim, so it cannot be verified there — and the `groups` *scope*
+  without a groups *claim* is the single most common cause of "the portal
+  and Grafana deny everyone".
+
+**Re-deploying into an account that has run this deployment before**
+- ☐ Every log group carries `DeletionPolicy: Retain` and a fixed name, and
+  the templates pre-create three groups the services would otherwise
+  auto-create — so a re-create collides with whatever a previous deployment
+  (or the services themselves) left behind. Export anything you still need,
+  then delete before deploying:
+  ```bash
+  for g in "/aws/rds/instance/${NAME_PREFIX}-store/postgresql" \
+           "/aws/lambda/${NAME_PREFIX}-db-bootstrap" \
+           "/aws/lambda/${NAME_PREFIX}-db-rotation"; do
+    aws logs delete-log-group --region "$AWS_REGION" --log-group-name "$g" || true
+  done
+  ```
+  The same applies to the retained `/ecs/*` and `/claude/*` groups before a
+  full re-create from scratch.
+
 ---
 
 ## Phase 2 — Certificate
@@ -214,9 +230,13 @@ decision** — changing it later is a teardown + restore, not an update.
 🔎 Stack `CREATE_COMPLETE` (Multi-AZ RDS takes ~10–15 min); the
 `KmsKeyArnResolved` output; the "Locking the database against
 replacement/deletion (stack policy)" line; `KMS_KEY_ARN` now in
-`deploy.env`. If it fails with "version 16.x does not exist", pin an
-available minor via `DB_ENGINE_VERSION` (query in
-[`test-run-runbook.md`](test-run-runbook.md) §2).
+`deploy.env`. If it fails with "version 16.x does not exist", the template's
+default minor is not offered in this region — pin an available one via
+`DB_ENGINE_VERSION` and re-run:
+```bash
+aws rds describe-db-engine-versions --engine postgres --region "$AWS_REGION" \
+  --query "DBEngineVersions[?starts_with(EngineVersion,'16.')].EngineVersion" --output text
+```
 
 ---
 
@@ -272,9 +292,10 @@ ADOT_VERSION=v0.49.0 ./scripts/mirror/mirror-collector.sh     # persists digest-
 — all set by the scripts, none by hand. The mirror output also contains
 `claude.exe` + `claude` + `CHECKSUMS.txt` for the client rollout (Phase 10;
 the portal publish needs both platform binaries) — stage
-`mirror/$CLAUDE_VERSION/` on the internal file share now. Pin the ADOT
-version currently proven with this repo (v0.49.0 at time of writing —
-check `CLAUDE.md` Status). Base images come from step 4b's digest-pinned
+`mirror/$CLAUDE_VERSION/` on the internal file share now. The ADOT version
+defaults to the release this repo pins (`ADOT_VERSION` in
+`scripts/mirror/mirror-collector.sh`); override it only deliberately. Base
+images come from step 4b's digest-pinned
 ECR copies (`GATEWAY_BASE_IMAGE`, `LAMBDA_BASE_IMAGE`, `GRAFANA_BASE_IMAGE`,
 `PORTAL_BASE_IMAGE`) — the build machine cannot reach Docker Hub or
 `public.ecr.aws`, and the upstream defaults exist for dev convenience only;
@@ -321,15 +342,15 @@ aws secretsmanager get-secret-value --region "$AWS_REGION" \
   --secret-id "${NAME_PREFIX}/db-app-user" --query SecretString --output text \
   | jq -r .username        # expect gateway_app_clone after the first rotation
 ```
-**[NEEDS TEST-RUN CONFIRMATION]** — rotation has not yet been proven live
-anywhere; if it did not flip, tail `/aws/lambda/<prefix>-db-rotation` and
-check the `<prefix>-db-rotation-errors` alarm.
+If it did not flip, tail `/aws/lambda/<prefix>-db-rotation` and check the
+`<prefix>-db-rotation-errors` alarm.
 
 🔎 The "Locking the ALB against replacement/deletion" stack-policy line ran.
 
 Note: `deploy-gateway.sh` runs with `--disable-rollback` by default — a
-failed deploy keeps healthy resources so you fix and re-run
-([`test-run-runbook.md`](test-run-runbook.md) §10 for recovery patterns).
+failed deploy keeps its healthy resources, so you fix the cause and re-run
+and the deploy continues from where it stopped
+([`troubleshooting.md`](troubleshooting.md) for recovery patterns).
 
 ---
 
@@ -390,19 +411,19 @@ gateway plus `otel-collector`), and collector log streams appear under the
   telemetry-enabled re-run with `TELEMETRY_FAIL_CLOSED="false"` set **in
   `scripts/deploy.env`** (the example ships it `"true"`; edit the file — a
   `VAR=... ./scripts/...` command prefix is silently overridden when
-  `common.sh` sources the file): with fail-closed on, a misconfigured
-  collector health check hangs the rollout indefinitely at `services-stable`
-  with only a generic "task not healthy" (the single highest-risk item on
-  this path — details in [`test-run-runbook.md`](test-run-runbook.md) §8).
-  Once the `otel-collector` container reports HEALTHY, flip
-  `TELEMETRY_FAIL_CLOSED="true"` in `deploy.env` and re-run
-  `./scripts/deploy-gateway.sh` — the default, SSP-recorded AU-5 posture
-  (a failed collector then stops the task rather than serving unmonitored
-  traffic — stop-on-broken-config **[NEEDS TEST-RUN CONFIRMATION]**; the
-  `${NAME_PREFIX}-missing-telemetry` alarm is the end-to-end backstop).
+  `common.sh` sources the file): with fail-closed on, the gateway waits on
+  the collector reporting HEALTHY, and with `MinimumHealthyPercent: 100` and
+  no deployment circuit breaker a misconfigured collector health check hangs
+  the rollout indefinitely at `services-stable` with only a generic "task not
+  healthy" — the highest-risk step on this path. Once the `otel-collector`
+  container reports HEALTHY, flip `TELEMETRY_FAIL_CLOSED="true"` in
+  `deploy.env` and re-run `./scripts/deploy-gateway.sh` — the default,
+  SSP-recorded AU-5 posture, where a failed collector stops the task rather
+  than serving unmonitored traffic, with the
+  `${NAME_PREFIX}-missing-telemetry` alarm as the end-to-end backstop.
 - ☐ The `missing-telemetry` alarm legitimately fires between the 03 deploy
-  and the telemetry-enabled re-run — expect it to settle to OK once the
-  sidecar's self-metrics heartbeat lands (proven live 2026-07-23).
+  and the telemetry-enabled re-run — it settles to OK once the sidecar's
+  self-metrics heartbeat lands.
 
 ---
 
@@ -421,9 +442,11 @@ the gateway needs. Prereqs: `PORTAL_IMAGE` (Phase 4g), the
 ./scripts/set-portal-oidc-secret.sh                    # paste the portal client secret; rolls the service
 ```
 🔎 Target group healthy on the HTTPS `/portal/healthz` check;
-`PortalOidcRedirectUri` matches Okta. The portal's code is test-suite-green
-but the stack is **[NEEDS TEST-RUN CONFIRMATION]** end to end (live Okta
-round-trip, real-size streamed download) — validation items in Phase 11.
+`PortalOidcRedirectUri` matches Okta. The publish step re-verifies both
+platform binaries against the release manifest SHA-256 before upload — and
+must have run before the portal serves downloads, or a Linux download aborts
+mid-stream against a bucket with no `releases/<version>/claude`. End-to-end
+validation items are in Phase 11.
 
 ---
 
@@ -431,9 +454,8 @@ round-trip, real-size streamed download) — validation items in Phase 11.
 
 The model (full detail: [`client-config.md`](client-config.md)): **no-admin
 binary install + one required admin-delivered managed setting for login +
-server-side policy push**. For a single test laptop instead of a fleet, use
-the one-time elevated HKLM seed in [`test-run-runbook.md`](test-run-runbook.md)
-§9 — this phase is the fleet path.
+server-side policy push**. This phase is the fleet path; the single-laptop
+bring-up variant is the box below it.
 
 - ☐ **Managed login setting via GPO/MDM** — confirm the Phase-0 GPO
   ([`../requests/ad-request-email.md`](../requests/ad-request-email.md)) is
@@ -444,9 +466,26 @@ the one-time elevated HKLM seed in [`test-run-runbook.md`](test-run-runbook.md)
   GPO's `forceRemoteSettingsRefresh: true` makes the CLI exit if it cannot
   fetch the gateway's managed settings — the gateway must be serving
   (Phase 7 green) before this lands on machines, or developers get a
-  non-starting CLI. A GPO-delivered HKLM source being honored is
-  **[NEEDS TEST-RUN CONFIRMATION]** (self-served HKLM is what the test
-  laptop exercised).
+  non-starting CLI.
+
+  > **Single laptop instead of a fleet.** Before the GPO exists, seed the
+  > same managed value once with an **elevated** PowerShell, then run
+  > `claude` non-elevated (the binary install itself stays no-admin):
+  > ```powershell
+  > New-Item -Path 'HKLM:\SOFTWARE\Policies\ClaudeCode' -Force | Out-Null
+  > Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\ClaudeCode' -Name Settings `
+  >   -Value '{"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<FQDN>"}'
+  > ```
+  > This bring-up seed deliberately **omits** `forceRemoteSettingsRefresh`
+  > (which the real GPO carries): that key makes the CLI exit if it cannot
+  > fetch the gateway's managed settings — the posture you want in
+  > production, but it leaves you with no working CLI to debug with while the
+  > gateway is still coming up. Once login succeeds, add
+  > `"forceRemoteSettingsRefresh":true` and re-test so the laptop matches the
+  > fleet; the `/model` check in Phase 11 is what confirms the push landed.
+  > On Linux the equivalent is the root-owned
+  > `/etc/claude-code/managed-settings.json`
+  > ([`client-config.md`](client-config.md) §8.5).
 - ☐ **Publish the certificate fingerprint** (from Phase 2) through a
   channel developers trust — they confirm it at first connect
   (trust-on-first-use pin). Ensure the enterprise root CA is in the Windows
@@ -481,10 +520,18 @@ the one-time elevated HKLM seed in [`test-run-runbook.md`](test-run-runbook.md)
   `/logout` — `/logout` strands the client behind an unreachable-hosts
   preflight (recovery: [`om-runbooks.md`](om-runbooks.md) runbook 12).
 - ☐ **Clean-profile first run**: verify a first-ever run on a profile that
-  has never run `claude` — the onboarding connectivity preflight can block
-  every new developer on a gateway-only egress path; the check and the
-  rollout decision it forces are in [`test-run-runbook.md`](test-run-runbook.md)
-  §9. **[NEEDS TEST-RUN CONFIRMATION]**
+  has *never* run `claude`, not just a re-login. A first-ever run has
+  `hasCompletedOnboarding` unset, which puts a **connectivity preflight**
+  ahead of the login screen: it requires HTTP 200 from both
+  `api.anthropic.com` and `platform.claude.com`, which a gateway-only egress
+  path does not provide, and the CLI exits with *"Unable to connect to
+  Anthropic services"*. Probe it with
+  `curl.exe -sS -o NUL -w "%{http_code}" https://api.anthropic.com/api/hello`
+  (anything but 200 — a Zscaler block page counts — means it will reproduce).
+  If it does, decide the rollout answer before broad deployment: seed
+  `hasCompletedOnboarding: true` as part of the install, or allow the two
+  hosts. Per-developer recovery and the matching `/logout` trap are
+  [`om-runbooks.md`](om-runbooks.md) runbook 12.
 
 ---
 
@@ -492,37 +539,34 @@ the one-time elevated HKLM seed in [`test-run-runbook.md`](test-run-runbook.md)
 
 The deployment is done when every box below is checked — until then it is
 not production-ready. Where a check fails, start at
-[`test-run-runbook.md`](test-run-runbook.md) §10 and the alarm runbook
+[`troubleshooting.md`](troubleshooting.md) and the alarm runbook
 ([`om-runbooks.md`](om-runbooks.md) runbook 9).
 
 - ☐ **Gateway health**: `./scripts/verify-gateway.sh` all green; both
   targets healthy; task authenticates to Postgres as `gateway_app*`, never
   the master user (check `/ecs/<prefix>` logs for the clean DB connect).
 - ☐ **Developer login round-trip**: locked gateway login → Okta SSO →
-  fingerprint match → Bedrock completion (proven live 2026-07-24 on the
-  test deployment; re-prove on each new environment).
+  fingerprint match → Bedrock completion.
 - ☐ **Model picker constrained**: in a logged-in session, `/model` lists
   **only** `OPUS_MODEL_ID`, `SONNET_MODEL_ID` and `HAIKU_MODEL_ID` (three
   entries) — not Claude Code's built-in menu. Send a prompt on each; confirm
   background/small-fast tasks also succeed (the Haiku-override push resolves
-  them to `HAIKU_MODEL_ID`). If the built-in menu appears, the
+  them to `HAIKU_MODEL_ID`). If the built-in menu appears, the running
   gateway image predates the `GATEWAY_MANAGED_B64` stanza and ignores the
   env var silently — rebuild with a bumped tag
-  ([`test-run-runbook.md`](test-run-runbook.md) §9).
-  **[NEEDS TEST-RUN CONFIRMATION]**
+  ([`troubleshooting.md`](troubleshooting.md)).
 - ☐ **Telemetry flowing**: after a few sessions, `claude_code_*` series
   appear in AMP and the Grafana cost/token panels populate. Confirm
   `otelcol_exporter_prometheusremotewrite_failed_translations` stays flat —
-  a climbing counter with client activity is the delta-temporality trap
-  (its fix — the pushed cumulative-temporality env var — is
-  **deploy-confirmed**, but verify it took on this deployment). First stop
-  when metrics are missing: `./scripts/diagnostics/diagnose-telemetry.sh`
-  (walks the client → gateway → sidecar → AMP chain);
-  `./scripts/diagnostics/amp-query.py` queries AMP directly.
+  a climbing counter with client activity is the delta-temporality trap,
+  which the pushed cumulative-temporality env var fixes (verify it took on
+  this deployment). First stop when metrics are missing:
+  `./scripts/diagnostics/diagnose-telemetry.sh` (walks the client → gateway →
+  sidecar → AMP chain); `./scripts/diagnostics/amp-query.py` queries AMP
+  directly.
 - ☐ **Grafana Okta SSO**: `https://<GATEWAY_FQDN>/grafana` → "Sign in with
   Okta" → a `GRAFANA_ADMIN_GROUP` member lands as Admin and the usage
   dashboard renders; a user in no mapped group is denied (strict mapping).
-  **[NEEDS TEST-RUN CONFIRMATION]**
 - ☐ **Spend-cap smoke test**: set a low cap on the test user, confirm the
   429 with `SPEND_BLOCKED_MESSAGE` once exceeded, then clear it
   (needs `GATEWAY_CA_BUNDLE` set for the script's TLS):
@@ -533,29 +577,23 @@ not production-ready. Where a check fails, start at
   ```
   Note the availability trade the stack enables
   (`enforcement.fail_closed_on_error`): a spend-store outage halts all
-  inference — recovery is [`om-runbooks.md`](om-runbooks.md) runbook 10.
-  **[NEEDS TEST-RUN CONFIRMATION]** (verified against a mirrored gateway +
-  throwaway Postgres only.)
+  inference — recovery is [`cost-controls.md`](cost-controls.md) §5.
 - ☐ **pgaudit**: the `/aws/rds/instance/${NAME_PREFIX}-store/postgresql`
   log group receives DDL/connection events.
 - ☐ **Rotation proof**: `db-app-user` AWSCURRENT username flipped to
   `gateway_app_clone` (Phase 5 checkpoint), or flips on a manual
   `aws secretsmanager rotate-secret --secret-id "${NAME_PREFIX}/db-app-user"`,
   and the gateway service rolled afterward.
-  **[NEEDS TEST-RUN CONFIRMATION]**
 - ☐ **Alarms wired**: `ALARM_SNS_TOPIC_ARN` set and subscribed;
   `missing-telemetry` alarm OK (its OK→ALARM→OK cycle is cheap to test —
   stop the sidecar); cert-expiry and db-rotation-errors alarms exist.
-- ☐ *(if Phase 9)* **Portal**: Okta login + real download works end to end;
-  a non-`ACCESS_GROUP` user is denied **and** the denial plus successful
-  downloads land in the `/claude/<prefix>/portal-audit` log group.
-  **[NEEDS TEST-RUN CONFIRMATION]**
+- ☐ *(if Phase 9)* **Portal**: Okta login + a real download of each platform
+  ZIP works end to end; a non-`ACCESS_GROUP` user is denied **and** the
+  denial plus successful downloads land in the
+  `/claude/<prefix>/portal-audit` log group.
 - ☐ *(if enabled)* **Activity archive**: with `FORWARD_ACTIVITY_LOGS=true`,
   events land in the CloudWatch window and the S3 archive. Treat the stream
-  as highly sensitive. **[NEEDS TEST-RUN CONFIRMATION]**
-- ☐ Update [`../ato/security-review-2026-07.md`](../ato/security-review-2026-07.md)
-  and the `CLAUDE.md` Status block for anything this run newly proved (or
-  disproved) — the honesty convention only works if runs report back.
+  as highly sensitive.
 
 ---
 
@@ -599,5 +637,49 @@ ADOT_VERSION=v0.49.0 ./scripts/mirror/mirror-collector.sh   # digest-pins COLLEC
 ```
 
 Teardown (should you need to start over) is the reverse — 04 and 03, then
-02, then 01: [`om-runbooks.md`](om-runbooks.md) runbook 13, plus the
-test-account caveats in [`test-run-runbook.md`](test-run-runbook.md) §10.
+02, then 01: [`om-runbooks.md`](om-runbooks.md) runbook 13, which also covers
+the re-create caveats (retained log groups, the Secrets Manager recovery
+window, lingering Lambda ENIs).
+
+---
+
+## Appendix — lab shortcut: a self-signed ALB certificate
+
+For a throwaway or lab environment where the enterprise CA is not yet in the
+loop, a self-signed certificate for the FQDN exercises the real trust flow:
+Claude Code validates the chain first, then pins the fingerprint, so the full
+TLS + fingerprint-pin path behaves exactly as it does in production. **Never
+publish a lab fingerprint as production-trusted.**
+
+```bash
+set -a; . scripts/deploy.env; set +a
+FQDN="$GATEWAY_FQDN"
+
+# 1. Self-signed cert for the FQDN (EC P-256, serverAuth, SAN = FQDN)
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+  -keyout "${FQDN}.key.pem" -out "${FQDN}.crt.pem" -days 90 \
+  -subj "/CN=${FQDN}" \
+  -addext "subjectAltName=DNS:${FQDN}" \
+  -addext "keyUsage=digitalSignature" \
+  -addext "extendedKeyUsage=serverAuth"
+
+# 2. Import into ACM (no chain for a self-signed cert) and record the ARN
+ARN=$(aws acm import-certificate --region "$AWS_REGION" \
+  --certificate "fileb://${FQDN}.crt.pem" \
+  --private-key  "fileb://${FQDN}.key.pem" \
+  --query CertificateArn --output text)
+( source scripts/common.sh; set_env_var CERTIFICATE_ARN "$ARN" )
+
+# 3. The fingerprint developers compare at the /login prompt
+openssl x509 -in "${FQDN}.crt.pem" -noout -fingerprint -sha256
+```
+
+**Then trust it on the client**, or TLS fails before the fingerprint prompt
+is ever drawn. Either import `${FQDN}.crt.pem` into the Windows cert store
+(`Import-Certificate -CertStoreLocation Cert:\CurrentUser\Root`, no admin
+needed), or pass `-ExtraCaCertPath` to the installer (writes
+`NODE_EXTRA_CA_CERTS`) — the same mechanism used for a real enterprise CA, so
+it is the more useful of the two to exercise. A self-signed leaf is its own
+trust anchor, so the leaf itself is what goes into the store or PEM; there is
+no separate CA to import. Do **not** reach for
+`NODE_TLS_REJECT_UNAUTHORIZED=0`.

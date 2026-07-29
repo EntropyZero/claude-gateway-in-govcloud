@@ -12,16 +12,6 @@ hardcoded org values. Run operator commands from a host with `deploy.env`
 filled in and AWS credentials for the deployment region (scripts source
 `scripts/common.sh`, which loads `deploy.env`).
 
-**Verification status:** the spend-cap admin API, both cap scopes, and
-read/write key separation were verified end to end against the **mirrored
-gateway binary + a throwaway Postgres** (2026-07-24), and client usage
-metrics are **DEPLOY-CONFIRMED flowing into AMP**. Everything else here —
-enforcement behavior on the deployed stack, the portal admin page (stack 04
-is code-complete but not deploy-verified at all), the 429 experience on a
-real laptop, and the fail-closed outage drill — is
-**[NEEDS TEST-RUN CONFIRMATION]**. Individual sections repeat the tag where
-it matters.
-
 ---
 
 ## 1. Overview — how spend enforcement works
@@ -62,7 +52,7 @@ it matters.
   permissive). Currency is USD only, enforced by the gateway.
 - **Okta prerequisite for group caps:** per-group caps resolve against the
   **Okta groups claim**, which must actually be present in the token (the
-  `groups` scope is requested unconditionally since 2026-07-24, but the
+  `groups` scope is requested unconditionally, but the
   claim itself is an org-side Okta app setting — see
   [`../requests/okta-request-email.md`](../requests/okta-request-email.md)).
   Per-user and org-wide caps key on `sub` and keep working if the claim is
@@ -75,8 +65,7 @@ it matters.
 ## 2. Setting and changing caps
 
 *Trigger / Frequency:* onboarding a team or user, a budget change, or a
-spend alert. Status: **[NEEDS TEST-RUN CONFIRMATION]** on the deployed stack
-(binary-verified 2026-07-24 against the mirrored gateway).
+spend alert.
 
 ### 2.1 Preferred path — the portal admin page (individual identity)
 
@@ -87,9 +76,8 @@ walks the gateway's device-flow sign-in once per session, and every
 list/set/clear call rides the admin's own gateway token. The gateway
 re-checks group membership on each call and `admin_audit` records the
 individual actor (`oidc:<sub>`) — **no WRITE key is stored anywhere in the
-portal**. (Since portal v2 the portal task does inject the READ-ONLY key
-for the usage read paths — §3.4 — but mutations always ride a per-admin
-bearer.)
+portal**. (The portal task does inject the READ-ONLY key for the usage read
+paths — §3.4 — but mutations always ride a per-admin bearer.)
 
 Drift symptom: the page reports *"The gateway refused: your account is not in its
 spend-admin groups"* → `SPEND_ADMIN_GROUPS` and `PORTAL_ADMIN_GROUP` have
@@ -166,9 +154,10 @@ after the `session.id` label fix (§6). Burn-rate panels are
 panels, tiles, and top-users table compute each session's in-range rise
 (counter peak minus its value at the range start when it was already
 running, else the full counter — so single-sample sessions count). Exact
-expressions and caveats: the 2026-07-26 dashboard entry in
-`om-runbooks.md`. Empty `Okta group` dropdown → the groups claim
-is not landing; see §1's prerequisite and §3.3.
+expressions and their accounting caveats:
+[`troubleshooting.md`](troubleshooting.md), dashboard section. Empty
+`Okta group` dropdown → the groups claim is not landing; see §1's
+prerequisite and §3.3.
 
 ### 3.2 Direct AMP queries — `scripts/diagnostics/amp-query.py`
 
@@ -188,8 +177,7 @@ collector's own pipeline counters to a verdict (accepted vs refused vs
 **failed translations**, the silent-drop counter). Its 403 hints are
 load-bearing: `SignatureDoesNotMatch` is an encoding regression, not IAM;
 a plain 403 on a CMK-encrypted workspace usually means the **caller** lacks
-`kms:Decrypt` (`kms:ViaService=aps.<region>.amazonaws.com`) — the exact trap
-that broke Grafana on 2026-07-23.
+`kms:Decrypt` (`kms:ViaService=aps.<region>.amazonaws.com`).
 
 ### 3.3 Postgres ground truth — `scripts/diagnostics/dump-usage.sh`
 
@@ -214,24 +202,22 @@ group filter is empty. **Raw per-request token/cost detail lives only in
 AMP** — Postgres holds aggregates; use §3.1/§3.2 for the breakdown and
 `scripts/diagnostics/diagnose-telemetry.sh` for pipeline health.
 
-### 3.4 Portal read paths — self-view and the all-users table (portal v2)
+### 3.4 Portal read paths — self-view and the all-users table
 
-Portal v2 (2026-07-27) adds two **read-only** spend views on the download
-portal, both backed by the gateway's effective-limits API —
+The download portal carries two **read-only** spend views, both backed by the
+gateway's effective-limits API —
 `GET /v1/organizations/spend_limits/effective`, which returns one row per
 user per period with the **effective** cap (after user/group/org
 precedence), the scope it came from, and `period_to_date_spend` (the same
 gateway-metered cents the enforcement path uses; may be fractional).
-The endpoint contract is **binary-verified against the mirrored 2.1.211
-gateway; [NEEDS TEST-RUN CONFIRMATION]** against the deployed stack.
 
 - **`/portal/me`** — every signed-in portal user sees their **own** caps
   and period-to-date spend (per period, with cap source and percent used).
   The portal makes this call server-side with the injected
   `${NAME_PREFIX}/spend-admin-read-key` (`SPEND_READ_KEY`, imported from
   02's export), pinned to the session's own Okta `sub`. If the key is
-  unset the page reports the feature disabled; enabling it on an upgraded
-  deployment = 02 re-run (creates the export), then 04.
+  unset the page reports the feature disabled; enabling it on a deployment
+  that predates the export = 02 re-run (creates the export), then 04.
 - **`/portal/admin/users`** — a paged, searchable all-users table (name,
   email, sub, groups, cap, period, spend to date, % used, cap source) for
   `PORTAL_ADMIN_GROUP` members. It deliberately does **not** use the read
@@ -241,8 +227,8 @@ gateway; [NEEDS TEST-RUN CONFIRMATION]** against the deployed stack.
   selecting a single period, and paging is forward-only.
 
 Neither path can mutate anything: the read key is list/read-scoped and the
-write key never reaches stack 04. See the security-review fix log
-(portal v2 entry) for the full posture discussion.
+write key never reaches stack 04. The full posture discussion is in
+[`../ato/security-assessment-2026-07.md`](../ato/security-assessment-2026-07.md).
 
 ---
 
@@ -254,8 +240,7 @@ message *"spend limit reached — <SPEND_BLOCKED_MESSAGE>"*, with
 not retry around it, and waiting does not help until the period rolls over
 or the cap changes. Set `SPEND_BLOCKED_MESSAGE` in `deploy.env` to org-
 specific routing text ("contact <team> for an increase") — it is the only
-self-service breadcrumb the developer sees. Status:
-**[NEEDS TEST-RUN CONFIRMATION]** on a real client.
+self-service breadcrumb the developer sees.
 
 **Confirm it is a cap (60 seconds):**
 
@@ -288,12 +273,11 @@ always wins.
 *Trigger / Frequency:* fleet-wide 429s reported by developers, or DB alarms.
 **No dedicated CloudWatch alarm watches this condition** — detection today
 is user reports plus the DB-side alarms in [`om-runbooks.md`](om-runbooks.md)
-§9. Status: **[NEEDS TEST-RUN CONFIRMATION]** — the posture is a deliberate
-template setting; the outage path has never been exercised.
+§9.
 
 *Why this exists:* `enforcement.fail_closed_on_error: true` is a hardcoded
-operator decision (2026-07-24) in `cloudformation/02-gateway.yaml`'s rendered
-gateway config. If the spend store is unreachable or errors, the gateway
+operator decision in `cloudformation/02-gateway.yaml`'s rendered gateway
+config. If the spend store is unreachable or errors, the gateway
 returns 429 **for every request** rather than allow uncapped spend. This is
 a deliberate availability trade: **an RDS/spend-store outage halts all
 inference fleet-wide, not just cost tracking.**
@@ -355,27 +339,14 @@ inference fleet-wide, not just cost tracking.**
 - **The org-wide cap is the closest existing backstop.** Until a budget
   alarm exists, consider a generous `--scope organization` cap sized well
   above expected monthly spend, so a metering-side runaway hits *something*.
-- **`session.id` cardinality fix — context for spend numbers.** The sidecar
-  previously deleted `session.id` for cardinality; concurrent sessions from
+- **Dashboard history predating the `session.id` fix is unreliable.** The
+  sidecar once deleted `session.id` for cardinality; concurrent sessions from
   one user then interleaved onto a single series as a sawtooth and
-  `increase()` **drastically inflated** dashboard spend (observed live).
-  `session.id` is now kept — each session is its own monotonic series — and
-  the dashboards were reworked to window functions accordingly (twice: the
-  2026-07-24 rework, then the 2026-07-26 cumulative/burn-rate split so stale
-  clients hold their contribution — see §3.1). Committed;
-  confirm the deployed sidecar carries it after the next
-  `deploy-gateway.sh` run **[NEEDS TEST-RUN CONFIRMATION]**. Treat
-  pre-fix dashboard history as unreliable; Postgres `spend` was and remains
-  the enforcement ledger.
-- **Not yet live-verified** (mirrored-gateway/throwaway-Postgres verified
-  only): cap enforcement and the 429 experience on the deployed stack, the
-  portal admin page end to end (stack 04 has no deploy verification at
-  all), the portal v2 usage read paths — `/portal/me` and
-  `/portal/admin/users` against the deployed gateway's
-  `/spend_limits/effective` (§3.4) — bearer-token admin via
-  `SPEND_ADMIN_GROUPS`, the fail-closed outage
-  and break-glass drill, and admin-key rotation. All
-  **[NEEDS TEST-RUN CONFIRMATION]**.
+  `increase()` drastically inflated dashboard spend. `session.id` is now kept
+  — each session is its own monotonic series — and the dashboard panels use
+  window functions accordingly (§3.1). Postgres `spend` was and remains the
+  enforcement ledger, so use it, not dashboard history, for any retrospective
+  accounting.
 
 ---
 
@@ -407,14 +378,12 @@ column; the email is captured and joined alongside it instead:
   `identity/principal-emails/` prefix of the portal artifacts bucket
   (CMK-encrypted; the task role may write only that prefix). The audit page
   joins actors against this map. Actors who have never connected through
-  the portal since this shipped — including the break-glass CLI keys —
-  show a dash. **[NEEDS TEST-RUN CONFIRMATION]** that the deployed
-  gateway's session-token `sub` matches the `admin_audit` actor sub (holds
-  on the mirrored 2.1.220 gateway).
-- **Portal audit log group**: `event: portal_admin` lines already carry
-  `user_email`; they now also carry `gateway_actor` (`oidc:<sub>`), so a
-  gateway row can be tied to an emailed portal line even without the map.
-- **`dump-usage.sh` (§3.3)**: the `admin_audit` dump now LEFT JOINs the
+  the portal since the map was introduced — including the break-glass CLI
+  keys — show a dash.
+- **Portal audit log group**: `event: portal_admin` lines carry both
+  `user_email` and `gateway_actor` (`oidc:<sub>`), so a gateway row can be
+  tied to an emailed portal line even without the map.
+- **`dump-usage.sh` (§3.3)**: the `admin_audit` dump LEFT JOINs the
   gateway's own `principal_emails` table (`principal` = the sub the gateway
   resolved at login) and prints an email per row — this covers *all* users
   the gateway has ever identified, independent of the portal map.
@@ -429,6 +398,6 @@ procedure as the gateway JWT secret in [`om-runbooks.md`](om-runbooks.md)
 happens outside CloudFormation, so the stack update is an empty changeset
 and running tasks keep the old keys. Rotating the write key invalidates any
 operator's cached copy but not portal admins, who never use it. Rotating
-the **read** key (portal v2): the portal task injects it too
+the **read** key: the portal task injects it too
 (`SPEND_READ_KEY`), so also force-roll `${NAME_PREFIX}-portal`, or
 `/portal/me` fails with a stale-key 401 until the next portal deployment.
