@@ -65,7 +65,7 @@ and §9 (SC-12/SC-28), and the secrets inventory is `architecture.md` §6.
 | IT-2 | **Model response content** | Generated code, explanations, recommended commands returned to the client | In transit only by default; same persistence exception as IT-1 | Every session |
 | IT-3 | **Identity and authentication data** | Okta OIDC claims (`sub`, email, groups), the gateway session JWT, portal session and gateway-bearer cookies, the portal-maintained sub→email map | Gateway PostgreSQL (user identity records, 90 d per gateway config); portal artifacts bucket `identity/principal-emails/` prefix (CMK); cookies on the client | Every login; one map object per admin principal |
 | IT-4 | **Usage and cost telemetry** | Tokens, cost, model, session id, lines of code, and the stamped user identity plus team/cost-center attribution | AMP workspace (150 d, AMP service default); the authoritative spend ledger is the gateway PostgreSQL `spend` table (13 months per gateway config) | Continuous while sessions are active |
-| IT-5 | **AI activity records (opt-in)** | Per-user bash commands, tool inputs and file paths. Prompt content is redacted from this stream | CloudWatch `/claude/<prefix>/activity` (14 d window) → Firehose → S3 archive (731 d), both CMK | Only when `FORWARD_ACTIVITY_LOGS=true`; bursty, tied to real tool use |
+| IT-5 | **AI activity records (opt-in)** | Per-user bash commands, tool inputs and file paths. Prompt and response content is redacted from this stream by default; the separate opt-ins `LOG_USER_PROMPTS=true` and `LOG_ASSISTANT_RESPONSES=true` (independent of each other) add the full user-typed prompt text and the model's response text respectively (per-user attributed, this gateway's clients only) | CloudWatch `/claude/<prefix>/activity` (14 d window) → Firehose → S3 archive (731 d), both CMK | Only when `FORWARD_ACTIVITY_LOGS=true`; bursty, tied to real tool use |
 | IT-6 | **Administrative and system audit records** | Spend-cap changes (`admin_audit`, actor `oidc:<sub>`), portal downloads/denials/admin events, pgaudit DDL/role/write statements, ALB access logs | Gateway PostgreSQL (365 d); CloudWatch `/claude/<prefix>/portal-audit` (365 d); RDS→CloudWatch pgaudit group (731 d); S3 ALB logs (90 d, SSE-S3) | Continuous |
 | IT-7 | **Bedrock model-invocation logs (opt-in, off by default)** | Verbatim prompts **and** responses for every `bedrock-runtime` call in the **account and region** — not only this gateway's | CloudWatch `/claude/<prefix>/bedrock-prompts` (14 d) **and** an S3 bucket (731 d). Bodies over 100 KB — typical Claude Code contexts — appear **only** in S3 | Only when `BEDROCK_PROMPT_LOGGING=true` |
 | IT-8 | **System configuration and operational telemetry** | Container stdout/stderr, collector self-metrics, alarm state, deployment parameters | CloudWatch operational log groups (365 d / 90 d); CloudWatch Metrics (AWS-managed 15 months) | Continuous |
@@ -111,9 +111,15 @@ Rationale notes worth stating explicitly:
   gateway task role), and it is off by default. An organization enabling it in
   a shared account is making a categorization-relevant change, not an
   operational one.
-- **IT-5's redaction matters to the rating.** Prompt content is redacted from
-  the activity stream, which is why IT-5 sits at Moderate while IT-7 sits at
-  High despite both concerning user content.
+- **IT-5's redaction matters to the rating.** Prompt and response content is
+  redacted from the activity stream by default, which is why IT-5 sits at
+  Moderate while IT-7 sits at High despite both concerning user content.
+  Enabling `LOG_USER_PROMPTS=true` and/or `LOG_ASSISTANT_RESPONSES=true`
+  removes that redaction: IT-5 then carries verbatim user-typed prompt text
+  and/or model response text with per-user attribution, and by this
+  document's own logic its confidentiality impact rises to that of IT-7
+  (see the configuration table below). Like IT-7, either is a
+  categorization-relevant change, not an operational one.
 - **Integrity of IT-6 is qualified.** S3 Object Lock is deferred by decision:
   the archives are CMK-encrypted, IAM-scoped, versioned where applicable and
   `Retain`-protected, but a sufficiently privileged principal can still delete
@@ -139,6 +145,7 @@ With the opt-in surfaces enabled the high-water mark moves:
 |---|---|---|---|---|
 | Default (IT-5 off, IT-7 off) | Moderate | Moderate | Low | **Moderate** |
 | Activity stream enabled (`FORWARD_ACTIVITY_LOGS=true`) | Moderate | Moderate | Low | **Moderate** |
+| Activity stream **with prompt and/or response capture** (`LOG_USER_PROMPTS=true` / `LOG_ASSISTANT_RESPONSES=true`) | **High** | Moderate | Low | **High** |
 | Bedrock prompt logging enabled (`BEDROCK_PROMPT_LOGGING=true`) | **High** | Moderate | Low | **High** |
 | Org permits CUI/ITAR/export-controlled content in prompts | **High** | Moderate | Low–Moderate | **High** |
 

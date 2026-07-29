@@ -1020,6 +1020,14 @@ already off, so it is safe to leave standing in deploy.env).
 > what-was-said. (3) Sensitivity is strictly above the activity stream —
 > treat access like the activity archive: IAM-only, SIEM-flagged, no
 > ad-hoc grants.
+>
+> Related but distinct: `LOG_USER_PROMPTS=true` / `LOG_ASSISTANT_RESPONSES=true`
+> (stack 02, gateway re-run; independent opt-ins) capture the user-typed
+> prompt text and/or the model's response text — per-user attributed, inside
+> the activity stream itself, no new destination, this gateway's clients
+> only. Choose them when the requirement is "what did this user ask / what
+> came back to them", and Bedrock invocation logging when it is "the
+> verbatim exchange of every Bedrock call in the account".
 
 *KMS prerequisite (do this first — the enable fails without it):* Bedrock
 delivers to the SSE-KMS bucket only if the CMK's **key policy** grants
