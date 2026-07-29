@@ -410,11 +410,32 @@ Parameters:
     AllowedValues: ['true', 'false']
     Description: >-
       Also forward the ACTIVITY LOG stream (bash commands, tool inputs,
-      file paths per user - prompt content stays redacted). Highly
+      file paths per user - prompt content stays redacted unless
+      LogUserPrompts is also 'true'). Highly
       sensitive; enable only where an AI-activity audit trail is required.
       Lands in a short CloudWatch window + S3 archive via the
       observability stack. No effect unless the telemetry sidecar is enabled
       (ObservabilityAmpRemoteWriteEndpoint set).
+
+  LogUserPrompts:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Push OTEL_LOG_USER_PROMPTS=1 to every client via the managed settings,
+      so the claude_code.user_prompt telemetry log event carries the FULL
+      PROMPT TEXT instead of only its length. The content rides the existing
+      activity-log pipeline (client -> gateway -> sidecar -> CloudWatch ->
+      S3 archive) - there is no separate destination, so it inherits that
+      stream's CMK encryption, retention, and IAM-only access, and it
+      REMOVES the "prompt content stays redacted" property every consumer of
+      that stream was told about. Assistant responses stay redacted - the
+      push pins OTEL_LOG_ASSISTANT_RESPONSES=0, which otherwise falls back
+      to this flag. Enable only with organizational sign-off.
+      Meaningless without ForwardActivityLogs='true' (the client would
+      attach prompt text to events the gateway never forwards) -
+      deploy-gateway.sh refuses that combination. Clients pick the env up at
+      their next settings fetch.
 
   DbAdminLambdaImage:
     Type: String
@@ -525,6 +546,7 @@ Conditions:
   HaveAdminClientSg: !Not [!Equals [!Ref AdminClientSecurityGroupId, '']]
   HaveSpendAdminGroups: !Not [!Equals [!Ref SpendAdminGroups, '']]
   HaveMinClientVersion: !Not [!Equals [!Ref MinClientVersion, '']]
+  WantLogUserPrompts: !Equals [!Ref LogUserPrompts, 'true']
   WantAdminEndpointIngress: !And [!Condition WantAnyInterfaceEndpoint, !Condition HaveAdminClientSg]
   WantS3Endpoint: !Not [!Equals [!Join ['', !Ref PrivateRouteTableIds], '']]
   HaveAlarmTopic: !Not [!Equals [!Ref AlarmSnsTopicArn, '']]
@@ -1291,6 +1313,19 @@ Resources:
             #    gateway does not serve, so background calls fail.
             #    (ANTHROPIC_SMALL_FAST_MODEL is the deprecated name for the same
             #    knob; this one is current as of 2.1.x.)
+            #  * OTEL_LOG_USER_PROMPTS=1 (only when LogUserPrompts='true') -
+            #    the client includes the full prompt text in its
+            #    claude_code.user_prompt telemetry log event instead of only
+            #    the prompt length. Rides the SAME logs pipeline as the
+            #    activity stream (sidecar -> CloudWatch -> S3 archive), so it
+            #    is gated by deploy-gateway.sh on ForwardActivityLogs='true'
+            #    and inherits that stream's controls. Off by default.
+            #    OTEL_LOG_ASSISTANT_RESPONSES=0 is pinned alongside it
+            #    because, per the client docs, that knob FALLS BACK to
+            #    OTEL_LOG_USER_PROMPTS when unset (clients >= 2.1.193) -
+            #    without the pin, enabling prompt capture would silently
+            #    un-redact assistant response text too. This keeps the flag
+            #    capturing exactly what its name says: user prompts only.
             #  * OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative -
             #    REQUIRED for usage metrics to reach AMP. Clients export DELTA
             #    sums by default, and the sidecar's prometheusremotewrite exporter
@@ -1333,10 +1368,23 @@ Resources:
                               # delta sums are silently dropped by the sidecar's
                               # prometheus translation - see the comment above
                               OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "cumulative"
+                              # prompt-content capture opt-in - see the comment above
+                              ${LogUserPromptsLine}
+                              ${LogAssistantResponsesLine}
                   - RequiredMinVersionLine: !If
                       - HaveMinClientVersion
                       - !Sub "requiredMinimumVersion: '${MinClientVersion}'"
                       - '# requiredMinimumVersion: not set (MinClientVersion empty)'
+                    LogUserPromptsLine: !If
+                      - WantLogUserPrompts
+                      - 'OTEL_LOG_USER_PROMPTS: "1"'
+                      - '# OTEL_LOG_USER_PROMPTS: not enabled (LogUserPrompts=false)'
+                    # pinned off whenever prompts are on: unset, it FALLS BACK
+                    # to OTEL_LOG_USER_PROMPTS - see the comment above
+                    LogAssistantResponsesLine: !If
+                      - WantLogUserPrompts
+                      - 'OTEL_LOG_ASSISTANT_RESPONSES: "0"'
+                      - '# OTEL_LOG_ASSISTANT_RESPONSES: default (prompt capture off)'
           Secrets:
             - Name: OIDC_CLIENT_SECRET
               ValueFrom: !Ref OktaClientSecret

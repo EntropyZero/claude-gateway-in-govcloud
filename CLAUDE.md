@@ -29,6 +29,21 @@ Linux), and secret rotation. The docs describe this steady state; the
 hard-won symptom→cause→fix lessons from bring-up live in
 `docs/operations/troubleshooting.md`, not in narrative history.
 
+**Committed, NOT yet deployed (2026-07-29): opt-in client prompt-content
+capture in the activity stream.** `LOG_USER_PROMPTS=true` (02 param
+`LogUserPrompts`, default false) pushes `OTEL_LOG_USER_PROMPTS=1` via the
+managed catch-all policy so `claude_code.user_prompt` events carry full
+prompt text into the existing activity pipeline; `deploy-gateway.sh` refuses
+it without `FORWARD_ACTIVITY_LOGS=true`. `OTEL_LOG_ASSISTANT_RESPONSES=0` is
+pinned alongside — unset, it falls back to the prompts flag (clients
+≥2.1.193) and would silently capture assistant responses too
+(adversarial-review catch, web-verified against the monitoring docs). Enabling it raises the FIPS-199
+confidentiality rating to High (fips-199 config table). Deploy: re-run
+`deploy-gateway.sh`; clients pick it up at their next settings fetch. Needs
+live confirmation that prompt text actually lands in the activity stream
+(the env-var name and event semantics are doc-verified against Anthropic's
+monitoring docs, not yet exercised against this gateway).
+
 Open security/technical findings (none critical or high) are tracked in
 `docs/ato/poam.md` — the source of truth for remediation status — derived
 from the point-in-time assessment `docs/ato/security-assessment-2026-07.md`,

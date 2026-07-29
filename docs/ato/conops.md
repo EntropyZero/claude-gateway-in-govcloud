@@ -382,7 +382,11 @@ Three independent audit surfaces, at increasing sensitivity (`architecture.md`
   user are streamed to a CMK-encrypted CloudWatch window and archived to S3
   (SSE-KMS), IAM-only and flagged for SIEM subscription
   (`cloudformation/03-observability.yaml`; `scripts/deploy.env.example`;
-  `.claude/rules/security.md`). Prompt content is redacted. This stream's access
+  `.claude/rules/security.md`). Prompt content is redacted by default; a
+  second, separate opt-in (`LOG_USER_PROMPTS=true`, stack 02) adds the full
+  user-typed prompt text to this same stream — a categorization-relevant
+  choice requiring organizational sign-off (see
+  `fips-199-categorization.md`). This stream's access
   surface is deliberately never widened.
 
 ### 5.5 Administration — deploy, update, and rotation

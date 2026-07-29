@@ -188,18 +188,26 @@ def _managed_body():
     return "\n".join(body)
 
 
-def _managed_policies(min_version=True):
+def _managed_policies(min_version=True, log_prompts=False):
     """Parse the rendered managed: block into policy dicts.
 
     min_version toggles the RequiredMinVersionLine render: True is the
     HaveMinClientVersion branch (the deploy-gateway.sh default - it always
     passes CLAUDE_VERSION unless MIN_CLIENT_VERSION=none), False the
     disabled branch (a YAML comment line, so the block must stay parseable).
+    log_prompts toggles LogUserPromptsLine the same way; False is the
+    template default (prompt capture is opt-in).
     """
     raw = _managed_body()
     repl = ("requiredMinimumVersion: '2.1.207'" if min_version
             else "# requiredMinimumVersion: not set (MinClientVersion empty)")
     raw = raw.replace("${RequiredMinVersionLine}", repl)
+    repl = ('OTEL_LOG_USER_PROMPTS: "1"' if log_prompts
+            else "# OTEL_LOG_USER_PROMPTS: not enabled (LogUserPrompts=false)")
+    raw = raw.replace("${LogUserPromptsLine}", repl)
+    repl = ('OTEL_LOG_ASSISTANT_RESPONSES: "0"' if log_prompts
+            else "# OTEL_LOG_ASSISTANT_RESPONSES: default (prompt capture off)")
+    raw = raw.replace("${LogAssistantResponsesLine}", repl)
     raw = raw.replace("${OpusModelId}", "claude-opus-4-8")
     raw = raw.replace("${SonnetModelId}", "claude-sonnet-5")
     raw = raw.replace("${HaikuModelId}", "claude-sonnet-4-5")
@@ -371,6 +379,65 @@ def test_required_minimum_version_inside_cli_and_conditional():
     cli_ix = body.index("- cli:")
     marker_ix = body.index("${RequiredMinVersionLine}")
     assert cli_ix < marker_ix, "RequiredMinVersionLine must render inside cli:"
+
+
+def test_log_user_prompts_is_opt_in_and_conditional():
+    """OTEL_LOG_USER_PROMPTS (prompt-content capture, added 2026-07-29).
+
+    - OFF is the default and must STAY the default: the env key renders only
+      when LogUserPrompts='true'; the disabled branch is a full-line YAML
+      comment so the env: block parses either way.
+    - When enabled the value is exactly "1" inside the catch-all policy's
+      cli.env - the same managed push every other client env var rides.
+    - deploy-gateway.sh must refuse LOG_USER_PROMPTS=true without
+      FORWARD_ACTIVITY_LOGS=true: prompt text travels inside the activity
+      stream, so without forwarding it is silently dropped at the gateway
+      while the operator believes prompts are being captured.
+    - When prompts are on, OTEL_LOG_ASSISTANT_RESPONSES must be pinned to
+      "0": unset, that knob FALLS BACK to OTEL_LOG_USER_PROMPTS (clients
+      >= 2.1.193, per the monitoring docs), so omitting the pin silently
+      un-redacts assistant response text the flag never claimed to capture.
+    """
+    # disabled branch (the default): block parses, keys absent everywhere
+    for policy in _managed_policies(log_prompts=False):
+        env = policy.get("cli", {}).get("env", {})
+        assert "OTEL_LOG_USER_PROMPTS" not in env
+        assert "OTEL_LOG_ASSISTANT_RESPONSES" not in env
+    # enabled branch: prompts on, response fallback explicitly pinned off
+    cli = _managed_policies(log_prompts=True)[-1]["cli"]
+    assert cli["env"]["OTEL_LOG_USER_PROMPTS"] == "1"
+    assert cli["env"]["OTEL_LOG_ASSISTANT_RESPONSES"] == "0", (
+        "without the explicit '0', OTEL_LOG_ASSISTANT_RESPONSES falls back "
+        "to OTEL_LOG_USER_PROMPTS and captures assistant responses too"
+    )
+    text = _template_text()
+    assert re.search(r"LogUserPromptsLine:\s*!If", text), (
+        "LogUserPromptsLine should be conditional on WantLogUserPrompts"
+    )
+    assert "WantLogUserPrompts" in text
+    assert "- '# OTEL_LOG_USER_PROMPTS: not enabled (LogUserPrompts=false)'" in text, (
+        "the WantLogUserPrompts else-branch must stay a full-line YAML comment"
+    )
+    # the parameter default is the safe side
+    m = re.search(r"^  LogUserPrompts:\n(?:.*\n)*?    Default: '(\w+)'",
+                  text, re.M)
+    assert m and m.group(1) == "false", "LogUserPrompts must default to 'false'"
+    # the marker sits inside the env: block of the managed body
+    body = _managed_body()
+    env_ix = body.index("env:")
+    marker_ix = body.index("${LogUserPromptsLine}")
+    assert env_ix < marker_ix, "LogUserPromptsLine must render inside cli.env:"
+    # the deploy script refuses prompt capture without the activity stream
+    script = open(os.path.join(
+        os.path.dirname(__file__), "..", "..", "scripts", "deploy-gateway.sh"
+    )).read()
+    assert re.search(
+        r'LOG_USER_PROMPTS.*=.*"true".*&&.*FORWARD_ACTIVITY_LOGS.*!=.*"true"',
+        script,
+    ), "deploy-gateway.sh must gate LOG_USER_PROMPTS on FORWARD_ACTIVITY_LOGS"
+    assert "LogUserPrompts=${LOG_USER_PROMPTS:-false}" in script, (
+        "deploy-gateway.sh must pass LogUserPrompts (default false)"
+    )
 
 
 def test_min_client_version_parameter_rejects_non_semver():

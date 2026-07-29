@@ -2,7 +2,7 @@
 <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker></defs>
 <rect x="0.5" y="0.5" width="1499" height="699" rx="14" fill="#FFFFFF" stroke="#E2E8F0"/>
 <text x="36" y="46" font-family="Helvetica, Arial, sans-serif" font-size="20" fill="#0F172A" font-weight="bold" text-anchor="start" >Telemetry &amp; audit data flows</text>
-<text x="36" y="68" font-family="Helvetica, Arial, sans-serif" font-size="12.5" fill="#64748B" font-weight="normal" text-anchor="start" >two streams, different sensitivity — the audit stream is opt-in and prompt content is always redacted</text>
+<text x="36" y="68" font-family="Helvetica, Arial, sans-serif" font-size="12.5" fill="#64748B" font-weight="normal" text-anchor="start" >two streams, different sensitivity — the audit stream is opt-in and prompt content is redacted unless LOG_USER_PROMPTS is enabled</text>
 <rect x="48" y="150" width="240" height="76" rx="8" fill="#FFFFFF" stroke="#2563EB" stroke-width="1.4"/>
 <text x="168.0" y="171" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >Claude Code clients</text>
 <text x="168.0" y="187" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >OTLP enabled centrally by the</text>
@@ -34,7 +34,7 @@
 <text x="1270.0" y="295" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >cost by team / cost-center / Okta group</text>
 <rect x="740" y="380" width="720" height="250" rx="12" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
 <text x="756" y="406" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#B91C1C" font-weight="bold" text-anchor="start" letter-spacing="0.06em">ACTIVITY AUDIT STREAM — HIGHLY SENSITIVE, OPT-IN</text>
-<text x="756" y="423" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="start" >FORWARD_ACTIVITY_LOGS=true · bash commands, tool inputs, file paths per user</text>
+<text x="756" y="423" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#B91C1C" font-weight="normal" text-anchor="start" >FORWARD_ACTIVITY_LOGS=true · bash commands, tool inputs, file paths per user · + prompt text if LOG_USER_PROMPTS=true</text>
 <rect x="764" y="446" width="200" height="76" rx="8" fill="#FFFFFF" stroke="#B91C1C" stroke-width="1.4"/>
 <text x="864.0" y="467" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0F172A" font-weight="bold" text-anchor="middle" >CloudWatch Logs</text>
 <text x="864.0" y="483" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748B" font-weight="normal" text-anchor="middle" >CMK · 14-day</text>

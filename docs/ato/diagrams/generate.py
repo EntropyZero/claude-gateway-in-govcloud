@@ -471,7 +471,7 @@ def d4():
 # =====================================================================
 def d5():
     s = SVG(1500, 700, "Telemetry & audit data flows",
-            "two streams, different sensitivity — the audit stream is opt-in and prompt content is always redacted")
+            "two streams, different sensitivity — the audit stream is opt-in and prompt content is redacted unless LOG_USER_PROMPTS is enabled")
 
     s.node(48, 150, 240, 76, "Claude Code clients",
            ["OTLP enabled centrally by the", "gateway via /managed/settings"],
@@ -498,7 +498,7 @@ def d5():
            border=VIOLET)
 
     s.zone(740, 380, 720, 250, "Activity audit stream — HIGHLY SENSITIVE, OPT-IN",
-           RED, RED_T, "FORWARD_ACTIVITY_LOGS=true · bash commands, tool inputs, file paths per user")
+           RED, RED_T, "FORWARD_ACTIVITY_LOGS=true · bash commands, tool inputs, file paths per user · + prompt text if LOG_USER_PROMPTS=true")
     s.node(764, 446, 200, 76, "CloudWatch Logs",
            ["CMK · 14-day", "operational window"], border=RED)
     s.node(1020, 446, 170, 76, "Firehose", ["buffered delivery"], border=RED)

@@ -520,6 +520,21 @@ with instructions to update. Three properties to know:
   (`publish-portal-release.sh`) — the startup error tells users to update,
   and the portal is where they can actually do it.
 
+**f) Prompt-content capture — only when the organization enables it.** With
+`LOG_USER_PROMPTS=true` in `deploy.env` (off by default), the same policy adds
+`env.OTEL_LOG_USER_PROMPTS: "1"`, and each client's `claude_code.user_prompt`
+telemetry event then carries the **full text of every prompt the user types**
+(by default only the prompt's length is reported). The content flows into the
+organization's activity audit stream — per-user attributed, CMK-encrypted,
+IAM-only — alongside the bash-command/tool-input records;
+`deploy-gateway.sh` refuses the flag unless that stream
+(`FORWARD_ACTIVITY_LOGS=true`) is on. Model responses are **not** captured:
+the policy pins `OTEL_LOG_ASSISTANT_RESPONSES: "0"` alongside, because that
+setting otherwise falls back to the prompts flag. Like every managed push, it takes
+effect at the client's next settings fetch. If your organization enables
+this, say so in your acceptable-use / rules-of-behavior material — users
+should not have to discover from a diagram that their prompts are retained.
+
 The Okta **groups claim is required** for per-group spend caps
 (`scope_type` `rbac_group`), which resolve against it — so the gateway
 requests the `groups` scope unconditionally. See

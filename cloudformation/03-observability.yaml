@@ -405,7 +405,8 @@ Resources:
 
   # ------------------------------------------------------- activity logs
   # AI activity audit stream (bash commands, tool inputs, file paths per
-  # user; prompt content stays redacted). Data flows only when the gateway
+  # user; prompt content stays redacted unless the gateway stack also sets
+  # LogUserPrompts=true). Data flows only when the gateway
   # stack sets ForwardActivityLogs=true - until then this chain is idle and
   # costs nothing (Firehose DirectPut and S3 bill per GB only). Short
   # CloudWatch window for operational queries; durable copy in S3.
