@@ -37,7 +37,9 @@ Contents:
 
 The categorization covers the authorization boundary described in
 `conops.md` §1.4 and `architecture.md` §1: the managed client fleet, the
-GovCloud workload VPC and all four stacks, with Okta as the one external SaaS
+GovCloud workload VPC and all deployed stacks (01–04, plus the optional 05
+log-analytics stack, which introduces no new information type — its query
+results are ALB access-log excerpts), with Okta as the one external SaaS
 dependency and Bedrock reached over a private endpoint.
 
 Information types below are described **functionally**. They are deliberately

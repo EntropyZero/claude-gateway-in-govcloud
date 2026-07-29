@@ -180,7 +180,8 @@ holds the RDS master credential.
 
 ### 3.3 Security and audit consumers
 
-- Read the **DB audit trail** (pgaudit → CloudWatch), **ALB access logs** (S3),
+- Read the **DB audit trail** (pgaudit → CloudWatch), **ALB access logs** (S3;
+  SQL-searchable via the optional log-analytics stack — `om-runbooks.md` §14),
   the **installer download-audit log** (when the portal is deployed — see
   §5.4), and, when enabled, the **AI activity stream** (see §5.4).
 - The activity stream is treated as highly sensitive (bash commands, tool
@@ -368,7 +369,11 @@ Three independent audit surfaces, at increasing sensitivity (`architecture.md`
   (`cloudformation/01-database.yaml`).
 - **ALB access logs.** Source connector IPs, URIs, and timings land in an S3
   bucket (SSE-S3, IAM-only, lifecycle expiry) (`cloudformation/02-gateway.yaml`;
-  `architecture.md` §9 note).
+  `architecture.md` §9 note). The optional log-analytics stack
+  (`cloudformation/05-log-analytics.yaml`) makes them SQL-searchable in place
+  with Athena — query results land in a CMK-encrypted, expiring bucket, and
+  the runbook (`om-runbooks.md` §14) carries the GovCloud caveat that query
+  strings are Athena metadata.
 - **Installer download audit (portal, when deployed).** Every portal download
   **and every denial** writes one JSON record — timestamp, verified Okta
   identity (`user_email`, `user_groups`), selected team and cost center,

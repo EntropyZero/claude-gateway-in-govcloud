@@ -35,6 +35,7 @@ secrets, security-group, and encryption inventories — see
 | `cloudformation/02-gateway.yaml` | ALB + TLS listener, ECS Fargate service, IAM, secrets, optional VPC endpoints, cert-expiry alarm, ALB access logs |
 | `cloudformation/03-observability.yaml` | AMP workspace, activity-archive chain, Grafana usage/cost dashboard behind the ALB at `/grafana` (the ADOT collector runs as a loopback sidecar in the gateway task, not here) |
 | `cloudformation/04-download-portal.yaml` | Optional Okta-secured download portal at `/portal`: installer downloads, self-usage page, user guide, fingerprint, spend-cap admin |
+| `cloudformation/05-log-analytics.yaml` | Optional SQL search over the ALB access logs: Athena workgroup + Glue table (partition projection); runbook in `docs/operations/om-runbooks.md` §14 |
 | `docker/Dockerfile` | Gateway container (Amazon Linux 2023 base) around the pinned, verified `claude` binary |
 | `docker/portal/` | Download-portal image: Flask package + gunicorn, vendored wheels |
 | `docker/entrypoint.sh` | Renders `gateway.yaml`, assembles the Postgres URL |
@@ -55,6 +56,7 @@ secrets, security-group, and encryption inventories — see
 | `scripts/set-okta-secret.sh` | Set the real OIDC client secret and roll the service |
 | `scripts/set-grafana-oidc-secret.sh` | Set Grafana's Okta client secret and roll Grafana |
 | `scripts/build-and-push-portal.sh` + `deploy-download-portal.sh` + `publish-portal-release.sh` + `set-portal-oidc-secret.sh` | Build, deploy, and publish releases to the optional download portal (04) |
+| `scripts/deploy-log-analytics.sh` + `diagnostics/athena-alb-query.sh` | Deploy the optional ALB log-search stack (05) and run SQL queries against it |
 | `scripts/stack-outputs.sh` | Print both stacks' outputs |
 | `scripts/verify-gateway.sh` | Post-deploy DNS / TLS / OAuth endpoint checks |
 | `tests/` + `Makefile` | Test suites (`make test`); CI in `.github/workflows/tests.yml` |
@@ -465,6 +467,10 @@ The observability stack imports the gateway stack's exports (`svc-sg`,
   `OBSERVABILITY_AMP_ENDPOINT` is set but `COLLECTOR_IMAGE` is empty (run
   `mirror-collector.sh` first, or unset the AMP vars to deploy without
   telemetry).
+- **The optional log-analytics stack (05) imports only 01's CMK export**
+  (its deploy script reads 02's `AlbLogsBucketName` stack output at deploy
+  time and passes it as a parameter, so 02 gains no new export lock).
+  Delete 05 before 01; it is otherwise unordered with 02/03/04.
 - **The same export lock exists 01↔02:** the gateway stack imports the DB
   endpoint, master-secret ARN, client SG, and KMS key ARN from 01. Any 01
   change that would alter those export values (most notably the RDS

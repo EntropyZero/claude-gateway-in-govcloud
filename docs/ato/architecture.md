@@ -129,7 +129,7 @@ Two distinct streams with different sensitivity:
 |---|---|---|---|---|
 | Usage metrics | tokens, cost, sessions, LoC, model, user identity, team/cost-center | AMP (CMK) | 150 d (AMP fixed) | Grafana via Okta SSO, role-mapped |
 | Activity stream (opt-in) | bash commands, tool inputs, file paths, per user; prompt/response content redacted by default (full prompt text and model response text added only with the separate independent opt-ins `LOG_USER_PROMPTS=true` / `LOG_ASSISTANT_RESPONSES=true`) | CloudWatch (CMK) → S3 (SSE-KMS) | 14 d window / 731 d archive | IAM only; flagged for SIEM subscription |
-| ALB access logs | source connector IPs, URIs, timings | S3 (SSE-S3) | 90 d | IAM only |
+| ALB access logs | source connector IPs, URIs, timings | S3 (SSE-S3) | 90 d | IAM only; SQL-searchable via the optional Athena stack (05) — results land CMK-encrypted |
 | DB audit (pgaudit) | DDL, role changes, writes (no bind values) | RDS → CloudWatch (CMK) | 365 d group | IAM only |
 | Session/spend store | sessions, spend counters | RDS (CMK) | live | app DB user only |
 
@@ -195,7 +195,11 @@ behavior) and is why no port-53 rules appear.
 Export locks (documented in README "Teardown & update order"): while a
 downstream stack imports an export, the upstream stack cannot change its
 value — most notably the RDS storage CMK is a **day-one decision**, and
-03 must be deleted before 02 replacement-updates. The ALB and Database
+03 must be deleted before 02 replacement-updates. The optional
+log-analytics stack (05: Athena + Glue over the ALB access logs) imports
+only 01's CMK export; its deploy script reads 02's `AlbLogsBucketName`
+stack output and passes it as a parameter — deliberately not an export, so
+02 gains no new export lock. The ALB and Database
 additionally carry CloudFormation **stack policies** denying
 `Update:Replace`/`Update:Delete`, so an accidental template change that
 would recreate them (new ALB DNS name → client DNS resubmission; new
@@ -212,6 +216,7 @@ empty database) fails fast.
 | CloudWatch log groups (ECS gateway [+ its collector sidecar, stream prefix `otel`], grafana/portal, activity, portal-audit, RDS postgresql/pgaudit, db-admin Lambdas) | SSE | CMK — every group is template-declared (never service-auto-created) precisely so the CMK and retention apply; all carry `DeletionPolicy: Retain`, so no log group is destroyed by a stack teardown |
 | Activity archive bucket | SSE-KMS + bucket key | CMK |
 | Portal artifacts bucket (04) | SSE-KMS + bucket key | CMK |
+| Athena query-results bucket (05, optional) | SSE-KMS + bucket key (workgroup-enforced) | CMK |
 | AMP workspace | SSE | CMK (`ENCRYPT_AMP_WITH_CMK`, creation-time) |
 | ECR repositories | SSE-KMS at creation | CMK (when created after 01) |
 | ALB access-logs bucket | SSE-S3 (AES-256) | **AWS-managed — ELB log delivery does not support KMS** |

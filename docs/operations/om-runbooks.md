@@ -1403,9 +1403,11 @@ restore `.claude.json.bak` to undo. Nothing server-side changes.
 *Trigger / Frequency:* Decommissioning the deployment (lab cleanup or end of
 life). Rare and deliberate.
 
-*Order is the reverse of deploy: `04 and 03 → 02 → 01`.* The portal (`04`) and
+*Order is the reverse of deploy: `05, 04 and 03 → 02 → 01`.* The portal (`04`) and
 observability (`03`) stacks both import from `02` and are independent of each
-other — delete them (in either order, or in parallel) before the gateway.
+other — delete them (in either order, or in parallel) before the gateway. The
+log-analytics stack (`05`, if deployed) imports only 01's CMK export, so it
+must go before `01` but is otherwise unordered — delete it alongside 04/03.
 **03 owns no ECS service or Cloud Map namespace** (the collector is a sidecar
 in the 02 gateway task), so its delete is simple — no lingering collector
 ENIs, no discovery-service-before-namespace ordering to wait on. There is
@@ -1427,6 +1429,11 @@ import upstream exports, so an out-of-order delete fails on the export lock.
 *Steps (exact commands):*
 
 ```bash
+# 5) ALB log analytics (if deployed) - the workgroup deletes with its query
+#    history (RecursiveDeleteOption); the results bucket is Retain'd.
+aws cloudformation delete-stack --region "$AWS_REGION" --stack-name "${LOG_ANALYTICS_STACK_NAME:-${NAME_PREFIX}-logs}"
+aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-name "${LOG_ANALYTICS_STACK_NAME:-${NAME_PREFIX}-logs}"
+
 # 4) Download portal (if deployed)
 aws cloudformation delete-stack --region "$AWS_REGION" --stack-name "$PORTAL_STACK_NAME"
 aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-name "$PORTAL_STACK_NAME"
@@ -1461,6 +1468,9 @@ aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-nam
 - **AMP workspace** (`Workspace`, 03) — `Retain`.
 - **Portal artifacts bucket** (`ArtifactsBucket`, 04) — `Retain`
   (CMK-encrypted; holds the published release binaries).
+- **Athena results bucket** (`AthenaResultsBucket`, 05) — `Retain`
+  (CMK-encrypted; holds query-result CSVs, which are log excerpts — they
+  expire on their lifecycle rule regardless).
 - **Every CloudWatch log group, in every stack** — `Retain` (a deliberate
   decision: logs outlive stacks; the cfn-guard gate
   `log_groups_survive_teardown` enforces it). This covers the ECS task
@@ -1493,7 +1503,7 @@ on the retained final RDS snapshot (restore per runbook 8) and the retained
 buckets.
 
 *Notes & pitfalls:* Deleting a stack that another stack still imports from
-fails — always `04 and 03 → 02 → 01`, waiting for each delete to complete
+fails — always `05, 04 and 03 → 02 → 01`, waiting for each delete to complete
 before the next tier. Two waits to expect: the db-admin Lambda ENIs can
 linger ~20 minutes attached to 01's db-client SG (a 01 delete failing with a
 dependency violation usually just needs a retry), and named Secrets Manager
@@ -1502,3 +1512,128 @@ secrets enter a 7–30 day recovery window — to redeploy the same
 `aws secretsmanager delete-secret --force-delete-without-recovery` the
 `<prefix>/*` secrets. Retained resources are **not** free; account for the
 retained buckets, CMK, AMP workspace, and snapshots after teardown.
+
+---
+
+## 14. Searching the ALB access logs (Athena, stack 05)
+
+*Trigger / Frequency:* On demand — incident investigation ("who hit what,
+when, from where"), access review, client-behavior forensics (e.g. which
+client versions or source IPs are hitting `/v1/messages`), portal download
+questions beyond what its audit log answers.
+
+*What the logs hold:* every request that reached the ALB — gateway API
+(`/v1/*`, `/managed/settings`), Grafana (`/grafana/*`), portal (`/portal/*`)
+— with client source IP and port, method, full URL (including query string),
+ELB and target status codes, timings, bytes, TLS cipher/protocol,
+user-agent, and trace IDs. Treat query output accordingly: it is per-user
+access data. The searchable window is bounded by the bucket's expiry
+(`ALB_LOG_RETENTION_DAYS`, default 90 days).
+
+*Prerequisites:*
+
+- Stack 05 deployed: `./scripts/deploy-log-analytics.sh` (any time after 02;
+  independent of 03/04). It persists `ATHENA_WORKGROUP` / `ATHENA_DATABASE` /
+  `ATHENA_TABLE` / `ATHENA_RESULTS_BUCKET` into `deploy.env`.
+- Operator IAM: `athena:StartQueryExecution`/`GetQueryExecution` (plus
+  `StopQueryExecution` — the wrapper cancels a query that outlives its
+  10-minute poll window), Glue read on the database/table, `s3:GetObject`/`ListBucket` on
+  the ALB-logs bucket, **read AND write on the results bucket**
+  (`s3:GetObject`/`ListBucket`/`PutObject`/`GetBucketLocation`, plus
+  `s3:AbortMultipartUpload` for large results), and `kms:GenerateDataKey` +
+  `kms:Decrypt` on the CMK — Athena writes the SSE-KMS result object with the
+  **caller's** credentials, then the wrapper reads it back; stack 05 does not
+  itself grant any of this. Admin operator roles typically have all of it.
+- The operator host must reach the **`athena` and `glue` AWS APIs** (queries
+  run server-side; the host only starts/polls/fetches). If the org allowlists
+  AWS endpoints per service, request those two alongside the existing set.
+
+*Cost model:* the stack idles at ~$0 (the workgroup and Glue table are free
+constructs; the results bucket holds expiring CSVs). Athena bills **per
+query, on data scanned** — see AWS's Athena pricing page for the GovCloud
+rate (order of $5/TB). This gateway's gzipped, day-partitioned logs mean a
+date-scoped query scans megabytes. Two guardrails: **always filter on the
+`day` partition key**, and the workgroup cancels any query that exceeds
+`ATHENA_SCAN_CUTOFF_BYTES` (default 10 GiB).
+
+*How to run a query:*
+
+```bash
+# Wrapper: runs in the stack's workgroup + database, waits, streams the
+# result CSV to stdout (redirect to a file for spreadsheet work).
+./scripts/diagnostics/athena-alb-query.sh \
+  "SELECT elb_status_code, count(*) AS n
+     FROM alb_access_logs
+    WHERE day >= date_format(current_date - interval '7' day, '%Y/%m/%d')
+    GROUP BY 1 ORDER BY 2 DESC"
+```
+
+The Athena **console** query editor works too: pick the
+`<prefix>-alb-logs` workgroup (top right — it enforces the CMK-encrypted
+results location) and the `<prefix with underscores>_logs` database.
+
+*Example queries* (all `day`-scoped; `day` is a string partition key,
+`'yyyy/MM/dd'`):
+
+```sql
+-- 1. Errors by path over a week: where are 4xx/5xx coming from?
+SELECT url_extract_path(request_url) AS path, elb_status_code, count(*) AS n
+FROM alb_access_logs
+WHERE day >= date_format(current_date - interval '7' day, '%Y/%m/%d')
+  AND elb_status_code >= 400
+GROUP BY 1, 2 ORDER BY n DESC LIMIT 50;
+
+-- 2. Everything one client IP did on one day.
+SELECT time, request_verb, request_url, elb_status_code, target_status_code,
+       user_agent
+FROM alb_access_logs
+WHERE day = '2026/07/28' AND client_ip = '10.20.30.40'
+ORDER BY time;
+
+-- 3. Requests the ALB answered itself (no healthy target, TLS/HTTP
+--    handshake trouble): elb_status_code set, target_status_code '-'.
+SELECT time, client_ip, request_url, elb_status_code, actions_executed
+FROM alb_access_logs
+WHERE day >= date_format(current_date - interval '1' day, '%Y/%m/%d')
+  AND target_status_code = '-'
+ORDER BY time DESC LIMIT 100;
+
+-- 4. Slowest gateway requests (target processing seconds) this week.
+SELECT time, client_ip, request_url, target_processing_time
+FROM alb_access_logs
+WHERE day >= date_format(current_date - interval '7' day, '%Y/%m/%d')
+  AND target_processing_time >= 0
+ORDER BY target_processing_time DESC LIMIT 50;
+
+-- 5. Client versions in the fleet (user-agent), busiest first — spot
+--    outdated clients before raising MIN_CLIENT_VERSION (runbook 6).
+SELECT user_agent, count(*) AS n, count(DISTINCT client_ip) AS ips
+FROM alb_access_logs
+WHERE day >= date_format(current_date - interval '7' day, '%Y/%m/%d')
+GROUP BY 1 ORDER BY n DESC LIMIT 50;
+```
+
+*Notes & pitfalls:*
+
+- **`day` is the log DELIVERY date (UTC), not strictly the request date** —
+  ALB names objects by delivery time, so requests just before midnight UTC
+  can land in the next day's partition. When bounding by request time, widen
+  the `day` range by one day on each side and filter precisely on `time`.
+- **Widening `AlbLogsProjectionStart` backwards is free; moving it forward
+  hides data.** Dates the projection doesn't enumerate are invisible to every
+  query even though the objects exist. There is no reason to move it forward.
+- **GovCloud export-control caveat:** Athena/Glue *metadata* — database and
+  table names, partition values, named queries, and **query strings** — is
+  not permitted to contain export-controlled data (per the AWS GovCloud
+  service notes). Query *results* stay in the region; the query *text*
+  (which may name IPs, users, or URLs you are investigating) is metadata —
+  keep it to what belongs there. (The partition values here are dates.)
+- **The two ALB-answered status codes worth knowing:** 460 (client closed
+  before response — typical of client timeouts) and 502/504 with
+  `target_status_code = '-'` (no target response). `actions_executed`
+  distinguishes `forward` from `waf`/redirect handling.
+- **NOT yet live-verified:** the stack, the wrapper, and these example
+  queries are template/offline-verified only (the table regex is pinned by
+  `tests/templates/test_alb_athena_table.py`). First live check: deploy 05,
+  run example 1 over a known-traffic day, confirm rows come back and the
+  result CSV in the results bucket is SSE-KMS with the CMK.

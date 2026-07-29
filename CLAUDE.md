@@ -29,6 +29,19 @@ Linux), and secret rotation. The docs describe this steady state; the
 hard-won symptom→cause→fix lessons from bring-up live in
 `docs/operations/troubleshooting.md`, not in narrative history.
 
+**Added 2026-07-29 (committed, NOT yet deployed): optional stack 05 —
+SQL search over the ALB access logs.** `cloudformation/05-log-analytics.yaml`
+(Athena workgroup with CMK-enforced results + scan cutoff, Glue table with
+day partition projection over the logs bucket) + `deploy-log-analytics.sh`
++ `diagnostics/athena-alb-query.sh`; runbook = om-runbooks §14, deploy =
+greenfield Phase 9a. Imports only 01's CMK export; the deploy script reads
+02's `AlbLogsBucketName` output at deploy time (no export, no deploy.env
+round-trip). Table regex pinned by `tests/templates/test_alb_athena_table.py`.
+Same change closes POA&M SA-2026-07-60 (new `s3_buckets_use_cmk` guard rule;
+`AlbLogsBucket` exempt via suppression metadata — a Metadata-only 02 edit).
+Live check: deploy 05, one day-scoped query returns rows, result CSV is
+SSE-KMS.
+
 **Committed, NOT yet deployed (2026-07-29): opt-in client prompt/response
 content capture in the activity stream.** Two independent flags:
 `LOG_USER_PROMPTS=true` (02 param `LogUserPrompts`) pushes
@@ -72,6 +85,7 @@ ATO-package artifacts not yet authored are registered in
 | `cloudformation/02-gateway.yaml` | ALB+TLS, ECS gateway (+ optional co-resident ADOT collector **sidecar** when telemetry is on), IAM, secrets, VPC endpoints, **db bootstrap + rotation Lambdas**, spend-cap admin keys, the managed client policy (`GATEWAY_MANAGED_B64`) |
 | `cloudformation/03-observability.yaml` | AMP, Grafana (Okta SSO), activity-archive chain, Bedrock prompt-log destinations; **outputs the AMP params the gateway sidecar consumes** (no standalone collector service — it lives in 02's task) |
 | `cloudformation/04-download-portal.yaml` | **optional** Okta-secured download portal (ECS Fargate at `/portal`, in-app OIDC + group auth, CMK S3 artifacts + audit log): installer downloads, self-usage, user guide, fingerprint, spend-cap admin. Imports 02's spend-read-key export |
+| `cloudformation/05-log-analytics.yaml` | **optional** SQL search over the ALB access logs: Athena workgroup (CMK results, scan cutoff) + Glue table with day partition projection. Serverless, ~$0 idle; runbook om-runbooks §14 |
 | `docker/` | gateway image + entrypoint; `db-admin/` (bootstrap+rotation Lambda); `grafana/`; `portal/` (download-portal **Flask package** `portal/` + `wsgi.py`, gunicorn, vendored wheels) |
 | `client/` | `Install-ClaudeCode.ps1` (non-admin Windows install) + `install-claude-code.sh` (no-root Linux install) |
 | `scripts/` | `deploy.env`-driven deploy/operate chain at the root (see `scripts/README.md`); `common.sh` holds the shared helpers |
@@ -116,7 +130,10 @@ set-portal-oidc-secret.sh`; it reuses the ALB / FQDN / cert / Zscaler entry
 (path-based at `/portal`) and **requires a 02 that carries the
 `${NamePrefix}-spend-read-key-arn` export** — when upgrading an older
 deployment, re-run `deploy-gateway.sh` before `deploy-download-portal.sh`.
-Teardown is the reverse (04 and 03 → 02 → 01).
+The **optional log-analytics stack (05)** slots in any time after 02
+(independent of 03/04, no image): `deploy-log-analytics.sh` reads 02's
+`AlbLogsBucketName` output and imports only 01's CMK export. Teardown is
+the reverse (05, 04 and 03 → 02 → 01).
 
 Version/update flows (publishing portal releases before raising the minimum
 client version, image-tag bumps before stack updates, Grafana/base-image

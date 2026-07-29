@@ -9,11 +9,11 @@ tracking view, not a restatement.
 **Date:** 2026-07 (assessment date 2026-07-28).
 
 **What this covers.** Every security or technical finding from the
-2026-07 assessment: 15 medium, 42 low, 12 informational. All are
-**Open** — the 2026-07 pass was documentation-only, so no code,
+2026-07 assessment: 15 medium, 42 low, 12 informational. All were
+**Open** as filed (the 2026-07 pass was documentation-only — no code,
 template, or script change was made in response to any finding, and
-nothing has been remediated since the prior (2026-07-27) assessment
-either. The five mediums carried forward from that assessment
+nothing had been remediated since the prior 2026-07-27 assessment);
+the Status column tracks remediation since. The five mediums carried forward from that assessment
 (SA-2026-07-09, -10, -11, -14, -15) are included here with their status
 unchanged.
 
@@ -107,7 +107,7 @@ Informational), then by ID.
 | SA-2026-07-57 | Low | Bedrock prompt-log delivery (opt-in) has no delivery monitoring on either the CloudWatch or the S3 leg | Add an `IncomingLogEvents` alarm on the prompt log group when the feature is on; document the manual S3-leg check | TBD | Open |
 | SA-2026-07-58 | Info | The Bedrock prompt-logs bucket grant is bucket-wide `s3:PutObject` because the delivery data prefix is undocumented — the one carried-forward open TODO in the code | Capture the real prefix from the first live delivery, then scope the grant; the in-template TODO comment tracks it | TBD | Open |
 | SA-2026-07-59 | Info | A single CMK covers every data class, with key separation entirely IAM-side | State the shared-key blast radius as an accepted risk in the SSP, or split a second CMK for the prompt-log and activity-archive stores | operator | Open |
-| SA-2026-07-60 | Info | `rules.guard` has no S3-encryption rule, so a future bucket without SSE-KMS passes CI | Add the rule with a named `AlbLogsBucket` exception | TBD | Open |
+| SA-2026-07-60 | Info | `rules.guard` has no S3-encryption rule, so a future bucket without SSE-KMS passes CI | Add the rule with a named `AlbLogsBucket` exception | TBD | **Closed 2026-07-29** — `s3_buckets_use_cmk` in `tests/cfn/rules.guard` (verified red on a violation); `AlbLogsBucket` carries the suppression metadata at the resource |
 | SA-2026-07-61 | Info | The Grafana break-glass admin password is injected even when the login form is disabled | Gate the injection on `GrafanaDisableLoginForm` | TBD | Open |
 | SA-2026-07-62 | Info | Three unauthenticated health endpoints are reachable within `ClientIngressCidr`, and no WAF fronts the ALB | State both in the SSP as decisions (health checks are required; the ALB is internal-only) | operator | Open |
 | SA-2026-07-63 | Info | The ALB access-log bucket policy lacks the `DenyInsecureTransport` its siblings carry (SSE-S3 on that bucket is the correct documented exception, not a finding) | Add the transport deny for consistency | TBD | Open |
