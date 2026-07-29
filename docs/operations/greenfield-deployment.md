@@ -520,18 +520,19 @@ bring-up variant is the box below it.
   `/logout` — `/logout` strands the client behind an unreachable-hosts
   preflight (recovery: [`om-runbooks.md`](om-runbooks.md) runbook 12).
 - ☐ **Clean-profile first run**: verify a first-ever run on a profile that
-  has *never* run `claude`, not just a re-login. A first-ever run has
-  `hasCompletedOnboarding` unset, which puts a **connectivity preflight**
-  ahead of the login screen: it requires HTTP 200 from both
-  `api.anthropic.com` and `platform.claude.com`, which a gateway-only egress
-  path does not provide, and the CLI exits with *"Unable to connect to
-  Anthropic services"*. Probe it with
-  `curl.exe -sS -o NUL -w "%{http_code}" https://api.anthropic.com/api/hello`
-  (anything but 200 — a Zscaler block page counts — means it will reproduce).
-  If it does, decide the rollout answer before broad deployment: seed
-  `hasCompletedOnboarding: true` as part of the install, or allow the two
-  hosts. Per-developer recovery and the matching `/logout` trap are
-  [`om-runbooks.md`](om-runbooks.md) runbook 12.
+  has *never* run `claude`, not just a re-login. With `hasCompletedOnboarding`
+  unset, a **connectivity preflight** runs ahead of the login screen: it
+  requires HTTP 200 from both `api.anthropic.com` and `platform.claude.com`,
+  which a gateway-only egress path does not provide, and the CLI exits with
+  *"Unable to connect to Anthropic services"*. Both installers therefore
+  seed `hasCompletedOnboarding: true` at install time (creating
+  `.claude.json` when the profile has none) — this check verifies the
+  seeding worked: after the install, the state file must contain the flag,
+  and `claude` must start to the login screen, not the preflight error. If
+  it reproduces anyway, the deployed installer predates the seeding —
+  re-run `publish-portal-release.sh` so the portal serves the current
+  `client/` installers. Per-developer recovery and the matching `/logout`
+  trap are [`om-runbooks.md`](om-runbooks.md) runbook 12.
 
 ---
 

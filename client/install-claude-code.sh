@@ -11,6 +11,11 @@
 #   - workstation configuration (telemetry attributes, update lockdown,
 #     enterprise CA trust) is written as an `env` block in the USER settings
 #     file ~/.claude/settings.json,
+#   - first-run onboarding is marked complete (hasCompletedOnboarding in the
+#     state file ~/.claude.json, created if absent) - a not-yet-onboarded
+#     client tries to reach Anthropic's public endpoints, which this network
+#     blocks, and exits with "Unable to connect to Anthropic services" before
+#     the gateway login is ever offered,
 #   - gateway sign-in requires an admin-delivered managed policy
 #     (forceLoginMethod:"gateway" + forceLoginGatewayUrl). Claude Code offers
 #     the "Cloud gateway" login ONLY from a managed source - on Linux that is
@@ -30,8 +35,8 @@
 #     [--extra-ca-cert-path /path/to/enterprise-ca.pem]
 #
 # Requires: bash, sha256sum (coreutils), python3 (for the settings.json merge
-# - the merge is skipped with a warning when python3 is absent; the install
-# itself still completes).
+# and the ~/.claude.json onboarding flag - both are skipped with a warning
+# when python3 is absent; the install itself still completes).
 set -euo pipefail
 
 say()  { printf '==> %s\n' "$*"; }
@@ -76,6 +81,46 @@ if d:
 tmp = path + ".tmp"
 with open(tmp, "w", encoding="utf-8") as f:
     json.dump(merged, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PYEOF
+}
+
+# Set hasCompletedOnboarding=true in the Claude Code state file
+# (~/.claude.json - NOT ~/.claude/settings.json; this file also holds project
+# history, so it must never be clobbered). Preserves every existing key; a
+# file already at true is left byte-identical (no rewrite); refuses to touch
+# a file it cannot parse. Sourceable for tests, like merge_user_settings.
+mark_onboarding_complete() {
+  local state_path="$1"
+  python3 - "$state_path" <<'PYEOF'
+import json, os, sys
+
+path = sys.argv[1]
+state = {}
+if os.path.isfile(path):
+    with open(path, encoding="utf-8") as f:
+        raw = f.read()
+    if raw.strip():
+        try:
+            state = json.loads(raw)
+        except ValueError as exc:
+            sys.stderr.write(
+                "existing .claude.json is not valid JSON - fix or remove it, "
+                "then re-run (%s)\n" % exc)
+            sys.exit(3)
+        if not isinstance(state, dict):
+            sys.stderr.write("existing .claude.json is not a JSON object\n")
+            sys.exit(3)
+if state.get("hasCompletedOnboarding") is True:
+    sys.exit(0)
+state["hasCompletedOnboarding"] = True
+d = os.path.dirname(path)
+if d:
+    os.makedirs(d, exist_ok=True)
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(state, f, indent=2)
     f.write("\n")
 os.replace(tmp, path)
 PYEOF
@@ -232,7 +277,25 @@ if [ -n "$USER_ENV" ]; then
   fi
 fi
 
-# --- 5. Smoke test + sign-in instructions -----------------------------------
+# --- 5. First-run onboarding flag (~/.claude.json) ---------------------------
+# A client without hasCompletedOnboarding tries Anthropic's public endpoints
+# on first start - blocked on this network by design - and exits with
+# "Unable to connect to Anthropic services" before the gateway login appears
+# (docs/operations/client-config.md Part I 5.6). Set it for every install,
+# creating the state file on machines with no Claude config at all. Same
+# CLAUDE_CONFIG_DIR override the binary honors for this file.
+STATE_FILE="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+say "Marking first-run onboarding complete (${STATE_FILE})"
+if ! command -v python3 >/dev/null; then
+  warn "python3 not found - onboarding flag NOT set. Add \"hasCompletedOnboarding\": true to ${STATE_FILE} yourself, or the first run fails with \"Unable to connect to Anthropic services\"."
+elif mark_onboarding_complete "$STATE_FILE"; then
+  echo "    onboarding flag set"
+else
+  # Non-fatal: the binary is installed; the message above says what to fix.
+  warn "onboarding flag NOT set (${STATE_FILE}) - see the message above; the first run fails with \"Unable to connect to Anthropic services\" until it is."
+fi
+
+# --- 6. Smoke test + sign-in instructions -----------------------------------
 say "Verifying installation"
 VERSION_OUT="$("$TARGET" --version)" || die "claude --version failed - the binary does not run on this machine."
 echo "    claude --version -> ${VERSION_OUT}"

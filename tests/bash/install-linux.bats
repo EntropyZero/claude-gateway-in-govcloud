@@ -83,6 +83,60 @@ src() { run bash -c "CLAUDE_INSTALLER_DOTSOURCE=1 source '$INSTALLER'; $1"; }
   [ "$(cat "$SETTINGS")" = '[1,2]' ]
 }
 
+# ---- mark_onboarding_complete --------------------------------------------
+
+@test "mark_onboarding_complete: creates a fresh .claude.json with the flag true" {
+  state="$BATS_TEST_TMPDIR/home/.claude.json"
+  src "mark_onboarding_complete '$state'"
+  [ "$status" -eq 0 ]
+  run python3 -c "import json;print(json.load(open('$state'))['hasCompletedOnboarding'])"
+  [ "$output" = "True" ]
+}
+
+@test "mark_onboarding_complete: preserves existing keys and flips false to true" {
+  state="$BATS_TEST_TMPDIR/state.json"
+  printf '%s' '{"hasCompletedOnboarding":false,"projects":{"/home/dev/x":{"history":[1,2]}}}' > "$state"
+  src "mark_onboarding_complete '$state'"
+  [ "$status" -eq 0 ]
+  run python3 -c "import json;d=json.load(open('$state'));print(d['hasCompletedOnboarding'],d['projects']['/home/dev/x']['history'])"
+  [ "$output" = "True [1, 2]" ]
+}
+
+@test "mark_onboarding_complete: leaves an already-true file byte-identical" {
+  state="$BATS_TEST_TMPDIR/state.json"
+  # Distinctive formatting json.dump would normalize - proves no rewrite.
+  printf '%s' '{"hasCompletedOnboarding": true,   "keep":"me"}' > "$state"
+  src "mark_onboarding_complete '$state'"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$state")" = '{"hasCompletedOnboarding": true,   "keep":"me"}' ]
+}
+
+@test "mark_onboarding_complete: refuses to clobber an unparseable .claude.json" {
+  state="$BATS_TEST_TMPDIR/state.json"
+  printf '%s' '{not json' > "$state"
+  src "mark_onboarding_complete '$state'"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not valid JSON"* ]]
+  [ "$(cat "$state")" = '{not json' ]
+}
+
+@test "mark_onboarding_complete: refuses a non-object .claude.json" {
+  state="$BATS_TEST_TMPDIR/state.json"
+  printf '%s' '[1,2]' > "$state"
+  src "mark_onboarding_complete '$state'"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$state")" = '[1,2]' ]
+}
+
+@test "mark_onboarding_complete: a truthy-but-not-true flag is rewritten to true" {
+  state="$BATS_TEST_TMPDIR/state.json"
+  printf '%s' '{"hasCompletedOnboarding":"yes"}' > "$state"
+  src "mark_onboarding_complete '$state'"
+  [ "$status" -eq 0 ]
+  run python3 -c "import json;print(json.load(open('$state'))['hasCompletedOnboarding'])"
+  [ "$output" = "True" ]
+}
+
 # ---- whole-script safety -------------------------------------------------
 
 @test "installer refuses an unknown argument" {
@@ -99,6 +153,18 @@ src() { run bash -c "CLAUDE_INSTALLER_DOTSOURCE=1 source '$INSTALLER'; $1"; }
   [ "$status" -ne 0 ]
   [[ "$output" == *"SHA-256 mismatch"* ]]
   [ ! -e "$home/.local/bin/claude" ]
+}
+
+@test "installer end-to-end: installs the binary and sets the onboarding flag" {
+  bin="$BATS_TEST_TMPDIR/claude-src"
+  printf '#!/bin/sh\necho fake-claude 0.0.0\n' > "$bin"; chmod +x "$bin"
+  sha="$(sha256sum "$bin" | awk '{print $1}')"
+  home="$BATS_TEST_TMPDIR/e2e-home"; mkdir -p "$home"
+  run env -u CLAUDE_CONFIG_DIR HOME="$home" bash "$INSTALLER" --binary-path "$bin" --sha256 "$sha"
+  [ "$status" -eq 0 ]
+  [ -x "$home/.local/bin/claude" ]
+  run python3 -c "import json;print(json.load(open('$home/.claude.json'))['hasCompletedOnboarding'])"
+  [ "$output" = "True" ]
 }
 
 @test "installer rejects a comma in --team" {

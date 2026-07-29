@@ -14,6 +14,11 @@
   - workstation configuration (telemetry attributes, update lockdown,
     enterprise CA trust) is written as an 'env' block in the USER settings
     file %USERPROFILE%\.claude\settings.json,
+  - first-run onboarding is marked complete (hasCompletedOnboarding in the
+    state file %USERPROFILE%\.claude.json, created if absent) - a
+    not-yet-onboarded client tries to reach Anthropic's public endpoints,
+    which this network blocks, and exits with "Unable to connect to
+    Anthropic services" before the gateway login is ever offered,
   - gateway sign-in requires an admin-delivered managed policy
     (forceLoginMethod:"gateway" + forceLoginGatewayUrl). Claude Code offers the
     "Cloud gateway" login ONLY from a managed source (HKLM policy or a machine
@@ -211,6 +216,86 @@ function Write-UserSettings {
   }
 }
 
+# Set hasCompletedOnboarding=true in the Claude Code state file
+# (%USERPROFILE%\.claude.json - NOT .claude\settings.json; this file also
+# holds project history, so it must never be clobbered). Preserves every
+# existing key; a file already at true is left byte-identical (no
+# round-trip through ConvertTo-Json of state we did not need to touch);
+# refuses to touch a file it cannot parse. Honors the same CLAUDE_CONFIG_DIR
+# override the binary uses for this file. Returns { Applied; Location;
+# Error } like Write-UserSettings.
+function Set-OnboardingComplete {
+  param([string]$StatePath)
+  if (-not $StatePath) {
+    $base = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { $env:USERPROFILE }
+    $StatePath = Join-Path $base '.claude.json'
+  }
+  if (-not [System.IO.Path]::IsPathRooted($StatePath)) {
+    $StatePath = Join-Path (Get-Location).Path $StatePath
+  }
+  try {
+    if ((Test-Path -LiteralPath $StatePath) -and
+        -not (Test-Path -LiteralPath $StatePath -PathType Leaf)) {
+      # A directory here would make the Move-Item below relocate the temp
+      # file INTO it instead of failing - refuse up front.
+      return [pscustomobject]@{ Applied = $false; Location = $StatePath;
+        Error = '.claude.json path exists but is not a regular file' }
+    }
+    $state = [ordered]@{}
+    if (Test-Path -LiteralPath $StatePath -PathType Leaf) {
+      $raw = Get-Content -LiteralPath $StatePath -Raw -ErrorAction Stop
+      if ($raw -and $raw.Trim()) {
+        try {
+          $parsed = ConvertFrom-Json -InputObject $raw -ErrorAction Stop
+        } catch {
+          # Never destroy a file we cannot parse - report and let the user fix it.
+          return [pscustomobject]@{ Applied = $false; Location = $StatePath;
+            Error = "existing .claude.json is not valid JSON - fix or remove it, then re-run ($($_.Exception.Message))" }
+        }
+        if ($parsed -isnot [System.Management.Automation.PSCustomObject]) {
+          # A top-level array/scalar would have its .NET properties copied in
+          # below, silently replacing the file - refuse, like the bash twin.
+          return [pscustomobject]@{ Applied = $false; Location = $StatePath;
+            Error = 'existing .claude.json is not a JSON object - fix or remove it, then re-run' }
+        }
+        $parsed.PSObject.Properties | ForEach-Object { $state[$_.Name] = $_.Value }
+        # Strict boolean check: PowerShell's '-eq $true' would also match 1 or
+        # "true", but the client's startup gate requires boolean true - those
+        # values must be REWRITTEN, not skipped.
+        if ($state['hasCompletedOnboarding'] -is [bool] -and $state['hasCompletedOnboarding']) {
+          return [pscustomobject]@{ Applied = $true; Location = $StatePath; Error = $null }
+        }
+      }
+    }
+    $state['hasCompletedOnboarding'] = $true
+    if ($WhatIfPreference) {
+      # Same BOM-less .NET write as Write-UserSettings, same -WhatIf skip.
+      return [pscustomobject]@{ Applied = $true; Location = $StatePath; Error = $null }
+    }
+    $dir = Split-Path -Parent $StatePath
+    if ($dir) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+    # -Depth 100 (the cmdlet's maximum): .claude.json accumulates deep
+    # per-project state, and ConvertTo-Json TRUNCATES silently past its
+    # depth. BOM-less for the same reason as Write-UserSettings. Written to
+    # a same-directory temp file and renamed into place: an in-place
+    # truncate-and-write would destroy the user's project history if the
+    # write died halfway (the bash twin does the same via os.replace).
+    $tmpPath = $StatePath + '.tmp'
+    [System.IO.File]::WriteAllText(
+      $tmpPath,
+      (($state | ConvertTo-Json -Depth 100) + [Environment]::NewLine),
+      (New-Object System.Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $tmpPath -Destination $StatePath -Force -ErrorAction Stop
+    return [pscustomobject]@{ Applied = $true; Location = $StatePath; Error = $null }
+  } catch {
+    if ($tmpPath -and (Test-Path -LiteralPath $tmpPath)) {
+      Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
+    }
+    $emsg = if ($_.Exception.Message) { $_.Exception.Message } else { "$_" }
+    return [pscustomobject]@{ Applied = $false; Location = $StatePath; Error = $emsg }
+  }
+}
+
 # Tests dot-source this file for the functions above without running the
 # installer body.
 if ($env:CLAUDE_INSTALLER_DOTSOURCE) { return }
@@ -348,7 +433,25 @@ if ($userEnv) {
   }
 }
 
-# --- 5. Smoke test + sign-in instructions -----------------------------------
+# --- 5. First-run onboarding flag (%USERPROFILE%\.claude.json) ---------------
+# A client without hasCompletedOnboarding tries Anthropic's public endpoints
+# on first start - blocked on this network by design - and exits with
+# "Unable to connect to Anthropic services" before the gateway login appears
+# (docs/operations/client-config.md Part I 5.6). Set it for every install,
+# creating the state file on machines with no Claude config at all. Honors
+# -WhatIf like the settings write above.
+Write-Step 'Marking first-run onboarding complete (%USERPROFILE%\.claude.json)'
+$script:OnboardingResult = Set-OnboardingComplete
+if ($script:OnboardingResult.Applied) {
+  Write-Host "    onboarding flag set: $($script:OnboardingResult.Location)"
+} else {
+  # Non-fatal: the binary is installed; say exactly what breaks and how to fix.
+  Write-Warning "Onboarding flag was NOT set ($($script:OnboardingResult.Location))."
+  Write-Warning "  Reason: $($script:OnboardingResult.Error)"
+  Write-Warning '  The first run fails with "Unable to connect to Anthropic services" until hasCompletedOnboarding is true in that file (docs/operations/client-config.md Part I 5.6).'
+}
+
+# --- 6. Smoke test + sign-in instructions -----------------------------------
 $settingsFailed = ($userEnv -and -not $script:SettingsResult.Applied)
 if ($WhatIfPreference) {
   Write-Host 'Done (WhatIf) - no files or settings were changed.' -ForegroundColor Green

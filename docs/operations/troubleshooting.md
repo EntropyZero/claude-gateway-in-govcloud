@@ -1145,7 +1145,10 @@ check is what confirms the push landed.
 **Symptom.** `claude` exits at launch before any login screen, and
 `claude auth login` refuses with a message about `forceLoginMethod` being
 `gateway`. Typically right after `/logout`, or on a **first-ever run on a
-clean profile**.
+clean profile** whose install predates the installers setting
+`hasCompletedOnboarding` at install time (current installers set it — but
+the portal serves the installers last uploaded by
+`publish-portal-release.sh`, so this can persist until a re-publish).
 
 **Cause.** The two logout paths are not equivalent. `/logout` (the slash
 command) clears credentials **and** onboarding state and deletes the whole
