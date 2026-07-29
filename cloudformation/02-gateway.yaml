@@ -410,8 +410,8 @@ Parameters:
     AllowedValues: ['true', 'false']
     Description: >-
       Also forward the ACTIVITY LOG stream (bash commands, tool inputs,
-      file paths per user - prompt content stays redacted unless
-      LogUserPrompts is also 'true'). Highly
+      file paths per user - prompt/response content stays redacted unless
+      LogUserPrompts / LogAssistantResponses are also 'true'). Highly
       sensitive; enable only where an AI-activity audit trail is required.
       Lands in a short CloudWatch window + S3 archive via the
       observability stack. No effect unless the telemetry sidecar is enabled
@@ -429,13 +429,30 @@ Parameters:
       S3 archive) - there is no separate destination, so it inherits that
       stream's CMK encryption, retention, and IAM-only access, and it
       REMOVES the "prompt content stays redacted" property every consumer of
-      that stream was told about. Assistant responses stay redacted - the
-      push pins OTEL_LOG_ASSISTANT_RESPONSES=0, which otherwise falls back
+      that stream was told about. Assistant responses stay redacted unless
+      LogAssistantResponses is also 'true' - with it off, the push pins
+      OTEL_LOG_ASSISTANT_RESPONSES=0, which otherwise falls back
       to this flag. Enable only with organizational sign-off.
       Meaningless without ForwardActivityLogs='true' (the client would
       attach prompt text to events the gateway never forwards) -
       deploy-gateway.sh refuses that combination. Clients pick the env up at
       their next settings fetch.
+
+  LogAssistantResponses:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Push OTEL_LOG_ASSISTANT_RESPONSES=1 to every client via the managed
+      settings, so the claude_code.assistant_response telemetry log event
+      carries the MODEL'S RESPONSE TEXT. Independent of LogUserPrompts
+      (either, both, or neither) and rides the same activity-log pipeline
+      with the same controls; the same organizational-sign-off caution
+      applies, and deploy-gateway.sh likewise refuses it without
+      ForwardActivityLogs='true'. Honored by clients >= 2.1.193 (older
+      clients ignore the env var). When this is 'false' but LogUserPrompts
+      is 'true', the push pins the value to 0 explicitly, because unset it
+      falls back to OTEL_LOG_USER_PROMPTS per the client docs.
 
   DbAdminLambdaImage:
     Type: String
@@ -547,6 +564,7 @@ Conditions:
   HaveSpendAdminGroups: !Not [!Equals [!Ref SpendAdminGroups, '']]
   HaveMinClientVersion: !Not [!Equals [!Ref MinClientVersion, '']]
   WantLogUserPrompts: !Equals [!Ref LogUserPrompts, 'true']
+  WantLogAssistantResponses: !Equals [!Ref LogAssistantResponses, 'true']
   WantAdminEndpointIngress: !And [!Condition WantAnyInterfaceEndpoint, !Condition HaveAdminClientSg]
   WantS3Endpoint: !Not [!Equals [!Join ['', !Ref PrivateRouteTableIds], '']]
   HaveAlarmTopic: !Not [!Equals [!Ref AlarmSnsTopicArn, '']]
@@ -1320,12 +1338,16 @@ Resources:
             #    activity stream (sidecar -> CloudWatch -> S3 archive), so it
             #    is gated by deploy-gateway.sh on ForwardActivityLogs='true'
             #    and inherits that stream's controls. Off by default.
-            #    OTEL_LOG_ASSISTANT_RESPONSES=0 is pinned alongside it
-            #    because, per the client docs, that knob FALLS BACK to
-            #    OTEL_LOG_USER_PROMPTS when unset (clients >= 2.1.193) -
-            #    without the pin, enabling prompt capture would silently
-            #    un-redact assistant response text too. This keeps the flag
-            #    capturing exactly what its name says: user prompts only.
+            #  * OTEL_LOG_ASSISTANT_RESPONSES (its own flag,
+            #    LogAssistantResponses, independent of the prompts flag) -
+            #    "1" adds the model's response text to the
+            #    claude_code.assistant_response event (clients >= 2.1.193;
+            #    older clients ignore it). When it is OFF while prompts are
+            #    ON, the push pins "0" explicitly because, per the client
+            #    docs, the knob FALLS BACK to OTEL_LOG_USER_PROMPTS when
+            #    unset - without the pin, enabling prompt capture would
+            #    silently un-redact responses too. Both flags off = neither
+            #    key rendered (client defaults, everything redacted).
             #  * OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative -
             #    REQUIRED for usage metrics to reach AMP. Clients export DELTA
             #    sums by default, and the sidecar's prometheusremotewrite exporter
@@ -1379,12 +1401,16 @@ Resources:
                       - WantLogUserPrompts
                       - 'OTEL_LOG_USER_PROMPTS: "1"'
                       - '# OTEL_LOG_USER_PROMPTS: not enabled (LogUserPrompts=false)'
-                    # pinned off whenever prompts are on: unset, it FALLS BACK
-                    # to OTEL_LOG_USER_PROMPTS - see the comment above
+                    # three-way: own flag on -> "1"; off but prompts on ->
+                    # pinned "0" (unset FALLS BACK to OTEL_LOG_USER_PROMPTS -
+                    # see the comment above); both off -> client default
                     LogAssistantResponsesLine: !If
-                      - WantLogUserPrompts
-                      - 'OTEL_LOG_ASSISTANT_RESPONSES: "0"'
-                      - '# OTEL_LOG_ASSISTANT_RESPONSES: default (prompt capture off)'
+                      - WantLogAssistantResponses
+                      - 'OTEL_LOG_ASSISTANT_RESPONSES: "1"'
+                      - !If
+                        - WantLogUserPrompts
+                        - 'OTEL_LOG_ASSISTANT_RESPONSES: "0"'
+                        - '# OTEL_LOG_ASSISTANT_RESPONSES: default (capture off)'
           Secrets:
             - Name: OIDC_CLIENT_SECRET
               ValueFrom: !Ref OktaClientSecret

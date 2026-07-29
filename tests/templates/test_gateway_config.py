@@ -188,15 +188,17 @@ def _managed_body():
     return "\n".join(body)
 
 
-def _managed_policies(min_version=True, log_prompts=False):
+def _managed_policies(min_version=True, log_prompts=False, log_responses=False):
     """Parse the rendered managed: block into policy dicts.
 
     min_version toggles the RequiredMinVersionLine render: True is the
     HaveMinClientVersion branch (the deploy-gateway.sh default - it always
     passes CLAUDE_VERSION unless MIN_CLIENT_VERSION=none), False the
     disabled branch (a YAML comment line, so the block must stay parseable).
-    log_prompts toggles LogUserPromptsLine the same way; False is the
-    template default (prompt capture is opt-in).
+    log_prompts / log_responses toggle the two capture flags the same way;
+    False is the template default for both (capture is opt-in). The
+    responses line reproduces the template's three-way !If: own flag on ->
+    "1"; off with prompts on -> pinned "0"; both off -> comment.
     """
     raw = _managed_body()
     repl = ("requiredMinimumVersion: '2.1.207'" if min_version
@@ -205,8 +207,9 @@ def _managed_policies(min_version=True, log_prompts=False):
     repl = ('OTEL_LOG_USER_PROMPTS: "1"' if log_prompts
             else "# OTEL_LOG_USER_PROMPTS: not enabled (LogUserPrompts=false)")
     raw = raw.replace("${LogUserPromptsLine}", repl)
-    repl = ('OTEL_LOG_ASSISTANT_RESPONSES: "0"' if log_prompts
-            else "# OTEL_LOG_ASSISTANT_RESPONSES: default (prompt capture off)")
+    repl = ('OTEL_LOG_ASSISTANT_RESPONSES: "1"' if log_responses
+            else ('OTEL_LOG_ASSISTANT_RESPONSES: "0"' if log_prompts
+                  else "# OTEL_LOG_ASSISTANT_RESPONSES: default (capture off)"))
     raw = raw.replace("${LogAssistantResponsesLine}", repl)
     raw = raw.replace("${OpusModelId}", "claude-opus-4-8")
     raw = raw.replace("${SonnetModelId}", "claude-sonnet-5")
@@ -393,50 +396,76 @@ def test_log_user_prompts_is_opt_in_and_conditional():
       FORWARD_ACTIVITY_LOGS=true: prompt text travels inside the activity
       stream, so without forwarding it is silently dropped at the gateway
       while the operator believes prompts are being captured.
-    - When prompts are on, OTEL_LOG_ASSISTANT_RESPONSES must be pinned to
-      "0": unset, that knob FALLS BACK to OTEL_LOG_USER_PROMPTS (clients
-      >= 2.1.193, per the monitoring docs), so omitting the pin silently
-      un-redacts assistant response text the flag never claimed to capture.
+    - Response capture (LogAssistantResponses) is its OWN opt-in,
+      independent of prompts. When responses are OFF while prompts are ON,
+      OTEL_LOG_ASSISTANT_RESPONSES must be pinned to "0": unset, that knob
+      FALLS BACK to OTEL_LOG_USER_PROMPTS (clients >= 2.1.193, per the
+      monitoring docs), so omitting the pin silently un-redacts assistant
+      response text the prompts flag never claimed to capture.
     """
-    # disabled branch (the default): block parses, keys absent everywhere
-    for policy in _managed_policies(log_prompts=False):
+    # both off (the default): block parses, keys absent everywhere
+    for policy in _managed_policies(log_prompts=False, log_responses=False):
         env = policy.get("cli", {}).get("env", {})
         assert "OTEL_LOG_USER_PROMPTS" not in env
         assert "OTEL_LOG_ASSISTANT_RESPONSES" not in env
-    # enabled branch: prompts on, response fallback explicitly pinned off
+    # prompts only: response fallback explicitly pinned off
     cli = _managed_policies(log_prompts=True)[-1]["cli"]
     assert cli["env"]["OTEL_LOG_USER_PROMPTS"] == "1"
     assert cli["env"]["OTEL_LOG_ASSISTANT_RESPONSES"] == "0", (
         "without the explicit '0', OTEL_LOG_ASSISTANT_RESPONSES falls back "
         "to OTEL_LOG_USER_PROMPTS and captures assistant responses too"
     )
+    # responses only: valid independently of prompts
+    cli = _managed_policies(log_prompts=False, log_responses=True)[-1]["cli"]
+    assert "OTEL_LOG_USER_PROMPTS" not in cli["env"]
+    assert cli["env"]["OTEL_LOG_ASSISTANT_RESPONSES"] == "1"
+    # both on
+    cli = _managed_policies(log_prompts=True, log_responses=True)[-1]["cli"]
+    assert cli["env"]["OTEL_LOG_USER_PROMPTS"] == "1"
+    assert cli["env"]["OTEL_LOG_ASSISTANT_RESPONSES"] == "1"
     text = _template_text()
     assert re.search(r"LogUserPromptsLine:\s*!If", text), (
         "LogUserPromptsLine should be conditional on WantLogUserPrompts"
     )
     assert "WantLogUserPrompts" in text
+    assert re.search(r"LogAssistantResponsesLine:\s*!If", text), (
+        "LogAssistantResponsesLine should be conditional on "
+        "WantLogAssistantResponses"
+    )
+    assert "WantLogAssistantResponses" in text
     assert "- '# OTEL_LOG_USER_PROMPTS: not enabled (LogUserPrompts=false)'" in text, (
         "the WantLogUserPrompts else-branch must stay a full-line YAML comment"
     )
-    # the parameter default is the safe side
-    m = re.search(r"^  LogUserPrompts:\n(?:.*\n)*?    Default: '(\w+)'",
-                  text, re.M)
-    assert m and m.group(1) == "false", "LogUserPrompts must default to 'false'"
-    # the marker sits inside the env: block of the managed body
+    assert "- '# OTEL_LOG_ASSISTANT_RESPONSES: default (capture off)'" in text, (
+        "the both-off else-branch must stay a full-line YAML comment"
+    )
+    # the parameter defaults are the safe side
+    for param in ("LogUserPrompts", "LogAssistantResponses"):
+        m = re.search(r"^  %s:\n(?:.*\n)*?    Default: '(\w+)'" % param,
+                      text, re.M)
+        assert m and m.group(1) == "false", f"{param} must default to 'false'"
+    # the markers sit inside the env: block of the managed body
     body = _managed_body()
     env_ix = body.index("env:")
-    marker_ix = body.index("${LogUserPromptsLine}")
-    assert env_ix < marker_ix, "LogUserPromptsLine must render inside cli.env:"
-    # the deploy script refuses prompt capture without the activity stream
+    for marker in ("${LogUserPromptsLine}", "${LogAssistantResponsesLine}"):
+        assert env_ix < body.index(marker), (
+            f"{marker} must render inside cli.env:"
+        )
+    # the deploy script refuses capture without the activity stream (the
+    # guard spans lines, hence re.S), and passes both parameters
     script = open(os.path.join(
         os.path.dirname(__file__), "..", "..", "scripts", "deploy-gateway.sh"
     )).read()
     assert re.search(
-        r'LOG_USER_PROMPTS.*=.*"true".*&&.*FORWARD_ACTIVITY_LOGS.*!=.*"true"',
-        script,
-    ), "deploy-gateway.sh must gate LOG_USER_PROMPTS on FORWARD_ACTIVITY_LOGS"
+        r'LOG_USER_PROMPTS.*=.*"true".*\|\|.*LOG_ASSISTANT_RESPONSES.*=.*"true"'
+        r'.*&&.*FORWARD_ACTIVITY_LOGS.*!=.*"true"',
+        script, re.S,
+    ), "deploy-gateway.sh must gate both capture flags on FORWARD_ACTIVITY_LOGS"
     assert "LogUserPrompts=${LOG_USER_PROMPTS:-false}" in script, (
         "deploy-gateway.sh must pass LogUserPrompts (default false)"
+    )
+    assert "LogAssistantResponses=${LOG_ASSISTANT_RESPONSES:-false}" in script, (
+        "deploy-gateway.sh must pass LogAssistantResponses (default false)"
     )
 
 

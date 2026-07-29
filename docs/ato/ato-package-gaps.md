@@ -57,7 +57,7 @@ content); **org** = only the deploying organization can produce it (§3).
 |---|---|---|---|---|---|
 | GAP-4 | Incident Response Plan | P2 | repo + org | Open | Containment primitives all exist but are scattered; there is no "revoke this user now" procedure anywhere. Partial material: `om-runbooks.md` §9, `cost-controls.md` §5. Reporting timelines are an org input |
 | GAP-5 | Contingency plan / DR with declared RTO and RPO | P2 | repo + operator | Open | Facts are settled (`MultiAZ` default `true`, `BackupRetentionDays` default 14, `DesiredCount` default 2, single region); what is missing is the *declaration* plus a criticality table, the no-cross-region-DR acceptance, and a DR test record. Restore is teardown+restore — that is the RTO driver (`om-runbooks.md` §8) |
-| GAP-6 | Privacy analysis / PTA | P2 | repo + org | Open | The minimization work is already done and creditable (pgaudit excludes bind values; prompt content redacted from the activity stream by default — the `LOG_USER_PROMPTS=true` opt-in removes that minimization and must be declared in the analysis if enabled); the determination of whether a full PIA/SORN is required is the org privacy office's |
+| GAP-6 | Privacy analysis / PTA | P2 | repo + org | Open | The minimization work is already done and creditable (pgaudit excludes bind values; prompt/response content redacted from the activity stream by default — the `LOG_USER_PROMPTS=true` / `LOG_ASSISTANT_RESPONSES=true` opt-ins remove that minimization and must be declared in the analysis if enabled); the determination of whether a full PIA/SORN is required is the org privacy office's |
 | GAP-7 | Rules of Behavior / acceptable use | P2 | repo + org | Open | The most conspicuous absence for a genAI ATO. Needs a user-facing section carried into `user-manual.pdf` as well as the ATO-facing document |
 | GAP-8 | Continuous monitoring (ConMon) strategy | P2 | repo + org | Open | No alarm ownership, review cadence, or reassessment trigger exists. Make an SNS subscription an explicit ATO condition — with `ALARM_SNS_TOPIC_ARN` empty, the alarms fire into nothing (`monitoring-and-retention.md` §2) |
 | GAP-9 | Vulnerability and patch management | P2 | repo | Open | ECR `scanOnPush=true` is set in `scripts/common.sh` and documented nowhere. Also needs the severity→window SLA, the four-base-image + collector + plugin patch path, how `claude` binary CVEs are learned given locked auto-updates, an SBOM statement, and pen-test scope |
@@ -161,8 +161,9 @@ retained, and whether a full PIA or SORN is required — the last being the org
 privacy office's determination, not this document's.
 *Inputs:* `fips-199-categorization.md` §2 (information types IT-3, IT-5, IT-6,
 IT-7); `monitoring-and-retention.md` §3 (retention); the minimization facts
-(pgaudit `log_parameter=0`; prompt content redacted from the activity stream
-by default — conditional on `LOG_USER_PROMPTS` staying off).
+(pgaudit `log_parameter=0`; prompt/response content redacted from the
+activity stream by default — conditional on `LOG_USER_PROMPTS` and
+`LOG_ASSISTANT_RESPONSES` staying off).
 
 ```
 ## 1. Purpose and determination sought
