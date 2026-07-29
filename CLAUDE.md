@@ -49,6 +49,13 @@ lands in the activity stream (env-var names and event semantics are
 doc-verified against Anthropic's monitoring docs, not yet exercised against
 this gateway).
 
+**Pending publish (2026-07-29):** both client installers now seed
+`hasCompletedOnboarding: true` in `.claude.json` at install time — without
+it every fresh install dies at the client's Anthropic connectivity preflight
+("Unable to connect to Anthropic services") before the gateway login screen.
+Reaches the fleet on the next `publish-portal-release.sh` run (no image or
+template changes).
+
 Open security/technical findings (none critical or high) are tracked in
 `docs/ato/poam.md` — the source of truth for remediation status — derived
 from the point-in-time assessment `docs/ato/security-assessment-2026-07.md`,

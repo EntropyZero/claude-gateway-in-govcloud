@@ -1383,10 +1383,15 @@ completes the Okta round-trip; `/model` lists only the three served models
 
 *Prevention:* tell developers to sign out with **`claude auth logout`**, never
 `/logout`; that path leaves onboarding intact, so `claude` still starts and
-`/login` reconnects. The same trap applies to a **fresh install** on a
-locked-down laptop — a first-ever run has `hasCompletedOnboarding` unset and
-takes the identical preflight path — so exercise a never-used profile before
-any broad rollout rather than discovering it per-user.
+`/login` reconnects. A **fresh install** used to hit the same trap — a
+first-ever run has `hasCompletedOnboarding` unset and takes the identical
+preflight path — so both installers now set the flag at install time
+(creating `.claude.json` when the machine has no Claude config). That fix
+reaches the fleet only once `publish-portal-release.sh` has uploaded the
+updated installers to the artifacts bucket — the portal serves whatever was
+last published. A fresh install showing this failure means the published
+installers predate the fix: re-publish, then re-run the installer, or apply
+the steps above.
 
 *Rollback / recovery:* the edit is a single boolean in a backed-up file;
 restore `.claude.json.bak` to undo. Nothing server-side changes.

@@ -109,7 +109,7 @@ The ZIP contains `claude.exe`, the installer script
 deployment's standard options baked in, a `README.txt`, and — when the
 deployment bundles one — an `extra-ca.pem` trust file. Extract it and
 double-click **`install.cmd`**. No elevation prompt appears; the installer
-does exactly three things, all in your own profile:
+does exactly four things, all in your own profile:
 
 - **Binary** → `%USERPROFILE%\.local\bin\claude.exe`, verified (SHA-256
   against the release manifest + Anthropic Authenticode) on a local staging
@@ -127,6 +127,13 @@ does exactly three things, all in your own profile:
   | `DISABLE_AUTOUPDATER` = `1` | `-DisableUpdates` | Background-check lockdown, defense in depth |
   | `OTEL_RESOURCE_ATTRIBUTES` | `-Team` / `-CostCenter` (your portal picks, passed via `install.cmd`) | Telemetry grouping labels (`team=…,cost_center=…`); telemetry itself is enabled centrally by the gateway |
   | `NODE_EXTRA_CA_CERTS` | `-ExtraCaCertPath` | Enterprise CA trust for the gateway TLS chain (the precompiled binary honors it) |
+
+- **Onboarding flag** → `hasCompletedOnboarding: true` is set in
+  `%USERPROFILE%\.claude.json` (created if the machine has no Claude config
+  at all; existing keys are preserved, an unparseable file is never
+  overwritten). Without it, a first-ever run tries to reach Anthropic's
+  public endpoints — blocked on this network — and exits with "Unable to
+  connect to Anthropic services" before the gateway login appears (§5.6).
 
 These are ordinary environment variables, honored from the user settings
 file — **not** policy keys. The installer never writes
@@ -148,7 +155,7 @@ bash install.sh
 ```
 
 No root or sudo is involved; the installer is the Linux twin of the Windows
-one and does the same three user-scope things:
+one and does the same four user-scope things:
 
 - **Binary** → `~/.local/bin/claude` (mode 0755), verified by SHA-256
   against the release manifest on a local staging copy before it is moved
@@ -163,6 +170,9 @@ one and does the same three user-scope things:
   refuses to overwrite a file it cannot parse). The one path difference: a
   bundled enterprise CA is copied to `~/.local/bin/claude-extra-ca.pem` and
   referenced from `NODE_EXTRA_CA_CERTS`.
+- **Onboarding flag** → `hasCompletedOnboarding: true` is set in
+  `~/.claude.json`, same rules and rationale as §2.2's onboarding bullet
+  (§5.6 has the failure this prevents).
 
 The installer refuses to run as root (it would install into root's home, not
 yours). After installing, **open a new terminal** and continue with §3 — the
@@ -331,10 +341,12 @@ persists, so you will not have to sign in again.
 ### 5.6 Startup fails: "Unable to connect to Anthropic services"
 
 Claude Code exits at launch before any login screen appears. This happens
-when the onboarding flag is unset — on a first-ever run on a clean profile,
-or after running the `/logout` slash command — because a not-yet-onboarded
-client tries to reach Anthropic's public endpoints, which this network blocks
-by design.
+when the onboarding flag is unset — after running the `/logout` slash
+command, or on a profile that was never touched by the installer — because a
+not-yet-onboarded client tries to reach Anthropic's public endpoints, which
+this network blocks by design. The installer sets this flag for you at
+install time, so on a fresh install you should not see this error; if you
+do, or you ran `/logout`, fix it as follows.
 
 Fix (no admin needed): mark onboarding as completed in
 `%USERPROFILE%\.claude.json`:

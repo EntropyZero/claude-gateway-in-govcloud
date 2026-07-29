@@ -121,6 +121,110 @@ Describe 'Write-UserSettings' {
   }
 }
 
+Describe 'Set-OnboardingComplete' {
+
+  It 'creates .claude.json with hasCompletedOnboarding true (boolean) when none exists' {
+    $path = Join-Path $TestDrive 'fresh-state/.claude.json'
+    $r = Set-OnboardingComplete -StatePath $path
+    $r.Applied | Should -BeTrue
+    $round = Get-Content -Raw $path | ConvertFrom-Json
+    $round.hasCompletedOnboarding | Should -BeOfType [bool]
+    $round.hasCompletedOnboarding | Should -BeTrue
+  }
+
+  It 'preserves existing keys and flips false to true' {
+    $path = Join-Path $TestDrive 'flip/.claude.json'
+    New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
+    '{"hasCompletedOnboarding":false,"numStartups":3,"projects":{"C:\\x":{"history":["a"]}}}' |
+      Set-Content -LiteralPath $path
+    $r = Set-OnboardingComplete -StatePath $path
+    $r.Applied | Should -BeTrue
+    $round = Get-Content -Raw $path | ConvertFrom-Json
+    $round.hasCompletedOnboarding   | Should -BeTrue
+    $round.numStartups              | Should -Be 3
+    $round.projects.'C:\x'.history[0] | Should -Be 'a'
+  }
+
+  It 'leaves an already-true file byte-identical (no rewrite)' {
+    $path = Join-Path $TestDrive 'noop/.claude.json'
+    New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
+    # Distinctive formatting ConvertTo-Json would normalize - proves no rewrite.
+    $original = '{"hasCompletedOnboarding": true,   "keep":"me"}'
+    [System.IO.File]::WriteAllText($path, $original,
+      (New-Object System.Text.UTF8Encoding($false)))
+    $r = Set-OnboardingComplete -StatePath $path
+    $r.Applied | Should -BeTrue
+    [System.IO.File]::ReadAllText($path) | Should -Be $original
+  }
+
+  It 'refuses a non-object .claude.json (Applied=$false, file intact)' {
+    # Without the object guard, the ARRAY's .NET properties (Length, Rank,
+    # SyncRoot...) would be serialized over the file. The bash twin refuses
+    # the same way.
+    $path = Join-Path $TestDrive 'array-state/.claude.json'
+    New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
+    '[1,2]' | Set-Content -LiteralPath $path
+    $r = Set-OnboardingComplete -StatePath $path
+    $r.Applied | Should -BeFalse
+    $r.Error   | Should -Match 'not a JSON object'
+    (Get-Content -Raw $path).Trim() | Should -Be '[1,2]'   # untouched
+  }
+
+  It 'rewrites a truthy-but-not-boolean flag ("true"/1) to boolean true' {
+    # PowerShell's loose -eq would treat these as already-set and skip the
+    # rewrite - but the client's startup gate needs boolean true, so a
+    # hand-edited file with "true" must be fixed, not skipped.
+    foreach ($bad in '"true"', '1') {
+      $path = Join-Path $TestDrive "truthy-$($bad -replace '\W','')/.claude.json"
+      New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
+      "{`"hasCompletedOnboarding`":$bad}" | Set-Content -LiteralPath $path
+      $r = Set-OnboardingComplete -StatePath $path
+      $r.Applied | Should -BeTrue
+      $round = Get-Content -Raw $path | ConvertFrom-Json
+      $round.hasCompletedOnboarding | Should -BeOfType [bool]
+      $round.hasCompletedOnboarding | Should -BeTrue
+    }
+  }
+
+  It 'refuses to clobber an unparseable .claude.json (Applied=$false, file intact)' {
+    $path = Join-Path $TestDrive 'corrupt-state/.claude.json'
+    New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
+    '{ this is not json' | Set-Content -LiteralPath $path
+    $r = Set-OnboardingComplete -StatePath $path
+    $r.Applied | Should -BeFalse
+    $r.Error   | Should -Match 'not valid JSON'
+    Get-Content -Raw $path | Should -Match 'this is not json'   # untouched
+  }
+
+  It 'does NOT throw and reports Applied=$false when the write is denied' {
+    # A DIRECTORY where the file must go - deterministic stand-in for a
+    # denied write. The install must degrade, not abort.
+    $path = Join-Path $TestDrive 'blocked-state/.claude.json'
+    New-Item -ItemType Directory -Force -Path $path | Out-Null
+    $r = Set-OnboardingComplete -StatePath $path
+    $r.Applied | Should -BeFalse
+    $r.Error   | Should -Not -BeNullOrEmpty
+    Test-Path -LiteralPath "$path.tmp" | Should -BeFalse   # temp cleaned up
+  }
+
+  It 'writes UTF-8 WITHOUT a BOM (claude.exe rejects BOM-d JSON)' {
+    $path = Join-Path $TestDrive 'bom-state/.claude.json'
+    Set-OnboardingComplete -StatePath $path | Out-Null
+    $bytes = [System.IO.File]::ReadAllBytes($path)
+    $bytes[0] | Should -Not -Be 0xEF
+    $bytes[0] | Should -Be ([byte][char]'{')
+  }
+
+  It 'treats an empty existing file as fresh' {
+    $path = Join-Path $TestDrive 'empty-state/.claude.json'
+    New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
+    '' | Set-Content -LiteralPath $path
+    $r = Set-OnboardingComplete -StatePath $path
+    $r.Applied | Should -BeTrue
+    (Get-Content -Raw $path | ConvertFrom-Json).hasCompletedOnboarding | Should -BeTrue
+  }
+}
+
 Describe 'Installer parameter validation' {
 
   It 'rejects a CostCenter containing a comma' {
