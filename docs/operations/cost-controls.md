@@ -44,9 +44,15 @@ filled in and AWS credentials for the deployment region (scripts source
      breakdown with `team` / `cost_center` / `user_groups` / `session_id`
      labels. This is what Grafana reads. AMP is authoritative for analytics
      only — an AMP outage never affects enforcement, and vice versa.
-- **Scopes and precedence:** caps exist per **user** (`sub` or email), per
-  **Okta group** (`rbac_group`), and **org-wide**. A per-user cap wins over
-  group caps. When a user matches several group caps they combine per
+- **Scopes and precedence:** caps exist per **user**, per **Okta group**
+  (`rbac_group`), and **org-wide**. A per-user cap wins over group caps.
+  **User caps match by the exact principal `oidc:<sub>` only** (verified
+  against the 2.1.220 binary and live, 2026-07-29): the API accepts any
+  string as `user_id` and returns success, but a cap keyed by email or a
+  bare sub silently never applies. Both admin paths below therefore
+  resolve an entered email to the principal (via the gateway's own
+  identity table) before writing; the user must have signed in at least
+  once for that resolution to succeed. When a user matches several group caps they combine per
   `SPEND_GROUP_LIMIT_MODE` (`min`, the default, takes the most restrictive —
   adding someone to a group can only tighten their cap; `max` takes the most
   permissive). Currency is USD only, enforced by the gateway.
@@ -79,6 +85,15 @@ individual actor (`oidc:<sub>`) — **no WRITE key is stored anywhere in the
 portal**. (The portal task does inject the READ-ONLY key for the usage read
 paths — §3.4 — but mutations always ride a per-admin bearer.)
 
+On the caps page, a user cap can be entered by **email** (resolved to the
+gateway principal before writing — an unresolvable email is refused with
+the reason) or by `oidc:<sub>` directly; a bare sub is refused outright
+(it would be stored but never apply). The grid shows the email with the
+principal beneath it. **Remove deletes the cap row** so the user falls
+back to group/org caps; a row displayed as *UNLIMITED override* (null
+amount, created by pre-2026-07-29 portal "Clear" or a raw `amount: null`
+POST) exempts that scope from every cap — remove such rows.
+
 Drift symptom: the page reports *"The gateway refused: your account is not in its
 spend-admin groups"* → `SPEND_ADMIN_GROUPS` and `PORTAL_ADMIN_GROUP` have
 diverged; re-align them and re-run the affected deploy script. An empty
@@ -91,10 +106,10 @@ Works with nothing but `deploy.env` (`GATEWAY_FQDN`, `NAME_PREFIX`) and IAM
 access to the two key secrets — no portal, no Okta session:
 
 ```bash
-scripts/set-spend-limit.sh --scope user       --id <okta-sub-or-email> --amount 50
+scripts/set-spend-limit.sh --scope user       --id <email-or-oidc-sub> --amount 50
 scripts/set-spend-limit.sh --scope rbac_group --id <okta-group-name>   --amount 2500
 scripts/set-spend-limit.sh --scope organization                        --amount 10000
-scripts/set-spend-limit.sh --scope user --id <okta-sub-or-email> --clear   # remove a cap
+scripts/set-spend-limit.sh --scope user --id <email-or-oidc-sub> --clear   # DELETE the cap row
 scripts/set-spend-limit.sh --list                                          # review all caps
 ```
 
@@ -103,6 +118,20 @@ Mechanics that matter:
 - `--amount` is **dollars** (`50` or `50.00`); the API takes whole **cents
   as a string** and the script converts exactly — no float rounding.
   `--period` is `daily` | `weekly` | `monthly` (default `monthly`).
+- **User identity:** an `--id` containing `@` is resolved to the gateway
+  principal (`oidc:<sub>`) first — caps match by exact principal only, so
+  writing the raw email would create a row that never applies. A user who
+  has never signed in cannot be resolved; pass their `oidc:<sub>` (from
+  the portal All-users page or `dump-usage.sh`) directly.
+- **`--clear` deletes the row.** It must: a cap row left behind with a
+  null amount is an explicit **UNLIMITED override** that beats the user's
+  group and org caps (verified 2.1.220) — exactly the opposite of
+  "fall back to the org quota". If `--list` shows rows with `"amount":
+  null`, remove them the same way (`--clear` with that row's scope/id/
+  period). When clearing by email, a row keyed by the **raw email** (a
+  legacy dead row from the pre-2026-07-29 behavior) is matched before the
+  resolved principal's row, so legacy rows are removable too — one
+  `--clear` per row.
 - **Key hygiene:** the script pulls
   `${NAME_PREFIX}/spend-admin-write-key` (mutations) or
   `${NAME_PREFIX}/spend-admin-read-key` (`--list`) from Secrets Manager and
@@ -256,9 +285,9 @@ go straight to §5.
 **Lift or raise:**
 
 ```bash
-scripts/set-spend-limit.sh --scope user --id <okta-sub-or-email> --amount <new-dollars>
-# or remove entirely:
-scripts/set-spend-limit.sh --scope user --id <okta-sub-or-email> --clear
+scripts/set-spend-limit.sh --scope user --id <email-or-oidc-sub> --amount <new-dollars>
+# or remove entirely (deletes the row; the user falls back to group/org caps):
+scripts/set-spend-limit.sh --scope user --id <email-or-oidc-sub> --clear
 ```
 
 Data-effective immediately on the gateway side (no redeploy); have the user

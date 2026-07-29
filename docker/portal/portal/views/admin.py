@@ -15,8 +15,10 @@ from flask import Blueprint, g, make_response, redirect, render_template, reques
 
 from ..authz import is_authorized
 from ..crypto import sign_cookie, verify_cookie
-from ..gateway import (SPEND_PERIODS, GatewayError, build_gw_cookie,
-                       build_spend_limit_body, gateway_token_sub)
+from ..gateway import (SPEND_LIMIT_ID_RE, SPEND_PERIODS, GatewayError,
+                       build_gw_cookie, build_spend_limit_body,
+                       find_spend_limit_id, gateway_token_sub,
+                       lookup_user_emails, resolve_user_email)
 from ..identity import lookup_principal_emails, record_principal_email
 from ..money import AmountError, cents_str_to_display, parse_cents, percent_used
 from ..selection import SelectionError
@@ -127,10 +129,18 @@ def _render_connected(session, gw, flash, had_flash):
             session,
             {"ok": False, "msg": "Gateway error listing caps (HTTP %s)." % status},
             clear_flash=had_flash)
+    limits = doc.get("data") or []
+    # Reverse-resolve user-scope principals (oidc:<sub>) to emails for the
+    # grid. Best-effort: unmapped principals render as the raw id.
+    user_ids = {(item.get("scope") or {}).get("user_id")
+                for item in limits if isinstance(item, dict)}
+    user_ids.discard(None)
+    user_emails = (lookup_user_emails(gateway, gw["tok"], user_ids)
+                   if user_ids else {})
     resp = make_response(render_template(
         "admin_caps.html", email=email, is_admin=True,
         version=cfg().release_version,
-        limits=doc.get("data", []),
+        limits=limits, user_emails=user_emails,
         flash=flash, csrf=csrf_for(session), periods=SPEND_PERIODS,
         cents_to_display=cents_str_to_display))
     if had_flash:
@@ -246,6 +256,14 @@ def admin_disconnect():
     return out
 
 
+def _is_email_id(scope_type, scope_id):
+    """True when a user-scope id should be email-resolved. An id already in
+    principal form (oidc:...) is never resolved - in orgs whose Okta subs
+    are themselves emails, principals legitimately contain '@'."""
+    return (scope_type == "user" and "@" in scope_id
+            and not scope_id.startswith("oidc:"))
+
+
 @bp.post("/admin/set")
 def admin_set():
     return _admin_mutate(clear=False)
@@ -278,19 +296,64 @@ def _admin_mutate(clear):
     scope_type = form.get("scope_type", "")
     scope_id = form.get("scope_id", "").strip()
     period = form.get("period", "monthly")
+    gateway = ext()["gateway"]
+    entered_id = scope_id
+    limit_id = body = None
     try:
-        body = build_spend_limit_body(
-            scope_type, scope_id, None if clear else form.get("amount", ""), period)
-    except (SelectionError, AmountError) as exc:
+        if clear:
+            # Clearing must DELETE the row: a row left behind with amount
+            # null is an explicit UNLIMITED override that beats group/org
+            # caps (binary-verified 2.1.220, observed live 2026-07-29). The
+            # grid's per-row form carries the row id directly, so even a
+            # legacy dead row (email-keyed scope id) is removable without
+            # resolving anything; the lookup path is the fallback.
+            limit_id = form.get("limit_id", "").strip()
+            if limit_id and not SPEND_LIMIT_ID_RE.match(limit_id):
+                raise SelectionError("Invalid cap row id.")
+            if not limit_id:
+                # The entered id is searched FIRST: a legacy dead row is
+                # keyed by the email itself and must stay removable - and
+                # must not shadow-delete the principal-keyed cap.
+                candidates = [scope_id]
+                if _is_email_id(scope_type, scope_id):
+                    try:
+                        candidates.append(
+                            resolve_user_email(gateway, gw["tok"], scope_id))
+                    except SelectionError:
+                        pass  # unresolvable email: the entered id may still name a legacy row
+                limit_id = find_spend_limit_id(
+                    gateway, gw["tok"], scope_type, candidates, period)
+        else:
+            # The gateway matches user caps by EXACT principal (oidc:<sub>)
+            # only - an email- or bare-sub-keyed cap is stored but never
+            # applies - so an email is resolved before anything is written,
+            # and anything neither email nor principal is refused outright.
+            if _is_email_id(scope_type, scope_id):
+                scope_id = resolve_user_email(gateway, gw["tok"], scope_id)
+            elif scope_type == "user" and scope_id and \
+                    not scope_id.startswith("oidc:"):
+                raise SelectionError(
+                    "User caps match the gateway principal exactly: enter "
+                    "the user's email or their oidc:<sub> id (the Id column "
+                    "on the All-users page). A bare sub would be stored but "
+                    "would never apply.")
+            body = build_spend_limit_body(
+                scope_type, scope_id, form.get("amount", ""), period)
+    except (SelectionError, AmountError, GatewayError) as exc:
         out = redirect("/portal/admin")
         set_flash(out, False, str(exc))
         return out
 
+    shown_id = scope_id if scope_id == entered_id else (
+        "%s [%s]" % (entered_id, scope_id))
     action = "%s %s cap for %s (%s)" % (
-        "clear" if clear else "set", scope_type, scope_id or "organization", period)
-    gateway = ext()["gateway"]
+        "remove" if clear else "set", scope_type, shown_id or "organization", period)
     try:
-        status, doc = gateway.spend_api("POST", gw["tok"], body=body)
+        if limit_id:  # set iff clearing
+            status, doc = gateway.spend_api("DELETE", gw["tok"],
+                                            path="/" + limit_id)
+        else:
+            status, doc = gateway.spend_api("POST", gw["tok"], body=body)
     except GatewayError as exc:
         out = redirect("/portal/admin")
         set_flash(out, False, str(exc))

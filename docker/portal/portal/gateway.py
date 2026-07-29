@@ -14,11 +14,13 @@ rows on /portal/me.
 """
 
 import json
+import re
 import ssl
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.client import HTTPException
 
 from .crypto import b64url_decode, sign_cookie
 from .money import dollars_to_cents
@@ -79,6 +81,12 @@ class GatewayClient:
             # store lacks the gateway ALB cert's chain - build-and-push-portal
             # stages GATEWAY_CA_BUNDLE/EXTRA_CA_CERT_PATH into the image.
             raise GatewayError("gateway unreachable: %s" % getattr(exc, "reason", exc))
+        except (OSError, HTTPException, ValueError) as exc:
+            # urllib wraps only errors during OPEN into URLError. A timeout /
+            # connection reset / short read DURING the body read, or a 200
+            # whose body is not JSON (LB error page), arrives as one of
+            # these - the callers' contract is (status, doc) or GatewayError.
+            raise GatewayError("gateway response failed: %r" % exc)
 
     def _post_form(self, url, data):
         body = urllib.parse.urlencode(data).encode("ascii")
@@ -183,11 +191,113 @@ class GatewayClient:
         return self._http("GET", url, headers=headers)
 
 
+# Gateway spend-limit ids (spl_<hex>). A form-supplied id is interpolated
+# into the DELETE URL path, so anything outside this shape is rejected
+# before it reaches the wire.
+SPEND_LIMIT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def resolve_user_email(gateway, token, email):
+    """Resolve an email address to the gateway's user principal (oidc:<sub>).
+
+    The gateway matches user-scope caps by EXACT principal string only
+    (binary-verified 2.1.220, confirmed live 2026-07-29): a cap keyed by
+    email or bare sub is accepted and stored but never applies. So the
+    portal resolves the email first, via the effective-usage search (q= is
+    a case-insensitive substring match; we then require exactly one user
+    whose email matches exactly). Raises SelectionError with a
+    user-renderable message on no match / ambiguity / gateway error."""
+    status, doc = gateway.effective_usage(
+        ("bearer", token), periods=["monthly"], q=email, limit=100)
+    if status != 200 or not isinstance(doc, dict):
+        raise SelectionError(
+            "Gateway error resolving %r to a user id (HTTP %s) - the cap was "
+            "NOT applied." % (email, status))
+    wanted = email.lower()
+    principals = {}
+    for row in doc.get("data") or []:
+        actor = (row or {}).get("actor") or {}
+        addr = actor.get("email_address")
+        if addr and addr.lower() == wanted and actor.get("user_id"):
+            principals[actor["user_id"]] = addr
+    if not principals:
+        raise SelectionError(
+            "No gateway user has the email %r. The user must have signed in "
+            "to the gateway at least once; otherwise set the cap by their "
+            "oidc:<sub> id (the Id column on the All-users page)." % email)
+    if len(principals) > 1:
+        raise SelectionError(
+            "Email %r matches %d gateway users (%s) - set the cap by "
+            "oidc:<sub> id instead." % (email, len(principals),
+                                        ", ".join(sorted(principals))))
+    return next(iter(principals))
+
+
+def find_spend_limit_id(gateway, token, scope_type, scope_ids, period):
+    """Locate a spend-limit row id for (scope_type, one of scope_ids, period)
+    via the caps listing. scope_ids is an ordered preference list - callers
+    pass [entered_id, resolved_principal] so a legacy email-keyed row is
+    found before (never shadowed by) the principal-keyed one. Raises
+    SelectionError when absent (or unlistable)."""
+    status, doc = gateway.spend_api("GET", token, path="?limit=200")
+    if status != 200 or not isinstance(doc, dict):
+        raise SelectionError(
+            "Gateway error listing caps (HTTP %s) - nothing was removed."
+            % status)
+    rows = {}
+    for item in doc.get("data") or []:
+        scope = (item or {}).get("scope") or {}
+        item_scope_id = scope.get("user_id") or scope.get("rbac_group_id") or ""
+        if (scope.get("type") == scope_type
+                and item.get("period", "monthly") == period
+                and item.get("id")):
+            rows.setdefault(item_scope_id, item["id"])
+    for scope_id in scope_ids:
+        limit_id = rows.get(scope_id)
+        if limit_id:
+            if not SPEND_LIMIT_ID_RE.match(limit_id):
+                raise SelectionError(
+                    "Gateway returned an unexpected cap row id - nothing "
+                    "was removed.")
+            return limit_id
+    raise SelectionError(
+        "No %s cap row found for %s (%s) - nothing was removed."
+        % (scope_type, " / ".join(scope_ids) or "organization", period))
+
+
+def lookup_user_emails(gateway, token, user_ids):
+    """principal -> email for the caps grid, via batched effective-usage
+    user_ids[] lookups (<=100 per call, verified untruncated by limit).
+    Best-effort: a failed batch just leaves those principals unmapped."""
+    emails = {}
+    ids = sorted(user_ids)
+    for i in range(0, len(ids), 100):
+        chunk = ids[i:i + 100]
+        try:
+            status, doc = gateway.effective_usage(
+                ("bearer", token), periods=["monthly"], user_ids=chunk,
+                limit=100)
+        except GatewayError:
+            continue
+        if status != 200 or not isinstance(doc, dict):
+            continue
+        for row in doc.get("data") or []:
+            actor = (row or {}).get("actor") or {}
+            if actor.get("user_id") and actor.get("email_address"):
+                emails[actor["user_id"]] = actor["email_address"]
+    return emails
+
+
 def build_spend_limit_body(scope_type, scope_id, amount, period):
     """The POST body for the gateway's spend-limits API (the same shape
-    scripts/set-spend-limit.sh sends). amount None clears the cap; otherwise
-    it is a DOLLAR string, converted to the API's cents-as-string. Raises
-    SelectionError / AmountError with a user-renderable message."""
+    scripts/set-spend-limit.sh sends). amount is a DOLLAR string, converted
+    to the API's cents-as-string. A None amount is REFUSED: posting
+    amount:null does not clear a cap - it stores an UNLIMITED-override row
+    that beats group/org caps (verified 2.1.220); removal is DELETE-by-id.
+    Raises SelectionError / AmountError with a user-renderable message."""
+    if amount is None:
+        raise SelectionError(
+            "a cap needs an amount - removing one deletes the row instead")
     if scope_type not in SPEND_SCOPES:
         raise SelectionError("scope must be one of: %s" % ", ".join(SPEND_SCOPES))
     if period not in SPEND_PERIODS:
@@ -201,8 +311,8 @@ def build_spend_limit_body(scope_type, scope_id, amount, period):
             raise SelectionError("a %s cap needs a plain user/group id" % scope_type)
         key = "user_id" if scope_type == "user" else "rbac_group_id"
         scope = {"type": scope_type, key: scope_id}
-    cents = None if amount is None else dollars_to_cents(amount)
-    return {"scope": scope, "amount": cents, "period": period, "currency": "USD"}
+    return {"scope": scope, "amount": dollars_to_cents(amount),
+            "period": period, "currency": "USD"}
 
 
 # Signed-cookie budget for the gateway token. Browsers enforce ~4096 bytes
