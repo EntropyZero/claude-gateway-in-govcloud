@@ -379,3 +379,73 @@ stub() { run bash -c "export PATH='$BATS_TEST_TMPDIR/bin':\$PATH AWS_REGION=r DE
   [[ "$output" == *"BRING-YOUR-OWN"* ]]
   [[ "$output" == *"arn:stale-persisted"* ]]
 }
+
+# ---- json_string_from_file (managed claudeMd push) ------------------------
+# Encodes CLAUDE_MD_FILE as a single-line JSON string literal for the
+# ManagedClaudeMd CFN parameter; the rendered `claudeMd: "..."` line must
+# parse as a YAML double-quoted scalar, so the encoding has to be exact.
+
+@test "json_string_from_file: round-trips quotes, backslashes, \${} and unicode" {
+  printf '# Rules\n- no "secrets" on CLI\n- path C:\\temp\n- ${VAR} stays literal\n- em\xe2\x80\x94dash\n' \
+    > "$BATS_TEST_TMPDIR/rules.md"
+  src "json_string_from_file '$BATS_TEST_TMPDIR/rules.md' > '$BATS_TEST_TMPDIR/enc'"
+  [ "$status" -eq 0 ]
+  # decoding the encoded value must reproduce the file byte-for-byte
+  run python3 -c '
+import json,sys
+enc = open(sys.argv[1]).read()
+orig = open(sys.argv[2], encoding="utf-8").read()
+assert json.loads(enc) == orig, "round-trip mismatch"
+print("ok")' "$BATS_TEST_TMPDIR/enc" "$BATS_TEST_TMPDIR/rules.md"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+@test "json_string_from_file: output is one double-quoted line (the CFN AllowedPattern shape)" {
+  printf 'line one\nline two\n' > "$BATS_TEST_TMPDIR/two.md"
+  src "json_string_from_file '$BATS_TEST_TMPDIR/two.md'"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 1 ]
+  [[ "$output" == '"'*'"' ]]
+  [[ "$output" != *$'\n'* ]]
+}
+
+@test "json_string_from_file: output is pure ASCII (chars == bytes for the 4096 limit)" {
+  # deploy-gateway.sh bounds ${#MANAGED_CLAUDE_MD} (a CHAR count) against
+  # CloudFormation's 4096-BYTE parameter limit - equivalent only while the
+  # encoder emits pure ASCII (json.dumps ensure_ascii=True, the default).
+  # This pins that property so an ensure_ascii=False edit fails loudly.
+  printf 'em\xe2\x80\x94dash and emoji \xf0\x9f\x98\x80\n' > "$BATS_TEST_TMPDIR/nonascii.md"
+  src "json_string_from_file '$BATS_TEST_TMPDIR/nonascii.md'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | LC_ALL=C grep -qE '^[ -~]+$'
+}
+
+@test "json_string_from_file: encoded value parses as a YAML scalar equal to the file" {
+  # Keep this fixture BMP-only: PyYAML does NOT recombine JSON
+  # surrogate-pair escapes (😀 stays two lone surrogates), while
+  # the gateway's JS YAML parser does - an emoji here would fail the TEST
+  # against content the GATEWAY round-trips fine (probed 2026-07-30).
+  printf 'a: not a mapping\n- "not a list"\n#not a comment\n' > "$BATS_TEST_TMPDIR/tricky.md"
+  src "json_string_from_file '$BATS_TEST_TMPDIR/tricky.md' > '$BATS_TEST_TMPDIR/enc2'"
+  [ "$status" -eq 0 ]
+  run python3 -c '
+import json, sys
+try:
+    import yaml
+except ImportError:
+    # pyyaml is guaranteed under make test / CI (requirements-test.txt);
+    # print a visible marker rather than silently passing elsewhere
+    print("yaml-skipped: pyyaml not installed"); sys.exit(0)
+enc = open(sys.argv[1]).read().rstrip("\n")
+doc = yaml.safe_load("claudeMd: " + enc)
+assert doc["claudeMd"] == open(sys.argv[2], encoding="utf-8").read()
+print("yaml-ok")' "$BATS_TEST_TMPDIR/enc2" "$BATS_TEST_TMPDIR/tricky.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "yaml-ok" || "$output" == yaml-skipped:* ]]
+}
+
+@test "json_string_from_file: missing file fails closed" {
+  src "json_string_from_file '$BATS_TEST_TMPDIR/absent.md'"
+  [ "$status" -ne 0 ]
+}

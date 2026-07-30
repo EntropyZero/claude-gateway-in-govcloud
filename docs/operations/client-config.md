@@ -425,7 +425,7 @@ After a client authenticates, the **gateway pushes settings to it** via its
 `/managed/settings` endpoint — the same mechanism it already uses to hand
 clients their telemetry (OTLP) configuration.
 
-Five things are pushed:
+Seven things are pushed:
 
 **a) The model allowlist — always, to every user.** The gateway pushes
 `availableModels: [<OPUS_MODEL_ID>, <SONNET_MODEL_ID>, <HAIKU_MODEL_ID>]` plus
@@ -551,6 +551,45 @@ effect at the client's next settings fetch. If your organization enables
 either, say so in your acceptable-use / rules-of-behavior material — users
 should not have to discover from a diagram that their prompts or the model's
 answers are retained.
+
+**g) Organization-wide Claude rules — only when the organization provides
+them.** Point `CLAUDE_MD_FILE` in `deploy.env` at a markdown rules file
+(start from `scripts/claude-rules.example.md`) and re-run
+`deploy-gateway.sh`: the content is pushed to every client as the `claudeMd`
+managed-settings key. The client loads it into **every session's context**,
+ahead of the user's own `~/.claude/CLAUDE.md` and any project `CLAUDE.md`
+(which add to it), and — like all managed memory — users **cannot exclude
+or override it**. Use it for short, cross-team engineering rules (secrets
+handling, verification discipline, test-before-commit); it is a
+prompt-level control, not a technical enforcement mechanism like the tool
+denies in (c). Four properties to know:
+
+- **Keep it short.** The text lands in every session for every user, so its
+  length is a per-request context cost across the whole fleet.
+  `deploy-gateway.sh` enforces the hard bound (4,096 characters
+  JSON-encoded, a CloudFormation parameter limit — just under 4 KB of
+  typical markdown, since newlines, quotes, and backslashes each encode to
+  two characters); well under that is better.
+- The deploy script JSON-string-encodes the file so arbitrary markdown
+  survives the template rendering; never paste raw markdown into the
+  `ManagedClaudeMd` stack parameter directly (the parameter's
+  `AllowedPattern` rejects it).
+- **The rules text must not contain a `${` sequence.** The gateway expands
+  `${NAME}` in its config values as *environment variables* after YAML
+  parsing — an undefined name fails the gateway boot, a defined one is
+  silently substituted into the rules text, and no escape syntax exists
+  (all verified against the 2.1.211 gateway binary). `deploy-gateway.sh`
+  and the parameter pattern both refuse the sequence; write `$NAME`, `$ {`,
+  or prose instead. Everything else — quotes, backslashes, bare `$`,
+  em-dashes, emoji — round-trips verbatim.
+- Like every managed push, changes reach clients at their **next settings
+  fetch** — no reinstall, no portal release.
+- Gateway-side behavior is binary-verified (the mirrored 2.1.211 gateway
+  boots with the key and serves the content verbatim at
+  `/managed/settings`); the client rendering the rules into context is
+  verified against the client memory documentation but **needs live
+  confirmation** — after first enabling it, run `/memory` on one client
+  and confirm the managed rules appear.
 
 The Okta **groups claim is required** for per-group spend caps
 (`scope_type` `rbac_group`), which resolve against it — so the gateway
@@ -803,8 +842,10 @@ is in force.
 - **Gateway `/managed/settings` (server-side):** the **client model allowlist**
   (`availableModels` / `enforceAvailableModels`), the web/MCP tool denies, the
   small/fast-model override, the **minimum client version floor**
-  (`requiredMinimumVersion`, defaulting to the gateway's own version), and
-  central telemetry config + update lockdown for every connected client.
+  (`requiredMinimumVersion`, defaulting to the gateway's own version),
+  optional **organization-wide Claude rules** (`claudeMd` from
+  `CLAUDE_MD_FILE`, §6g), and central telemetry config + update lockdown for
+  every connected client.
 
 The channels compose cleanly and target different keys: the installer writes no
 policy source, the managed-settings channel owns forced login, and the gateway

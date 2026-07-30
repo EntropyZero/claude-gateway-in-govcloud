@@ -98,6 +98,54 @@ if { [ "${LOG_USER_PROMPTS:-false}" = "true" ] || [ "${LOG_ASSISTANT_RESPONSES:-
   exit 1
 fi
 
+# Organization-wide Claude rules (claudeMd), pushed to every client via the
+# managed settings: CLAUDE_MD_FILE's markdown loads into every session's
+# context ahead of the user's ~/.claude/CLAUDE.md and any project CLAUDE.md,
+# and users cannot exclude it. Encoded as a single-line JSON string so
+# arbitrary markdown survives the template's YAML rendering; the CFN
+# parameter limit is 4096 chars AFTER encoding (newlines and quotes cost two
+# chars each), and the content also costs context in every session for every
+# user - keep the file short. See scripts/claude-rules.example.md.
+MANAGED_CLAUDE_MD=""
+if [ -n "${CLAUDE_MD_FILE:-}" ]; then
+  if [ ! -f "$CLAUDE_MD_FILE" ]; then
+    echo "FATAL: CLAUDE_MD_FILE='${CLAUDE_MD_FILE}' does not exist or is not a file." >&2
+    echo "       Point it at a markdown rules file (start from scripts/claude-rules.example.md)" >&2
+    echo "       or unset it in deploy.env to push no managed rules." >&2
+    exit 1
+  fi
+  # An empty file would encode to '""' - a non-empty parameter - and push
+  # EMPTY managed memory to every client instead of no claudeMd key at all.
+  # Almost certainly a touch'd placeholder: refuse it.
+  if [ ! -s "$CLAUDE_MD_FILE" ]; then
+    echo "FATAL: CLAUDE_MD_FILE='${CLAUDE_MD_FILE}' is empty." >&2
+    echo "       Fill it in (start from scripts/claude-rules.example.md) or unset it in" >&2
+    echo "       deploy.env to push no managed rules." >&2
+    exit 1
+  fi
+  # The gateway expands ${NAME} sequences in its config as ENVIRONMENT
+  # VARIABLES after YAML parsing (that is how ${OIDC_CLIENT_SECRET} works):
+  # an undefined name is a BOOT FAILURE ("undefined env var in config"), a
+  # defined one is silently substituted into the rules text. There is no
+  # escape syntax (probed $${..}, \${..}, $-encoding against the
+  # mirrored 2.1.211 binary, 2026-07-30) - so refuse the sequence outright.
+  # A bare $NAME or "$ {" is safe; only "${" triggers expansion.
+  if grep -Fq '${' "$CLAUDE_MD_FILE"; then
+    echo "FATAL: ${CLAUDE_MD_FILE} contains a '\${' sequence. The gateway expands \${NAME}" >&2
+    echo "       in its config as environment variables - undefined names fail the gateway" >&2
+    echo "       boot, defined ones are silently substituted into the rules text." >&2
+    echo "       Reword without the brace form: '\$NAME', '\$ {', or spell it out." >&2
+    exit 1
+  fi
+  MANAGED_CLAUDE_MD="$(json_string_from_file "$CLAUDE_MD_FILE")"
+  if [ "${#MANAGED_CLAUDE_MD}" -gt 4096 ]; then
+    echo "FATAL: ${CLAUDE_MD_FILE} is ${#MANAGED_CLAUDE_MD} chars JSON-encoded; the CloudFormation" >&2
+    echo "       parameter limit is 4096. Trim the rules file - its content is also loaded" >&2
+    echo "       into EVERY session's context for every user, so shorter is better anyway." >&2
+    exit 1
+  fi
+fi
+
 ARTIFACTS_BUCKET="$(ensure_artifacts_bucket)"
 
 # On failure, KEEP successfully-created resources (the stack lands in
@@ -170,6 +218,7 @@ aws cloudformation deploy \
       "HaikuModelId=${HAIKU_MODEL_ID}" \
       "HaikuBedrockModelId=${HAIKU_BEDROCK_MODEL_ID}" \
       "MinClientVersion=${MIN_CLIENT_VERSION}" \
+      "ManagedClaudeMd=${MANAGED_CLAUDE_MD}" \
       "SpendGroupLimitMode=${SPEND_GROUP_LIMIT_MODE:-min}" \
       "SpendBlockedMessage=${SPEND_BLOCKED_MESSAGE:-Contact the Claude Code platform team to request an increase.}" \
       "SpendAdminGroups=${SPEND_ADMIN_GROUPS:-}"
