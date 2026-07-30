@@ -10,6 +10,7 @@ with "Expected object, received string" (regression: the first deploy hit it).
 See https://code.claude.com/docs/en/claude-apps-gateway-config#models
 """
 
+import json
 import os
 import re
 
@@ -188,7 +189,8 @@ def _managed_body():
     return "\n".join(body)
 
 
-def _managed_policies(min_version=True, log_prompts=False, log_responses=False):
+def _managed_policies(min_version=True, log_prompts=False, log_responses=False,
+                      claude_md=None):
     """Parse the rendered managed: block into policy dicts.
 
     min_version toggles the RequiredMinVersionLine render: True is the
@@ -199,11 +201,18 @@ def _managed_policies(min_version=True, log_prompts=False, log_responses=False):
     False is the template default for both (capture is opt-in). The
     responses line reproduces the template's three-way !If: own flag on ->
     "1"; off with prompts on -> pinned "0"; both off -> comment.
+    claude_md, when set, is the RAW rules text: it is JSON-string-encoded
+    here exactly as deploy-gateway.sh's json_string_from_file does before
+    rendering the ManagedClaudeMdLine enabled branch; None is the disabled
+    branch (a YAML comment line).
     """
     raw = _managed_body()
     repl = ("requiredMinimumVersion: '2.1.207'" if min_version
             else "# requiredMinimumVersion: not set (MinClientVersion empty)")
     raw = raw.replace("${RequiredMinVersionLine}", repl)
+    repl = ("claudeMd: " + json.dumps(claude_md) if claude_md is not None
+            else "# claudeMd: not set (CLAUDE_MD_FILE empty)")
+    raw = raw.replace("${ManagedClaudeMdLine}", repl)
     repl = ('OTEL_LOG_USER_PROMPTS: "1"' if log_prompts
             else "# OTEL_LOG_USER_PROMPTS: not enabled (LogUserPrompts=false)")
     raw = raw.replace("${LogUserPromptsLine}", repl)
@@ -382,6 +391,126 @@ def test_required_minimum_version_inside_cli_and_conditional():
     cli_ix = body.index("- cli:")
     marker_ix = body.index("${RequiredMinVersionLine}")
     assert cli_ix < marker_ix, "RequiredMinVersionLine must render inside cli:"
+
+
+def test_managed_claude_md_inside_cli_and_conditional():
+    """Organization-wide Claude rules push (claudeMd, added 2026-07-30).
+
+    - `claudeMd` must sit INSIDE `cli` (it is a managed-settings key;
+      BINARY-VERIFIED against the mirrored 2.1.211 gateway 2026-07-30:
+      inside cli it boots and /managed/settings serves the content verbatim;
+      a typo'd key in the same spot fails boot with "unknown settings key").
+    - The content arrives as a SINGLE-LINE JSON string literal (produced by
+      json_string_from_file) rendered after `claudeMd: ` - a JSON string is
+      a valid YAML double-quoted scalar, so arbitrary markdown (newlines,
+      quotes, ${...}, YAML-special leading characters) must round-trip.
+    - It renders from the ManagedClaudeMdLine Sub var, gated on
+      HaveManagedClaudeMd; the disabled branch must be a full-line YAML
+      COMMENT so the block parses either way.
+    """
+    # $VAR (no brace) is legal rules content; ${VAR} is NOT - the gateway
+    # expands ${NAME} in config values as env vars, so the deploy script and
+    # the parameter pattern both reject it (see the rejects-raw test below)
+    rules = ('# Org rules\n- no "secrets" on a CLI (`ps` shows $VAR)\n'
+             '- path C:\\temp\n#not a comment\n')
+    cli = _managed_policies(claude_md=rules)[-1]["cli"]
+    assert cli["claudeMd"] == rules, "claudeMd must round-trip the raw markdown"
+    # disabled branch (the default): block still parses, key absent everywhere
+    for policy in _managed_policies(claude_md=None):
+        assert "claudeMd" not in policy
+        assert "claudeMd" not in policy.get("cli", {})
+    # never at policy level (unrecognized key there = boot failure)
+    for policy in _managed_policies(claude_md=rules):
+        assert "claudeMd" not in policy, (
+            f"claudeMd at policy level is a BOOT FAILURE: {policy!r}"
+        )
+    text = _template_text()
+    assert re.search(r"ManagedClaudeMdLine:\s*!If", text), (
+        "ManagedClaudeMdLine should be conditional on HaveManagedClaudeMd"
+    )
+    assert "HaveManagedClaudeMd" in text
+    assert "claudeMd: ${ManagedClaudeMd}" in text, (
+        "the rules content must come from the ManagedClaudeMd parameter"
+    )
+    assert "- '# claudeMd: not set (CLAUDE_MD_FILE empty)'" in text, (
+        "the HaveManagedClaudeMd else-branch must stay a full-line YAML "
+        "comment - an empty string or dangling key breaks the rendered block"
+    )
+    # the marker itself sits inside the cli: block of the body
+    body = _managed_body()
+    cli_ix = body.index("- cli:")
+    marker_ix = body.index("${ManagedClaudeMdLine}")
+    assert cli_ix < marker_ix, "ManagedClaudeMdLine must render inside cli:"
+
+
+def test_managed_claude_md_parameter_rejects_raw_markdown():
+    """The ManagedClaudeMd parameter must only accept the encoded shape: empty,
+    or one double-quoted single-line JSON string. Raw multi-line markdown
+    pasted into the parameter (bypassing deploy-gateway.sh) would render an
+    unparseable managed block - a gateway BOOT LOOP - so the AllowedPattern
+    has to catch it at deploy time. `.` not matching newlines is what rejects
+    the multi-line case, in Python and CFN's Java regex alike. The pattern
+    must ALSO reject any `${` inside the content: the gateway expands
+    ${NAME} in config values as env vars after YAML parsing - boot failure
+    when undefined, silent substitution when defined, no escape syntax
+    (all binary-verified against the mirrored 2.1.211 gateway 2026-07-30)."""
+    text = _template_text()
+    blk = text[text.index("ManagedClaudeMd:"):]
+    m = re.search(r"AllowedPattern:\s*'([^']+)'", blk)
+    assert m, "ManagedClaudeMd has no AllowedPattern"
+    pat = m.group(1)
+    assert re.fullmatch(pat, "")  # empty = feature off
+    assert re.fullmatch(pat, json.dumps('# Rules\n- with "quotes" and $VAR\n'))
+    for bad in (
+        "# Raw markdown\n- not encoded",              # raw multi-line
+        "single line without quotes",                  # unquoted
+        '"opens but never closes',                     # not a closed string
+        json.dumps("uses ${VAR} in a shell example"),  # gateway env expansion
+        '"a "b" c"',        # unescaped inner quotes - not a JSON string
+        '"abc\\"',          # trailing backslash escapes the closing quote
+        '"real\nnewline"',  # quoted but multi-line - broken rendered YAML
+    ):
+        assert not re.fullmatch(pat, bad), f"AllowedPattern accepts {bad!r}"
+
+
+def test_deploy_script_encodes_and_bounds_claude_md_file():
+    """deploy-gateway.sh must encode CLAUDE_MD_FILE via json_string_from_file
+    (the common.sh helper the bats suite pins), refuse a missing file, refuse
+    an encoded value over the 4096-char CFN parameter limit, and pass the
+    result through as ManagedClaudeMd (empty when CLAUDE_MD_FILE is unset)."""
+    script = open(os.path.join(
+        os.path.dirname(__file__), "..", "..", "scripts", "deploy-gateway.sh"
+    )).read()
+    assert 'json_string_from_file "$CLAUDE_MD_FILE"' in script, (
+        "deploy-gateway.sh must encode CLAUDE_MD_FILE with json_string_from_file"
+    )
+    assert "ManagedClaudeMd=${MANAGED_CLAUDE_MD}" in script, (
+        "deploy-gateway.sh must pass ManagedClaudeMd through"
+    )
+    assert re.search(r'-gt 4096\b', script), (
+        "deploy-gateway.sh must enforce the 4096-char CFN parameter limit "
+        "on the ENCODED value (the CFN-side MaxLength would fail with an "
+        "opaque error instead of naming CLAUDE_MD_FILE)"
+    )
+    assert re.search(r'\[ ! -f "\$CLAUDE_MD_FILE" \]', script), (
+        "deploy-gateway.sh must fail closed on a missing CLAUDE_MD_FILE"
+    )
+    assert "grep -Fq '${' \"$CLAUDE_MD_FILE\"" in script, (
+        "deploy-gateway.sh must reject rules content containing '${' - the "
+        "gateway expands ${NAME} in config values as env vars (boot failure "
+        "when undefined, silent substitution when defined; no escape syntax)"
+    )
+    assert re.search(r'\[ ! -s "\$CLAUDE_MD_FILE" \]', script), (
+        "deploy-gateway.sh must reject an EMPTY CLAUDE_MD_FILE - it would "
+        "encode to '\"\"' (a non-empty parameter) and push empty managed "
+        "memory to every client instead of no claudeMd key"
+    )
+    common = open(os.path.join(
+        os.path.dirname(__file__), "..", "..", "scripts", "common.sh"
+    )).read()
+    assert "json_string_from_file()" in common, (
+        "json_string_from_file must live in common.sh (reused, bats-tested)"
+    )
 
 
 def test_log_user_prompts_is_opt_in_and_conditional():

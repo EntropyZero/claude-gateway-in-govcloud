@@ -393,3 +393,17 @@ retry_n() {
   done
   return 1
 }
+
+# json_string_from_file FILE - print FILE's content as a single-line JSON
+# string literal (quotes included; newlines/quotes/controls escaped, non-ASCII
+# as \uXXXX). Used to carry arbitrary markdown through a CloudFormation
+# parameter into a YAML double-quoted scalar - JSON strings are valid YAML.
+json_string_from_file() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "FATAL: python3 is required to encode $1 (json_string_from_file)." >&2
+    return 1
+  fi
+  python3 -c 'import json,sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    print(json.dumps(f.read()))' "$1"
+}

@@ -160,6 +160,41 @@ Parameters:
       gateway image itself runs), so the client floor follows the gateway
       unless MIN_CLIENT_VERSION overrides it. Empty disables the check.
 
+  ManagedClaudeMd:
+    Type: String
+    Default: ''
+    # 4096 is CloudFormation's own per-parameter-value ceiling; declaring it
+    # keeps the bound visible here. deploy-gateway.sh enforces it too, with
+    # an error that names CLAUDE_MD_FILE and the measured encoded size.
+    MaxLength: 4096
+    # A SINGLE-LINE JSON string literal (double-quoted, newlines escaped as
+    # \n) - deploy-gateway.sh encodes CLAUDE_MD_FILE this way. The value is
+    # rendered verbatim after `claudeMd: ` in the managed cli block, where a
+    # JSON string parses as a YAML double-quoted scalar; RAW multi-line
+    # markdown here would render an unparseable config - a gateway BOOT
+    # LOOP, not a validation error. The pattern's body accepts only a
+    # well-formed JSON string: escape-pair or non-quote/backslash/newline
+    # characters between the quotes - so raw multi-line markdown, unescaped
+    # inner quotes ("a "b" c"), and a trailing backslash before the closing
+    # quote all fail at deploy time with this message instead. The lookahead
+    # additionally rejects any `${` inside the content: the gateway expands
+    # ${NAME} in config values as env vars after YAML parsing (boot failure
+    # when undefined, silent substitution when defined; no escape syntax -
+    # binary-verified 2026-07-30), and deploy-gateway.sh's matching guard
+    # names the offending file.
+    AllowedPattern: '((?!.*\$\{)"(\\.|[^"\\\n])*")?'
+    ConstraintDescription: >-
+      Empty, or a single-line JSON string literal (starts and ends with a
+      double quote, newlines escaped) as produced by deploy-gateway.sh from
+      CLAUDE_MD_FILE - never raw markdown.
+    Description: >-
+      Organization-wide Claude rules (markdown), pushed to every client as
+      the claudeMd managed-settings key: the content loads into every
+      session's context ahead of the user's ~/.claude/CLAUDE.md and any
+      project CLAUDE.md, and users cannot exclude it. JSON-string-encoded;
+      deploy-gateway.sh produces it from CLAUDE_MD_FILE. Empty pushes no
+      managed rules.
+
   SpendAdminGroups:
     Type: String
     Default: ''
@@ -563,6 +598,7 @@ Conditions:
   HaveAdminClientSg: !Not [!Equals [!Ref AdminClientSecurityGroupId, '']]
   HaveSpendAdminGroups: !Not [!Equals [!Ref SpendAdminGroups, '']]
   HaveMinClientVersion: !Not [!Equals [!Ref MinClientVersion, '']]
+  HaveManagedClaudeMd: !Not [!Equals [!Ref ManagedClaudeMd, '']]
   WantLogUserPrompts: !Equals [!Ref LogUserPrompts, 'true']
   WantLogAssistantResponses: !Equals [!Ref LogAssistantResponses, 'true']
   WantAdminEndpointIngress: !And [!Condition WantAnyInterfaceEndpoint, !Condition HaveAdminClientSg]
@@ -1315,6 +1351,29 @@ Resources:
             #    it is a ratchet for the installed base, not an instant gate.
             #    (Distinct from `minimumVersion`, which is the auto-updater's
             #    downgrade guard, not an enforcement key.)
+            #  * claudeMd (only when ManagedClaudeMd is set) - organization-wide
+            #    Claude rules as managed memory content: the client loads the
+            #    text into every session's context AHEAD of the user's
+            #    ~/.claude/CLAUDE.md and any project CLAUDE.md, and managed
+            #    memory cannot be excluded by the user (per the client memory
+            #    docs). The value arrives as a SINGLE-LINE JSON string literal
+            #    (deploy-gateway.sh encodes CLAUDE_MD_FILE), which is a valid
+            #    YAML double-quoted scalar - CloudFormation never re-scans
+            #    substituted VALUES, only the template string, so the content
+            #    cannot break THIS !Sub. It can break the GATEWAY though: the
+            #    gateway expands `${NAME}` in config values as ENV VARS after
+            #    YAML parsing (how ${!SPEND_ADMIN_READ_KEY} works) - an
+            #    undefined name is a boot failure, a defined one is silently
+            #    substituted, and no escape syntax exists - so both
+            #    deploy-gateway.sh and this parameter's AllowedPattern refuse
+            #    content containing `${`. BINARY-VERIFIED against the mirrored
+            #    2.1.211 gateway (2026-07-30): claudeMd inside cli boots and is
+            #    served verbatim by /managed/settings (incl. emoji via JSON
+            #    surrogate-pair escapes); `${VAR}` content fails boot with
+            #    "undefined env var in config: VAR"; a typo'd cli key fails
+            #    boot with "unknown settings key". CLIENT-side rendering into
+            #    context is doc-verified only - needs live confirmation
+            #    (check /memory on a pilot client after enabling).
             #  * env - the update lockdown, the server-side twin of the installer's
             #    -DisableUpdates. This USED to be scoped to `MANAGED_CLI_GROUPS`
             #    Okta groups; it now applies to everyone, which is strictly broader
@@ -1386,6 +1445,7 @@ Resources:
                             availableModels: ['${OpusModelId}', '${SonnetModelId}', '${HaikuModelId}']
                             enforceAvailableModels: true
                             ${RequiredMinVersionLine}
+                            ${ManagedClaudeMdLine}
                             permissions:
                               deny: ['WebFetch', 'WebSearch', 'mcp__*']
                             env:
@@ -1403,6 +1463,13 @@ Resources:
                       - HaveMinClientVersion
                       - !Sub "requiredMinimumVersion: '${MinClientVersion}'"
                       - '# requiredMinimumVersion: not set (MinClientVersion empty)'
+                    # the param value is not re-scanned by the nested !Sub;
+                    # `${` content would instead break the GATEWAY's own env
+                    # expansion, so the script + AllowedPattern reject it
+                    ManagedClaudeMdLine: !If
+                      - HaveManagedClaudeMd
+                      - !Sub 'claudeMd: ${ManagedClaudeMd}'
+                      - '# claudeMd: not set (CLAUDE_MD_FILE empty)'
                     LogUserPromptsLine: !If
                       - WantLogUserPrompts
                       - 'OTEL_LOG_USER_PROMPTS: "1"'

@@ -76,6 +76,23 @@ cost-controls §1/§2. Deploy = portal image rebuild (tag bump) +
 script fix is repo-side only. After deploy: sweep `--list` for
 email-keyed and `amount: null` rows and remove them.
 
+**Committed, NOT yet deployed (2026-07-30): optional org-wide Claude rules
+push (`claudeMd`).** `CLAUDE_MD_FILE` in deploy.env points at a markdown
+rules file (starter: `scripts/claude-rules.example.md`);
+`deploy-gateway.sh` JSON-string-encodes it (common.sh
+`json_string_from_file`, ≤4096 chars encoded) into the `ManagedClaudeMd` 02
+param, rendered as `claudeMd:` inside the catch-all policy's `cli:` block.
+Clients load the content into every session's context ahead of user/project
+CLAUDE.md; not user-excludable. Rules text must not contain `${` — the
+gateway expands `${NAME}` in config values as env vars post-parse (boot
+failure / silent substitution; no escape syntax) — script + AllowedPattern
+both reject it. Gateway-side binary-verified (mirrored 2.1.211 boots +
+`/managed/settings` serves it verbatim incl. emoji; `${VAR}` content and
+bogus keys = boot-fatal controls); client-side rendering is doc-verified
+only — after first enable, check `/memory` on a pilot client. Deploy = `deploy-gateway.sh` re-run (no
+image change); docs = client-config §6g. Gated by
+`tests/templates/test_gateway_config.py` + `tests/bash/common.bats`.
+
 **Pending publish (2026-07-29):** both client installers now seed
 `hasCompletedOnboarding: true` in `.claude.json` at install time — without
 it every fresh install dies at the client's Anthropic connectivity preflight
