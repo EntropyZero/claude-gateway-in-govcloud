@@ -173,16 +173,43 @@ Parameters:
     # JSON string parses as a YAML double-quoted scalar; RAW multi-line
     # markdown here would render an unparseable config - a gateway BOOT
     # LOOP, not a validation error. The pattern's body accepts only a
-    # well-formed JSON string: escape-pair or non-quote/backslash/newline
-    # characters between the quotes - so raw multi-line markdown, unescaped
-    # inner quotes ("a "b" c"), and a trailing backslash before the closing
-    # quote all fail at deploy time with this message instead. The lookahead
-    # additionally rejects any `${` inside the content: the gateway expands
-    # ${NAME} in config values as env vars after YAML parsing (boot failure
-    # when undefined, silent substitution when defined; no escape syntax -
-    # binary-verified 2026-07-30), and deploy-gateway.sh's matching guard
-    # names the offending file.
-    AllowedPattern: '((?!.*\$\{)"(\\.|[^"\\\n])*")?'
+    # well-formed JSON string: runs of non-quote/backslash/line-break
+    # characters interleaved with escape pairs between the quotes - so raw
+    # multi-line markdown, unescaped inner quotes ("a "b" c"), and a
+    # trailing backslash before the closing quote all fail at deploy time
+    # with this message instead. The lookahead additionally rejects any
+    # `${` inside the content: the gateway expands ${NAME} in config values
+    # as env vars after YAML parsing (boot failure when undefined, silent
+    # substitution when defined; no escape syntax - binary-verified
+    # 2026-07-30), and deploy-gateway.sh's matching guard names the
+    # offending file.
+    #
+    # SHAPE IS LOAD-BEARING - do not "simplify" the body back to the naive
+    # `(\\.|[^"\\\n])*`. CloudFormation evaluates AllowedPattern with
+    # Java's regex engine, which recurses once per iteration of an
+    # alternation group under `*`: the naive form StackOverflowErrors
+    # (surfaced as an opaque InternalFailure, not a validation error) at
+    # ~2550 chars, making the 4096 MaxLength unreachable. This unrolled
+    # POSSESSIVE form ([^...]*+ runs, one group iteration per escape
+    # pair) matches the identical language but iterates instead of
+    # recursing - verified on a calibrated JVM (Temurin 21 at a 1.9 MB
+    # stack flips the old pattern at 2550/2551 chars, consistent with the
+    # live CFN bracket of 2500-accepted / 2600-failed) to accept all
+    # 4096-char worst cases down to a 64 KB stack, 2026-07-30. Pinned by
+    # tests/templates/test_gateway_config.py.
+    #
+    # The character classes exclude ALL FIVE Java line terminators (LF,
+    # CR, NEL U+0085, LS U+2028, PS U+2029), not just LF: Java's `.`
+    # skips every one of them, so with an LF-only class a value like
+    # "a<CR>${X}" would blind the `${` lookahead (its `.*` stops at the
+    # CR) yet still match the body - CFN would accept content the gateway
+    # then env-expands. A raw CR/NEL/LS/PS is also a YAML line break,
+    # i.e. the same boot-loop class as a raw newline (adversarial-review
+    # catch, 2026-07-30, verified against OpenJDK Pattern semantics and
+    # the calibrated JVM). The escape's second character is the same
+    # explicit negated class instead of `.` so Python re (the test suite)
+    # accepts/rejects exactly what Java does here.
+    AllowedPattern: '((?!.*\$\{)"[^"\\\n\r\u0085\u2028\u2029]*+(\\[^\n\r\u0085\u2028\u2029][^"\\\n\r\u0085\u2028\u2029]*+)*+")?'
     ConstraintDescription: >-
       Empty, or a single-line JSON string literal (starts and ends with a
       double quote, newlines escaped) as produced by deploy-gateway.sh from

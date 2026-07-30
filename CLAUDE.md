@@ -92,6 +92,27 @@ bogus keys = boot-fatal controls); client-side rendering is doc-verified
 only — after first enable, check `/memory` on a pilot client. Deploy = `deploy-gateway.sh` re-run (no
 image change); docs = client-config §6g. Gated by
 `tests/templates/test_gateway_config.py` + `tests/bash/common.bats`.
+**Review catches (2026-07-30, fixed):** two defects in the original
+`ManagedClaudeMd` `AllowedPattern`. (1) The body `(\\.|[^"\\\n])*`
+StackOverflowed CloudFormation's Java regex engine past ~2550 chars
+(opaque `InternalFailure`, not a validation error — live-pinned: 2500
+accepted / 2600 failed), so the declared 4096 MaxLength was unreachable.
+Replaced with a same-language unrolled-possessive form — iterative, not
+per-char recursive (OpenJDK-source-confirmed identical JDK 8→21).
+(2) Java's `.` skips all five Java line terminators, so a raw CR (or
+NEL/LS/PS) before a `${` blinded the negative lookahead — CFN would have
+accepted `"a<CR>${X}"` — while Python `re` (the test suite) rejected it:
+divergence in the dangerous direction. The char classes now exclude all
+five terminators (each is a YAML line break anyway, same boot-loop class
+as raw LF), and the escape pair's second char is an explicit negated
+class instead of `.` so Python models Java exactly. Verified on a
+calibrated Temurin 21 JVM (at a 1.9 MB stack the old pattern flips at
+2550/2551 chars, consistent with the live 2500-accept/2600-fail bracket;
+the new pattern handles all 4096-char worst cases down to a 64 KB
+stack). Exact pattern string pinned by `test_gateway_config.py` (which
+now asserts Python ≥3.11.5 for faithful possessive-quantifier support).
+Still needs one live CFN re-probe (change-set with a 4096-char value) —
+blocked on expired AWS creds at fix time.
 
 **Pending publish (2026-07-29):** both client installers now seed
 `hasCompletedOnboarding: true` in `.claude.json` at install time — without
