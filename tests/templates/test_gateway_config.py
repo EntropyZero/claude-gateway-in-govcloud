@@ -13,6 +13,7 @@ See https://code.claude.com/docs/en/claude-apps-gateway-config#models
 import json
 import os
 import re
+import sys
 
 import pytest
 import yaml
@@ -444,23 +445,70 @@ def test_managed_claude_md_inside_cli_and_conditional():
 
 
 def test_managed_claude_md_parameter_rejects_raw_markdown():
-    """The ManagedClaudeMd parameter must only accept the encoded shape: empty,
+    r"""The ManagedClaudeMd parameter must only accept the encoded shape: empty,
     or one double-quoted single-line JSON string. Raw multi-line markdown
     pasted into the parameter (bypassing deploy-gateway.sh) would render an
     unparseable managed block - a gateway BOOT LOOP - so the AllowedPattern
-    has to catch it at deploy time. `.` not matching newlines is what rejects
-    the multi-line case, in Python and CFN's Java regex alike. The pattern
-    must ALSO reject any `${` inside the content: the gateway expands
-    ${NAME} in config values as env vars after YAML parsing - boot failure
-    when undefined, silent substitution when defined, no escape syntax
-    (all binary-verified against the mirrored 2.1.211 gateway 2026-07-30)."""
+    has to catch it at deploy time. The character classes exclude every
+    line-break character (all five Java line terminators - LF, CR, NEL,
+    LS, PS - see the template comment), which is what rejects the
+    multi-line case. The pattern must ALSO reject any `${` inside the
+    content: the gateway expands ${NAME} in config values as env vars
+    after YAML parsing - boot failure when undefined, silent substitution
+    when defined, no escape syntax (all binary-verified against the
+    mirrored 2.1.211 gateway 2026-07-30). Excluding the non-LF
+    terminators is part of that guard too: Java's `.` skips all five, so
+    with an LF-only class a CR before the `${` would blind the lookahead
+    in CFN while this Python suite still saw it - divergence in the
+    dangerous direction.
+
+    The pattern string itself is pinned EXACTLY: CloudFormation evaluates
+    AllowedPattern with Java's regex engine, whose per-iteration recursion
+    on alternation-group stars StackOverflowErrors (an opaque
+    InternalFailure) at ~2550 chars with the naive `(\\.|[^"\\\n])*` body,
+    making MaxLength 4096 unreachable. The unrolled-possessive form matches
+    the same language iteratively (JVM-calibrated to 4096 chars at a 64 KB
+    stack, 2026-07-30 - see the template comment). Python cannot exercise
+    the Java stack behavior, so any pattern change must re-run that JVM
+    verification - hence the exact-string pin. Possessive quantifiers need
+    Python >= 3.11.5 (gh-106052 fixed possessive-group-star matching in
+    3.11.5) - the floor assert below makes an older interpreter fail
+    loudly instead of silently mis-validating."""
+    assert sys.version_info >= (3, 11, 5), (
+        "Python >= 3.11.5 required: possessive quantifiers arrived in 3.11 "
+        "and gh-106052 (possessive group-star mismatch) was fixed in 3.11.5"
+    )
     text = _template_text()
     blk = text[text.index("ManagedClaudeMd:"):]
     m = re.search(r"AllowedPattern:\s*'([^']+)'", blk)
     assert m, "ManagedClaudeMd has no AllowedPattern"
     pat = m.group(1)
+    # The expected pattern is built from pieces so no literal
+    # backslash-u sequence (or raw control character) appears in this
+    # source file; the result is byte-identical to the template text.
+    bs = chr(92)
+    line_terms = bs + "u0085" + bs + "u2028" + bs + "u2029"
+    body_char = '[^"' + bs * 2 + bs + "n" + bs + "r" + line_terms + "]"
+    esc_char = "[^" + bs + "n" + bs + "r" + line_terms + "]"
+    expected = (
+        "((?!.*" + bs + "$" + bs + '{)"' + body_char + "*+("
+        + bs * 2 + esc_char + body_char + '*+)*+")?'
+    )
+    assert pat == expected, (
+        "ManagedClaudeMd AllowedPattern changed: the unrolled-possessive "
+        "shape is load-bearing (CFN Java-regex StackOverflow at ~2550 chars "
+        "otherwise), and the char classes must exclude ALL FIVE Java line "
+        "terminators (a CR/NEL/LS/PS blinds the `${` lookahead in Java and "
+        "is itself a YAML line break); re-run the JVM stack verification "
+        "before repinning"
+    )
     assert re.fullmatch(pat, "")  # empty = feature off
     assert re.fullmatch(pat, json.dumps('# Rules\n- with "quotes" and $VAR\n'))
+    # Full-length values must be accepted: plain filler and the
+    # all-escape-pairs worst case, both at the 4096-char MaxLength.
+    assert re.fullmatch(pat, '"' + "x" * 4094 + '"')
+    assert re.fullmatch(pat, '"' + "\\n" * 2047 + '"')
+    assert re.fullmatch(pat, json.dumps("# Rules\n" + "- rule with $ {x}\n" * 150))
     for bad in (
         "# Raw markdown\n- not encoded",              # raw multi-line
         "single line without quotes",                  # unquoted
@@ -469,6 +517,15 @@ def test_managed_claude_md_parameter_rejects_raw_markdown():
         '"a "b" c"',        # unescaped inner quotes - not a JSON string
         '"abc\\"',          # trailing backslash escapes the closing quote
         '"real\nnewline"',  # quoted but multi-line - broken rendered YAML
+        '"' + "x" * 4080 + '${A}"',   # ${ near the end of a max-length value
+        '"' + "x" * 4095,             # max-length but never closed
+        '"' + "x" * 4093 + '\\"',     # max-length, trailing backslash
+        '"a' + chr(0x0D) + 'b"',            # raw CR - a YAML line break too
+        '"a' + chr(0x0D) + '${X}"',         # CR blinds Java's `.*` lookahead
+        '"a' + chr(0x85) + '${X}"',         # NEL, same bypass
+        '"a' + chr(0x2028) + '${X}"',       # LS, same bypass
+        '"a' + chr(0x2029) + '${X}"',       # PS, same bypass
+        '"a' + chr(92) + chr(0x0D) + 'b"',  # backslash-CR is not an escape pair
     ):
         assert not re.fullmatch(pat, bad), f"AllowedPattern accepts {bad!r}"
 
