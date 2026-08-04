@@ -1034,16 +1034,18 @@ because their `model` / `type` labels differ.
 distinct-count panels. The same shape in `scripts/diagnostics/amp-query.py`
 uses the series endpoint instead of an identical range query.
 
-### 8.3 A usage panel misreports — five distinct shapes
+### 8.3 A usage panel misreports — six distinct shapes
 
 The dashboard's cumulative time-series compute a **per-session in-range
 rise**: the counter's peak within the range, minus the session's value at
 the range start when it was already running (baseline looked up to 7 days
 back), else the full counter; a baseline *larger* than the in-range peak
 means the counter reset, and the expression falls back to the peak alone.
-The burn-rate panels compute a **per-session in-window rise** over the
-trailing hour. Five failure modes are fixed in the shipped expressions;
-know the shapes, because they recur whenever the expressions are edited.
+The burn-rate panels compute each session's latest sample minus its peak
+in the previous hour's window (clamped at zero), with a
+monotonicity-gated fallback for sessions younger than an hour. Six
+failure modes are fixed in the shipped expressions; know the shapes,
+because they recur whenever the expressions are edited.
 
 1. **A session disappears from the graph an hour after the developer stops.**
    A trailing-1h window drains a session's contribution within an hour of
@@ -1108,24 +1110,64 @@ know the shapes, because they recur whenever the expressions are edited.
    shape 4: the **cumulative** panels stay clean across the same event
    (there a reset is a bounded under-count, shape 4's fallback note), so a
    burn-rate-only spike means a reset, not a baseline problem. *Fix:*
-   `last_over_time − min_over_time`. While the counter is monotonic within
-   the window the last sample *is* the max, so the reading is identical to
-   the old form everywhere it was right; on a reset window it yields the
-   rise from the window's **global** minimum to its latest sample — the
-   post-reset rise when the session was already running at the window
-   start, and somewhat more when the session also *started* inside the
-   window (the min is then an early pre-reset sample) — structurally
-   never negative (last ≥ min) and never more than the session's real
-   in-window spend, because dropping the between-segment rises only
-   removes non-negative terms. Never the pre-reset total. Verified
-   against the same backfilled engine: the reset scenario's hour-long
-   full-counter spike becomes the true post-reset rise, all other
-   scenarios byte-identical; `tests/templates/test_usage_dashboard.py`
-   pins this shape too. (Engine note: that validation ran on a local
-   Prometheus 3, whose range windows are left-open; AMP's lineage is
-   left-closed. A boundary sample changes neither `last` nor the sign of
-   the reading, but the equivalence has not been exercised on AMP itself —
-   check the live panels after the next dashboard deploy.)
+   make the minuend the window's *last* sample instead of its max
+   (`last_over_time − min_over_time` — the first-round fix): while the
+   counter is monotonic in-window the last sample *is* the max, so every
+   correct reading is unchanged, and a reset window reads a bounded
+   sub-window rise instead of the full counter. Superseded in the shipped
+   expression by the shape-6 form below, which handles a reset at least
+   safely: a reset contributes zero until the pre-reset peak ages out of
+   the prior-window baseline — a bounded suppression of up to two hours,
+   where `last − min` resumed reading almost immediately; the trade buys
+   interleave robustness (shape 6). (Engine note:
+   numeric validation of all these forms ran on a local Prometheus 3,
+   whose range windows are left-open; AMP's lineage is left-closed.
+   Boundary samples cannot flip a reading's sign, but the behavior has
+   not been exercised on AMP itself — check the live panels after a
+   dashboard deploy.)
+6. **A burn-rate panel still spikes after the shape-5 fix — and the raw
+   series shows a sawtooth.** Two live processes write the *same* series:
+   the raw counter (Explore, no functions) rapidly alternates between a
+   high and a low value for a few minutes, because two counters'
+   interleaved samples share one label set. Observed live 2026-08-04:
+   a ~$73 session and a ~$3 session alternating for ~9 minutes put a
+   ~$70 × 1h rectangle on the burn-rate panel. *Any* single-window
+   min/max/last delta over merged writers is polluted — `last − min`
+   reads high-writer-last minus low-writer-min for a full window-width
+   (and `increase()` is worse still: it books every low→high alternation
+   as spend, the §6-history sawtooth inflation in cost-controls). *Fix
+   (in the shipped expression):* two parts, both load-bearing. The
+   baseline is the **previous** hour window's `max_over_time`, clamped at
+   zero — an interloper can drag the current window's min down, but can
+   never drag the prior window's max down (sessions with no samples an
+   hour back fall back to `last − min`). And the whole reading — both
+   branches — is gated on `resets(...[1h]) == 0`: the prior-max baseline
+   alone defends only against a *low* interloper on a high-incumbent
+   series; the mirror image — a **high** writer landing on a low
+   incumbent, e.g. a stale process flushing a large counter — walks
+   straight through it as last(high) − prior-max(low) ≈ the full counter
+   (engine-verified: a 71.8 spike). With the global gate, any window
+   containing an alternation or a reset contributes nothing until the
+   samples run clean and the prior baseline recovers — a bounded
+   under-count of up to two hours, never a spike, in either direction.
+   Validated on the backfilled engine across a ten-scenario battery —
+   idle-resumed, fresh, reset-while-active, reset-after-flat, interleave
+   in *both* directions (low interloper on a high incumbent, high
+   interloper on a low incumbent, and the high-writer-persists variant),
+   plain active, ended — the incident's 71.6 rectangle fell to its true
+   ~0.4 burn and the high-persist mirror fell from 71.8 to a steady 0.2,
+   with the healthy shapes unchanged. The query-side fix treats the
+   symptom only: interleaved writers also corrupt the **cumulative**
+   panels, in *either* direction — the swallowed writer's spend silently
+   vanishes (under-count), or, when the range-start baseline lands on
+   the low writer's sample, the high writer's pre-range counter books as
+   phantom in-range spend (an over-count spike) — and neither is fixable
+   at query time; no query can split merged samples. Root-cause the
+   identity collision: the two writers
+   carried the same `session_id` label (or none) — check the raw series'
+   labels and the client behavior that spawned the second writer (e.g.
+   resuming a session that is still running elsewhere). Postgres `spend`
+   remains the enforcement ledger regardless (cost-controls §6).
 
 **Why tiles were always right.** Tiles and the top-users table run as
 **instant** queries: at instant evaluation the `offset $__range` window
@@ -1140,8 +1182,15 @@ pre-reset baseline); a finished session is still visible at the right
 edge an hour later; a session that ended just before the range start does
 not appear; a session idle overnight that resumes contributes only its
 new spend; no series ever contributes a negative value; a burn-rate curve
-never exceeds real in-window spend (a reset shows the post-reset rise, not
-the pre-reset total).
+never spikes by a session's full counter value on a counter reset or on
+*alternating* dual writers, in either direction (a **sequential**
+same-series handoff — one writer's samples strictly after the other's,
+never alternating, jumping upward — shows no resets and is
+indistinguishable from real spend at query time: identity-fix territory,
+and a hole every predecessor expression shared); a clean-stream burn
+reading is bounded by the session's real spend over the trailing two
+hours (the prior-window baseline can reach back up to one extra
+window-width for sparse reporters).
 
 **Multi-day ranges depend on `@` rewriting.** AMP accepts the `@` modifier.
 Multi-day ranges additionally rely on the query frontend rewriting
@@ -1162,6 +1211,9 @@ at `maxDataPoints: 200`. The 7-day baseline window widened this further
 every step, but it does scan a week of every matching series per panel
 refresh; if AMP query cost becomes a concern, the window is the knob, at
 the price of re-widening the idle-resume hole to whatever it is cut to.
+(The shape-6 burn expression grew from two to five one-hour window
+evaluations per step, reaching two hours back — still dwarfed by the
+cumulative panels' anchored 7-day scans.)
 
 **Remaining accepted caveats.** (1) A session already running before the
 range start whose samples go silent for more than **7 days** across the
@@ -1171,10 +1223,20 @@ pre-range spend included — the shape-4 misattribution, pushed out from
 counter overtakes the pre-reset value is under-counted by at most that
 pre-reset value (shape 4's fallback note above); the error is bounded,
 never negative, and never an over-count. (3) In the burn-rate panels a
-reset window under-counts: the reading is the rise from the window's
-minimum to its latest sample, which drops the rises between counter
-segments — at most one hour of that session's real spend, never negative,
-never an over-count, and gone once the reset leaves the window.
+counter reset (or any window with a dip) contributes zero until the
+samples run clean **and** the pre-reset peak ages out of the prior-window
+baseline: an under-count of up to **two hours** of that session's real
+spend, never a spike — the deliberate trade that bought shape 6's
+interleave robustness. (4) Interleaved dual writers (shape 6) are only
+*symptom*-fixed in the burn panels, and the **cumulative** panels stay
+corrupted in either direction (swallowed spend, or a phantom-spend spike
+when the range-start baseline lands on the low writer — see shape 6);
+sequential handoffs (invariants note above) evade even the burn-panel
+gate. The identity collision must be fixed at the source; no query can
+split merged samples. (5) A sparse
+reporter (sample gaps near the window width) can have up to one extra
+window-width of real spend smeared into a trailing-hour reading, because
+the prior-window-max baseline reaches back as far as two hours.
 
 **Deploying a dashboard change.** The dashboard JSON is baked into the
 Grafana image: bump `GRAFANA_IMAGE_TAG`, rebuild and push, re-run the
