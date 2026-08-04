@@ -1,6 +1,6 @@
 {
   "uid": "claude-code-usage",
-  "title": "Claude Code — Usage & Cost",
+  "title": "Claude Code \u2014 Usage & Cost",
   "description": "Usage and cost for Claude Code through the apps gateway. Group by Okta group (user_groups, stamped by the gateway JWT), team, or cost_center (workstation OTEL_RESOURCE_ATTRIBUTES). Cumulative panels hold every in-range session's final contribution to the right edge; burn-rate panels show trailing-1h activity and drain within an hour of a session ending.",
   "schemaVersion": 39,
   "editable": true,
@@ -80,12 +80,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum (max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset $__range)) or (0 * max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]))))",
+          "expr": "sum (((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[7d] offset $__range)) >= 0) or max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]))",
           "instant": true,
           "range": false
         }
       ],
-      "description": "Total cost of all sessions seen in the selected range. Per session: counter peak minus its value at the range start when the session was already running (pre-range spend excluded), else the full counter - so short/single-sample sessions still count. Matches the right edge of the cumulative panels below."
+      "description": "Total cost of all sessions seen in the selected range. Per session: counter peak minus its value at the range start when the session was already running (pre-range spend excluded; the baseline looks back up to 7d, so overnight/weekend-idle sessions do not re-count), else the full counter - so short/single-sample sessions still count. A session whose counter restarted from zero contributes its fresh counter until it overtakes the pre-reset value, then peak minus that value - an under-count of at most the pre-reset spend, never negative. Matches the right edge of the cumulative panels below."
     },
     {
       "id": 2,
@@ -110,7 +110,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum (max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset $__range)) or (0 * max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]))))",
+          "expr": "sum (((max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[7d] offset $__range)) >= 0) or max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]))",
           "instant": true,
           "range": false
         }
@@ -193,7 +193,7 @@
     {
       "id": 13,
       "type": "timeseries",
-      "title": "Cost by team — cumulative (selected range)",
+      "title": "Cost by team \u2014 cumulative (selected range)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -216,11 +216,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (team) ((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (team) ((((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[7d] @ start())) >= 0) or max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])) and count_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{team}}"
         }
       ],
-      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely; sessions whose history overlaps the range START are accounted against a trailing window, so mid-graph they can over-read and decline before settling; the RIGHT EDGE is always exact and matches the range tiles. A live session that goes >1h without exporting across the range-start boundary is treated as new (its pre-range spend counts once).",
+      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely. The range-start baseline looks back up to 7d, so a session left idle overnight or over a weekend resumes without re-counting its pre-range spend (idle >7d counts in full once); a session whose counter restarted from zero contributes its fresh counter until it overtakes the pre-reset value, then peak minus that value (an under-count of at most the pre-reset spend, with a one-time step down at the crossing; never negative). A pre-range session can show a mid-graph gap between its last old export sliding out of the lookback and its first new one; the RIGHT EDGE is always exact and matches the range tiles.",
       "maxDataPoints": 200,
       "options": {
         "legend": {
@@ -237,7 +237,7 @@
     {
       "id": 14,
       "type": "timeseries",
-      "title": "Cost by cost center — cumulative (selected range)",
+      "title": "Cost by cost center \u2014 cumulative (selected range)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -260,11 +260,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (cost_center) ((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (cost_center) ((((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[7d] @ start())) >= 0) or max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])) and count_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{cost_center}}"
         }
       ],
-      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely; sessions whose history overlaps the range START are accounted against a trailing window, so mid-graph they can over-read and decline before settling; the RIGHT EDGE is always exact and matches the range tiles. A live session that goes >1h without exporting across the range-start boundary is treated as new (its pre-range spend counts once).",
+      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely. The range-start baseline looks back up to 7d, so a session left idle overnight or over a weekend resumes without re-counting its pre-range spend (idle >7d counts in full once); a session whose counter restarted from zero contributes its fresh counter until it overtakes the pre-reset value, then peak minus that value (an under-count of at most the pre-reset spend, with a one-time step down at the crossing; never negative). A pre-range session can show a mid-graph gap between its last old export sliding out of the lookback and its first new one; the RIGHT EDGE is always exact and matches the range tiles.",
       "maxDataPoints": 200,
       "options": {
         "legend": {
@@ -281,7 +281,7 @@
     {
       "id": 15,
       "type": "timeseries",
-      "title": "Cost by Okta group — cumulative (selected range)",
+      "title": "Cost by Okta group \u2014 cumulative (selected range)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -304,11 +304,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (user_groups) ((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (user_groups) ((((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[7d] @ start())) >= 0) or max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])) and count_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{user_groups}}"
         }
       ],
-      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely; sessions whose history overlaps the range START are accounted against a trailing window, so mid-graph they can over-read and decline before settling; the RIGHT EDGE is always exact and matches the range tiles. A live session that goes >1h without exporting across the range-start boundary is treated as new (its pre-range spend counts once).",
+      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely. The range-start baseline looks back up to 7d, so a session left idle overnight or over a weekend resumes without re-counting its pre-range spend (idle >7d counts in full once); a session whose counter restarted from zero contributes its fresh counter until it overtakes the pre-reset value, then peak minus that value (an under-count of at most the pre-reset spend, with a one-time step down at the crossing; never negative). A pre-range session can show a mid-graph gap between its last old export sliding out of the lookback and its first new one; the RIGHT EDGE is always exact and matches the range tiles.",
       "maxDataPoints": 200,
       "options": {
         "legend": {
@@ -325,7 +325,7 @@
     {
       "id": 16,
       "type": "timeseries",
-      "title": "Tokens by model — cumulative (selected range)",
+      "title": "Tokens by model \u2014 cumulative (selected range)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -348,11 +348,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (model) ((max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (model) ((((max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[7d] @ start())) >= 0) or max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])) and count_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{model}}"
         }
       ],
-      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely; sessions whose history overlaps the range START are accounted against a trailing window, so mid-graph they can over-read and decline before settling; the RIGHT EDGE is always exact and matches the range tiles. A live session that goes >1h without exporting across the range-start boundary is treated as new (its pre-range spend counts once).",
+      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely. The range-start baseline looks back up to 7d, so a session left idle overnight or over a weekend resumes without re-counting its pre-range spend (idle >7d counts in full once); a session whose counter restarted from zero contributes its fresh counter until it overtakes the pre-reset value, then peak minus that value (an under-count of at most the pre-reset spend, with a one-time step down at the crossing; never negative). A pre-range session can show a mid-graph gap between its last old export sliding out of the lookback and its first new one; the RIGHT EDGE is always exact and matches the range tiles.",
       "maxDataPoints": 200,
       "options": {
         "legend": {
@@ -369,7 +369,7 @@
     {
       "id": 17,
       "type": "timeseries",
-      "title": "Tokens by type — cumulative (selected range)",
+      "title": "Tokens by type \u2014 cumulative (selected range)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -392,11 +392,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (type) ((max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (type) ((((max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[7d] @ start())) >= 0) or max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])) and count_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{type}}"
         }
       ],
-      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely; sessions whose history overlaps the range START are accounted against a trailing window, so mid-graph they can over-read and decline before settling; the RIGHT EDGE is always exact and matches the range tiles. A live session that goes >1h without exporting across the range-start boundary is treated as new (its pre-range spend counts once).",
+      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely. The range-start baseline looks back up to 7d, so a session left idle overnight or over a weekend resumes without re-counting its pre-range spend (idle >7d counts in full once); a session whose counter restarted from zero contributes its fresh counter until it overtakes the pre-reset value, then peak minus that value (an under-count of at most the pre-reset spend, with a one-time step down at the crossing; never negative). A pre-range session can show a mid-graph gap between its last old export sliding out of the lookback and its first new one; the RIGHT EDGE is always exact and matches the range tiles.",
       "maxDataPoints": 200,
       "options": {
         "legend": {
@@ -413,7 +413,7 @@
     {
       "id": 18,
       "type": "timeseries",
-      "title": "Lines of code changed — cumulative (selected range)",
+      "title": "Lines of code changed \u2014 cumulative (selected range)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -436,11 +436,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (team) ((max_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (team) ((((max_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - last_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[7d] @ start())) >= 0) or max_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])) and count_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{team}}"
         }
       ],
-      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely; sessions whose history overlaps the range START are accounted against a trailing window, so mid-graph they can over-read and decline before settling; the RIGHT EDGE is always exact and matches the range tiles. A live session that goes >1h without exporting across the range-start boundary is treated as new (its pre-range spend counts once).",
+      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely. The range-start baseline looks back up to 7d, so a session left idle overnight or over a weekend resumes without re-counting its pre-range spend (idle >7d counts in full once); a session whose counter restarted from zero contributes its fresh counter until it overtakes the pre-reset value, then peak minus that value (an under-count of at most the pre-reset spend, with a one-time step down at the crossing; never negative). A pre-range session can show a mid-graph gap between its last old export sliding out of the lookback and its first new one; the RIGHT EDGE is always exact and matches the range tiles.",
       "maxDataPoints": 200,
       "options": {
         "legend": {
@@ -457,7 +457,7 @@
     {
       "id": 19,
       "type": "timeseries",
-      "title": "Commits created — cumulative (selected range)",
+      "title": "Commits created \u2014 cumulative (selected range)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -480,11 +480,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (team) ((max_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] @ start())) or (0 * max_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))) and count_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
+          "expr": "sum by (team) ((((max_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - last_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[7d] @ start())) >= 0) or max_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])) and count_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range] @ end()))",
           "legendFormat": "{{team}}"
         }
       ],
-      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely; sessions whose history overlaps the range START are accounted against a trailing window, so mid-graph they can over-read and decline before settling; the RIGHT EDGE is always exact and matches the range tiles. A live session that goes >1h without exporting across the range-start boundary is treated as new (its pre-range spend counts once).",
+      "description": "Running total across the selected range. Each session contributes its in-range rise (counter peak minus its value at the range start if it was already running; single-sample sessions count in full). A session that STARTED inside the range freezes at its final value when it stops reporting and holds to the right edge - flat means no new activity, not missing data. Sessions with NO samples inside the range (ended before it started) are excluded entirely. The range-start baseline looks back up to 7d, so a session left idle overnight or over a weekend resumes without re-counting its pre-range spend (idle >7d counts in full once); a session whose counter restarted from zero contributes its fresh counter until it overtakes the pre-reset value, then peak minus that value (an under-count of at most the pre-reset spend, with a one-time step down at the crossing; never negative). A pre-range session can show a mid-graph gap between its last old export sliding out of the lookback and its first new one; the RIGHT EDGE is always exact and matches the range tiles.",
       "maxDataPoints": 200,
       "options": {
         "legend": {
@@ -530,7 +530,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(15, sum by (user_email, team, cost_center) (max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - ((0 + last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset $__range)) or (0 * max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))))",
+          "expr": "topk(15, sum by (user_email, team, cost_center) (((max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range]) - last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[7d] offset $__range)) >= 0) or max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[$__range])))",
           "format": "table",
           "instant": true
         }
@@ -553,7 +553,7 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Cost by team — burn rate (trailing 1h)",
+      "title": "Cost by team \u2014 burn rate (trailing 1h)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -582,7 +582,7 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Cost by cost center — burn rate (trailing 1h)",
+      "title": "Cost by cost center \u2014 burn rate (trailing 1h)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -611,7 +611,7 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Cost by Okta group — burn rate (trailing 1h)",
+      "title": "Cost by Okta group \u2014 burn rate (trailing 1h)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -640,7 +640,7 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "Tokens by model — burn rate (trailing 1h)",
+      "title": "Tokens by model \u2014 burn rate (trailing 1h)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -669,7 +669,7 @@
     {
       "id": 9,
       "type": "timeseries",
-      "title": "Tokens by type — burn rate (trailing 1h)",
+      "title": "Tokens by type \u2014 burn rate (trailing 1h)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -698,7 +698,7 @@
     {
       "id": 11,
       "type": "timeseries",
-      "title": "Lines of code changed — burn rate (trailing 1h)",
+      "title": "Lines of code changed \u2014 burn rate (trailing 1h)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"
@@ -727,7 +727,7 @@
     {
       "id": 12,
       "type": "timeseries",
-      "title": "Commits created — burn rate (trailing 1h)",
+      "title": "Commits created \u2014 burn rate (trailing 1h)",
       "datasource": {
         "type": "prometheus",
         "uid": "amp"

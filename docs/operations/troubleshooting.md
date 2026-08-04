@@ -1034,13 +1034,15 @@ because their `model` / `type` labels differ.
 distinct-count panels. The same shape in `scripts/diagnostics/amp-query.py`
 uses the series endpoint instead of an identical range query.
 
-### 8.3 A cumulative panel misreports — three distinct shapes
+### 8.3 A cumulative panel misreports — four distinct shapes
 
 The dashboard's cumulative time-series compute a **per-session in-range
 rise**: the counter's peak within the range, minus the session's value at
-the range start when it was already running, else the full counter. Three
-failure modes are fixed in the shipped expressions; know the shapes, because
-they recur whenever the expressions are edited.
+the range start when it was already running (baseline looked up to 7 days
+back), else the full counter; a baseline *larger* than the in-range peak
+means the counter reset, and the expression falls back to the peak alone.
+Four failure modes are fixed in the shipped expressions; know the shapes,
+because they recur whenever the expressions are edited.
 
 1. **A session disappears from the graph an hour after the developer stops.**
    A trailing-1h window drains a session's contribution within an hour of
@@ -1065,9 +1067,35 @@ they recur whenever the expressions are edited.
    baseline is evaluated **per plot point**, so the window slides forward
    and grows as it crosses the session's pre-range climb — a growing
    subtrahend. *Fix:* anchor the baseline at the visible range start —
-   `last_over_time(m[1h] @ start())` — a fixed window identical at every
+   `last_over_time(m[7d] @ start())` — a fixed window identical at every
    step, so each curve is exactly `counter(t) − counter(range start)`:
    monotonic, with the same right edge.
+4. **Yesterday's spend attributed to today by an idle-resumed session.**
+   A developer runs up spend, leaves the session open overnight (or over a
+   weekend), and resumes: the day view shows the full prior counter as a
+   plateau from midnight, a dip to zero mid-morning (the old samples slide
+   out of the per-step lookback before the new ones begin), then a jump to
+   the counter's resumed value — the prior day's spend counted again, in
+   tiles and curves alike. With a 1-hour baseline window, any session
+   silent for >1h across the range-start boundary had an *empty* baseline
+   and counted its full counter. *Fix (two-part, in the same per-series
+   core):* the baseline looks back **7 days** (`last_over_time(m[7d] @
+   start())`, `offset $__range` on the instant tiles), and the
+   missing-baseline fallback is the filter form
+   `((peak − baseline) >= 0) or peak` — replacing the old `(0 + baseline)
+   or (0 * peak)` arithmetic. The filter form is what makes the long
+   baseline safe: a client that restarts and resumes the *same* session id
+   re-exports its counter from zero, the difference goes negative, the
+   `>= 0` drops it, and the `or` counts the fresh counter instead of a
+   negative contribution (a zero rise passes `>= 0` and correctly stays
+   zero). The fallback is exact only while the fresh counter stays *below*
+   the pre-reset baseline; once it overtakes it the filter branch resumes
+   and the contribution becomes peak − baseline — an under-count of at
+   most the pre-reset spend, with a one-time step down in the curve at the
+   crossing (see the accepted caveats below). Both parts verified against
+   a backfilled engine with
+   idle-resumed, fresh, ended-pre-range, and counter-reset sessions;
+   `tests/templates/test_usage_dashboard.py` pins the shape.
 
 **Why tiles were always right.** Tiles and the top-users table run as
 **instant** queries: at instant evaluation the `offset $__range` window
@@ -1076,15 +1104,18 @@ them as range queries would evaluate the full-range expression at every plot
 step and keep only the last point — pure wasted AMP cost.
 
 **Invariants to re-check after any dashboard edit.** The cumulative right
-edge equals the stat tiles; curves never step down; a finished session is
-still visible at the right edge an hour later; a session that ended just
-before the range start does not appear.
+edge equals the stat tiles; curves never step down (one exception: a
+reset session steps down once when its fresh counter overtakes the
+pre-reset baseline); a finished session is still visible at the right
+edge an hour later; a session that ended just before the range start does
+not appear; a session idle overnight that resumes contributes only its
+new spend; no series ever contributes a negative value.
 
 **Multi-day ranges depend on `@` rewriting.** AMP accepts the `@` modifier.
 Multi-day ranges additionally rely on the query frontend rewriting
 `@ start()` / `@ end()` to absolute timestamps *before* its per-day split.
 Probe it with a `query_range` over a ≥3-day window of
-`last_over_time(claude_code_cost_usage[1h] @ start())` through
+`last_over_time(claude_code_cost_usage[7d] @ start())` through
 `scripts/diagnostics/amp-query.py`: every returned series must be a **flat
 constant** across the whole range. A value that steps at each 24 h boundary
 means the frontend resolved `start()` per sub-query, and the rollback is to
@@ -1094,12 +1125,20 @@ with a parse error, never with silently wrong data.
 **Cost shape.** Full-range lookbacks at every plot step are the expensive
 query shape on AMP, whose query frontend splits long range queries into
 per-day sub-queries that each refetch the whole lookback. Curves are capped
-at `maxDataPoints: 200`.
+at `maxDataPoints: 200`. The 7-day baseline window widened this further
+(from 1h) — the window is anchored, so it scans the same absolute span at
+every step, but it does scan a week of every matching series per panel
+refresh; if AMP query cost becomes a concern, the window is the knob, at
+the price of re-widening the idle-resume hole to whatever it is cut to.
 
-**Remaining accepted caveat.** A session already running before the range
-start whose samples go silent for more than an hour across the boundary has
-an empty baseline window and counts its full counter, pre-range spend
-included.
+**Remaining accepted caveats.** (1) A session already running before the
+range start whose samples go silent for more than **7 days** across the
+boundary has an empty baseline window and counts its full counter,
+pre-range spend included — the shape-4 misattribution, pushed out from
+>1h of silence to >7d. (2) A same-session-id counter reset whose fresh
+counter overtakes the pre-reset value is under-counted by at most that
+pre-reset value (shape 4's fallback note above); the error is bounded,
+never negative, and never an over-count.
 
 **Deploying a dashboard change.** The dashboard JSON is baked into the
 Grafana image: bump `GRAFANA_IMAGE_TAG`, rebuild and push, re-run the
