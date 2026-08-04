@@ -101,3 +101,30 @@ def test_descriptions_state_the_7d_baseline():
     ]
     # cost tile + 7 cumulative panels tell the reader the idle-resume behavior
     assert len(described) == 8, [p.get("title") for p in described]
+
+
+# burn-rate per-series core: last_over_time - min_over_time over the trailing
+# hour. For a monotonic-in-window counter last == max, so this reads exactly
+# like the old max - min; on a same-series counter reset inside the window it
+# yields the post-reset rise (last >= min structurally, never negative)
+# instead of spiking by the full pre-reset value for an hour.
+BURN_CORE = re.compile(
+    r"last_over_time\((?P<sel>claude_code_\w+\{[^}]*\})\[1h\]\) - "
+    r"min_over_time\((?P=sel)\[1h\]\)"
+)
+
+
+def test_burn_rate_panels_use_the_reset_safe_last_minus_min_core():
+    burn = _exprs(lambda p: "burn rate" in p.get("title", "").lower()
+                  and p.get("type") == "timeseries")
+    assert len(burn) == 7, [p.get("title") for p, _ in burn]
+    for p, e in burn:
+        assert BURN_CORE.search(e), p["title"]
+
+
+def test_no_reset_blind_trailing_window_delta_remains():
+    # max_over_time - min_over_time over a trailing window reads a counter
+    # reset as (pre-reset peak - post-reset min): the full counter value,
+    # shown as a spike for exactly one window-width
+    for p, e in _exprs():
+        assert "max_over_time" not in e or "[1h]" not in e, p.get("title")
