@@ -1628,6 +1628,29 @@ GROUP BY 1 ORDER BY n DESC LIMIT 50;
   service notes). Query *results* stay in the region; the query *text*
   (which may name IPs, users, or URLs you are investigating) is metadata —
   keep it to what belongs there. (The partition values here are dates.)
+
+  **To search the logs for a controlled value, keep it out of the SQL
+  entirely:** run a day-scoped query selecting the columns of interest with
+  no controlled literal in it, and match locally on the streamed CSV. This
+  scans the same bytes — the table is regex-parsed text, so a non-partition
+  predicate never reduces the scan, only the rows returned — and the value
+  then appears only in the result CSV (in-region *data*, in the
+  CMK-encrypted expiring results bucket) and on the operator host. Keep the
+  value off your command line too (shell history, `ps`): put the pattern in
+  a `umask 077`-created file and `grep -f` it.
+
+  ```bash
+  ./scripts/diagnostics/athena-alb-query.sh \
+    "SELECT time, client_ip, request_url, elb_status_code
+       FROM alb_access_logs
+      WHERE day BETWEEN '2026/07/20' AND '2026/07/22'" \
+    | grep -F -f "$pattern_file"   # pattern file created under umask 077
+  ```
+
+  (Athena's `--execution-parameters` would also keep the literal out of the
+  stored query string, but AWS's metadata list doesn't say whether execution
+  parameters count as query-string metadata — get a compliance ruling before
+  relying on that; the wrapper doesn't pass them today.)
 - **The two ALB-answered status codes worth knowing:** 460 (client closed
   before response — typical of client timeouts) and 502/504 with
   `target_status_code = '-'` (no target response). `actions_executed`
