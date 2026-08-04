@@ -1034,15 +1034,16 @@ because their `model` / `type` labels differ.
 distinct-count panels. The same shape in `scripts/diagnostics/amp-query.py`
 uses the series endpoint instead of an identical range query.
 
-### 8.3 A cumulative panel misreports — four distinct shapes
+### 8.3 A usage panel misreports — five distinct shapes
 
 The dashboard's cumulative time-series compute a **per-session in-range
 rise**: the counter's peak within the range, minus the session's value at
 the range start when it was already running (baseline looked up to 7 days
 back), else the full counter; a baseline *larger* than the in-range peak
 means the counter reset, and the expression falls back to the peak alone.
-Four failure modes are fixed in the shipped expressions; know the shapes,
-because they recur whenever the expressions are edited.
+The burn-rate panels compute a **per-session in-window rise** over the
+trailing hour. Five failure modes are fixed in the shipped expressions;
+know the shapes, because they recur whenever the expressions are edited.
 
 1. **A session disappears from the graph an hour after the developer stops.**
    A trailing-1h window drains a session's contribution within an hour of
@@ -1096,6 +1097,25 @@ because they recur whenever the expressions are edited.
    a backfilled engine with
    idle-resumed, fresh, ended-pre-range, and counter-reset sessions;
    `tests/templates/test_usage_dashboard.py` pins the shape.
+5. **A burn-rate panel spikes by a session's full counter value, for
+   exactly one hour.** A client restart that resumes the same session id
+   re-exports its counter from zero *while the session is actively
+   reporting*; a trailing-window `max_over_time − min_over_time` then reads
+   pre-reset peak minus post-reset minimum — approximately the whole
+   counter — at every step whose window straddles the reset, i.e. for
+   exactly one window-width. The fingerprint is the duration: the spike
+   holds flat for precisely 1h, then collapses. The discriminator from
+   shape 4: the **cumulative** panels stay clean across the same event
+   (there a reset is a bounded under-count, shape 4's fallback note), so a
+   burn-rate-only spike means a reset, not a baseline problem. *Fix:*
+   `last_over_time − min_over_time`. While the counter is monotonic within
+   the window the last sample *is* the max, so the reading is identical to
+   the old form everywhere it was right; on a reset window it yields the
+   post-reset rise (last ≥ min structurally, so never negative and never
+   the pre-reset total). Verified against the same backfilled engine: the
+   reset scenario's hour-long full-counter spike becomes the true
+   post-reset rise, all other scenarios byte-identical;
+   `tests/templates/test_usage_dashboard.py` pins this shape too.
 
 **Why tiles were always right.** Tiles and the top-users table run as
 **instant** queries: at instant evaluation the `offset $__range` window
@@ -1109,7 +1129,9 @@ reset session steps down once when its fresh counter overtakes the
 pre-reset baseline); a finished session is still visible at the right
 edge an hour later; a session that ended just before the range start does
 not appear; a session idle overnight that resumes contributes only its
-new spend; no series ever contributes a negative value.
+new spend; no series ever contributes a negative value; a burn-rate curve
+never exceeds real in-window spend (a reset shows the post-reset rise, not
+the pre-reset total).
 
 **Multi-day ranges depend on `@` rewriting.** AMP accepts the `@` modifier.
 Multi-day ranges additionally rely on the query frontend rewriting
@@ -1138,7 +1160,11 @@ pre-range spend included — the shape-4 misattribution, pushed out from
 >1h of silence to >7d. (2) A same-session-id counter reset whose fresh
 counter overtakes the pre-reset value is under-counted by at most that
 pre-reset value (shape 4's fallback note above); the error is bounded,
-never negative, and never an over-count.
+never negative, and never an over-count. (3) In the burn-rate panels a
+reset window drops the session's pre-reset in-window rise (only the
+post-reset rise is measurable from the window's samples) — an under-count
+of at most one hour of that session's real spend, gone once the reset
+leaves the window.
 
 **Deploying a dashboard change.** The dashboard JSON is baked into the
 Grafana image: bump `GRAFANA_IMAGE_TAG`, rebuild and push, re-run the

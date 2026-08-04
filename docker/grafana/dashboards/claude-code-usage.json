@@ -573,11 +573,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (team) (max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (team) (last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
           "legendFormat": "{{team}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (max_over_time - min_over_time is each session's rise within the window; single-sample sessions contribute 0). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts only the post-reset rise instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     },
     {
       "id": 6,
@@ -602,11 +602,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (cost_center) (max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (cost_center) (last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
           "legendFormat": "{{cost_center}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (max_over_time - min_over_time is each session's rise within the window; single-sample sessions contribute 0). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts only the post-reset rise instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     },
     {
       "id": 7,
@@ -631,11 +631,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (user_groups) (max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (user_groups) (last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
           "legendFormat": "{{user_groups}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (max_over_time - min_over_time is each session's rise within the window; single-sample sessions contribute 0). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts only the post-reset rise instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     },
     {
       "id": 8,
@@ -660,11 +660,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (model) (max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (model) (last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
           "legendFormat": "{{model}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (max_over_time - min_over_time is each session's rise within the window; single-sample sessions contribute 0). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts only the post-reset rise instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     },
     {
       "id": 9,
@@ -689,11 +689,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (type) (max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (type) (last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
           "legendFormat": "{{type}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (max_over_time - min_over_time is each session's rise within the window; single-sample sessions contribute 0). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts only the post-reset rise instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     },
     {
       "id": 11,
@@ -718,11 +718,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (team) (max_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (team) (last_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
           "legendFormat": "{{team}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (max_over_time - min_over_time is each session's rise within the window; single-sample sessions contribute 0). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts only the post-reset rise instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     },
     {
       "id": 12,
@@ -747,11 +747,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (team) (max_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (team) (last_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
           "legendFormat": "{{team}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (max_over_time - min_over_time is each session's rise within the window; single-sample sessions contribute 0). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts only the post-reset rise instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     }
   ]
 }
