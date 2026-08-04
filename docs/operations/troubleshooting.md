@@ -1111,11 +1111,21 @@ know the shapes, because they recur whenever the expressions are edited.
    `last_over_time − min_over_time`. While the counter is monotonic within
    the window the last sample *is* the max, so the reading is identical to
    the old form everywhere it was right; on a reset window it yields the
-   post-reset rise (last ≥ min structurally, so never negative and never
-   the pre-reset total). Verified against the same backfilled engine: the
-   reset scenario's hour-long full-counter spike becomes the true
-   post-reset rise, all other scenarios byte-identical;
-   `tests/templates/test_usage_dashboard.py` pins this shape too.
+   rise from the window's **global** minimum to its latest sample — the
+   post-reset rise when the session was already running at the window
+   start, and somewhat more when the session also *started* inside the
+   window (the min is then an early pre-reset sample) — structurally
+   never negative (last ≥ min) and never more than the session's real
+   in-window spend, because dropping the between-segment rises only
+   removes non-negative terms. Never the pre-reset total. Verified
+   against the same backfilled engine: the reset scenario's hour-long
+   full-counter spike becomes the true post-reset rise, all other
+   scenarios byte-identical; `tests/templates/test_usage_dashboard.py`
+   pins this shape too. (Engine note: that validation ran on a local
+   Prometheus 3, whose range windows are left-open; AMP's lineage is
+   left-closed. A boundary sample changes neither `last` nor the sign of
+   the reading, but the equivalence has not been exercised on AMP itself —
+   check the live panels after the next dashboard deploy.)
 
 **Why tiles were always right.** Tiles and the top-users table run as
 **instant** queries: at instant evaluation the `offset $__range` window
@@ -1161,10 +1171,10 @@ pre-range spend included — the shape-4 misattribution, pushed out from
 counter overtakes the pre-reset value is under-counted by at most that
 pre-reset value (shape 4's fallback note above); the error is bounded,
 never negative, and never an over-count. (3) In the burn-rate panels a
-reset window drops the session's pre-reset in-window rise (only the
-post-reset rise is measurable from the window's samples) — an under-count
-of at most one hour of that session's real spend, gone once the reset
-leaves the window.
+reset window under-counts: the reading is the rise from the window's
+minimum to its latest sample, which drops the rises between counter
+segments — at most one hour of that session's real spend, never negative,
+never an over-count, and gone once the reset leaves the window.
 
 **Deploying a dashboard change.** The dashboard JSON is baked into the
 Grafana image: bump `GRAFANA_IMAGE_TAG`, rebuild and push, re-run the
