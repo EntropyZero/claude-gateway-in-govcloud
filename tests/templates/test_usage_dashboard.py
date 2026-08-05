@@ -56,8 +56,11 @@ def test_every_baseline_query_uses_the_7d_reset_safe_core():
 
 
 def test_no_short_baseline_window_remains():
+    # the cumulative baseline must look back 7d, not 1h ([1h] offset 1h is
+    # fine - that is the burn-rate panels' prior-window baseline, anchored
+    # one hour back, not a range-start baseline)
     for _, e in _exprs():
-        assert "[1h] @ start()" not in e and "[1h] offset" not in e, e
+        assert "[1h] @ start()" not in e and "[1h] offset $__range" not in e, e
 
 
 def test_no_zero_arithmetic_baseline_fallback_remains():
@@ -103,18 +106,31 @@ def test_descriptions_state_the_7d_baseline():
     assert len(described) == 8, [p.get("title") for p in described]
 
 
-# burn-rate per-series core: last_over_time - min_over_time over the trailing
-# hour. For a monotonic-in-window counter last == max, so this reads exactly
-# like the old max - min; on a same-series counter reset inside the window it
-# yields the post-reset rise (last >= min structurally, never negative)
-# instead of spiking by the full pre-reset value for an hour.
+# burn-rate per-series core: latest sample minus the PREVIOUS window's peak
+# (clamped at 0; sessions with an empty prior window fall back to
+# last - min), and the whole reading is gated on window monotonicity
+# (resets == 0). The gate must wrap BOTH branches: gating only the
+# fallback defends against a low interloper on a high-incumbent series
+# (it can drag the current window's min down but not the prior window's
+# max down) yet lets the mirror image straight through - a HIGH writer
+# landing on a low incumbent makes branch one read last(high) minus
+# prior-max(low) ~ the full counter (engine-verified: a 71.8 spike).
+# With the global gate, any window containing an alternation or reset
+# contributes nothing until the samples run clean and the prior-window
+# baseline recovers - a bounded under-count of up to two hours, never a
+# spike, in either direction. Both any-window-delta predecessors
+# (max - min, last - min) spiked by ~the full counter value for exactly
+# one window-width on a reset / an interleave respectively.
 BURN_CORE = re.compile(
-    r"last_over_time\((?P<sel>claude_code_\w+\{[^}]*\})\[1h\]\) - "
-    r"min_over_time\((?P=sel)\[1h\]\)"
+    r"\(\(clamp_min\(last_over_time\((?P<sel>claude_code_\w+\{[^}]*\})\[1h\]\) - "
+    r"max_over_time\((?P=sel)\[1h\] offset 1h\), 0\)\) "
+    r"or \(last_over_time\((?P=sel)\[1h\]\) - "
+    r"min_over_time\((?P=sel)\[1h\]\)\)\) "
+    r"and \(resets\((?P=sel)\[1h\]\) == 0\)"
 )
 
 
-def test_burn_rate_panels_use_the_reset_safe_last_minus_min_core():
+def test_burn_rate_panels_use_the_interleave_proof_core():
     burn = _exprs(lambda p: "burn rate" in p.get("title", "").lower()
                   and p.get("type") == "timeseries")
     assert len(burn) == 7, [p.get("title") for p, _ in burn]
@@ -123,8 +139,10 @@ def test_burn_rate_panels_use_the_reset_safe_last_minus_min_core():
 
 
 def test_no_reset_blind_trailing_window_delta_remains():
-    # max_over_time - min_over_time over a trailing window reads a counter
+    # max_over_time - min_over_time over one trailing window reads a counter
     # reset as (pre-reset peak - post-reset min): the full counter value,
     # shown as a spike for exactly one window-width
     for p, e in _exprs():
-        assert "max_over_time" not in e or "[1h]" not in e, p.get("title")
+        assert not re.search(
+            r"max_over_time\((?P<sel>claude_code_\w+\{[^}]*\})\[1h\]\) - "
+            r"min_over_time\((?P=sel)\[1h\]\)", e), p.get("title")

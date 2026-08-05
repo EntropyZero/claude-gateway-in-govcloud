@@ -178,12 +178,13 @@ right now" from the burn-rate section.
 | **Lines of code changed / Commits created** (both sections) | Output-side context so cost is read against delivered work |
 
 Query note: everything is **window functions**, not `increase()` — reworked
-after the `session.id` label fix (§6). Burn-rate panels are
-`last_over_time - min_over_time` over the trailing hour (equal to the
-counter's in-window rise while it is monotonic, and reset-safe: a client
-restart re-exporting a session's counter from zero shows at most the
-session's real in-window spend — typically its post-reset rise — not an
-hour-long spike of the full pre-reset value); the cumulative
+after the `session.id` label fix (§6). Burn-rate panels read each
+session's latest sample minus its previous-hour-window peak, clamped at
+zero (sessions with no samples an hour ago: latest minus window
+minimum), counting only windows whose counter is monotonic
+(`resets == 0`) — a reset, or two processes alternating their counters
+on one series, contributes nothing for up to two hours instead of
+spiking the panel by ~the full counter value for an hour; the cumulative
 panels, tiles, and top-users table compute each session's in-range rise
 (counter peak minus its value at the range start when it was already
 running, else the full counter — so single-sample sessions count). Exact

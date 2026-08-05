@@ -573,11 +573,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (team) (last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (team) (((clamp_min(last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset 1h), 0)) or (last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))) and (resets(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) == 0))",
           "legendFormat": "{{team}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts at most the session's real in-window spend - typically its post-reset rise - instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed: each session's latest sample minus its peak in the PREVIOUS hour's window, clamped at 0 (sessions with no samples an hour ago: latest minus window minimum), and only windows with a monotonic counter (resets == 0) count at all. A counter reset, or two processes interleaving their counters on one series (e.g. a resumed session reporting alongside the original), therefore contributes NOTHING until the samples run clean and the prior-window baseline recovers - a bounded under-count for up to two hours, where either shape previously spiked the panel by ~the full counter value for an hour. A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     },
     {
       "id": 6,
@@ -602,11 +602,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (cost_center) (last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (cost_center) (((clamp_min(last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset 1h), 0)) or (last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))) and (resets(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) == 0))",
           "legendFormat": "{{cost_center}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts at most the session's real in-window spend - typically its post-reset rise - instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed: each session's latest sample minus its peak in the PREVIOUS hour's window, clamped at 0 (sessions with no samples an hour ago: latest minus window minimum), and only windows with a monotonic counter (resets == 0) count at all. A counter reset, or two processes interleaving their counters on one series (e.g. a resumed session reporting alongside the original), therefore contributes NOTHING until the samples run clean and the prior-window baseline recovers - a bounded under-count for up to two hours, where either shape previously spiked the panel by ~the full counter value for an hour. A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     },
     {
       "id": 7,
@@ -631,11 +631,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (user_groups) (last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (user_groups) (((clamp_min(last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - max_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset 1h), 0)) or (last_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))) and (resets(claude_code_cost_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) == 0))",
           "legendFormat": "{{user_groups}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts at most the session's real in-window spend - typically its post-reset rise - instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed: each session's latest sample minus its peak in the PREVIOUS hour's window, clamped at 0 (sessions with no samples an hour ago: latest minus window minimum), and only windows with a monotonic counter (resets == 0) count at all. A counter reset, or two processes interleaving their counters on one series (e.g. a resumed session reporting alongside the original), therefore contributes NOTHING until the samples run clean and the prior-window baseline recovers - a bounded under-count for up to two hours, where either shape previously spiked the panel by ~the full counter value for an hour. A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     },
     {
       "id": 8,
@@ -660,11 +660,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (model) (last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (model) (((clamp_min(last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset 1h), 0)) or (last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))) and (resets(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) == 0))",
           "legendFormat": "{{model}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts at most the session's real in-window spend - typically its post-reset rise - instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed: each session's latest sample minus its peak in the PREVIOUS hour's window, clamped at 0 (sessions with no samples an hour ago: latest minus window minimum), and only windows with a monotonic counter (resets == 0) count at all. A counter reset, or two processes interleaving their counters on one series (e.g. a resumed session reporting alongside the original), therefore contributes NOTHING until the samples run clean and the prior-window baseline recovers - a bounded under-count for up to two hours, where either shape previously spiked the panel by ~the full counter value for an hour. A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     },
     {
       "id": 9,
@@ -689,11 +689,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (type) (last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (type) (((clamp_min(last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - max_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset 1h), 0)) or (last_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))) and (resets(claude_code_token_usage{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) == 0))",
           "legendFormat": "{{type}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts at most the session's real in-window spend - typically its post-reset rise - instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed: each session's latest sample minus its peak in the PREVIOUS hour's window, clamped at 0 (sessions with no samples an hour ago: latest minus window minimum), and only windows with a monotonic counter (resets == 0) count at all. A counter reset, or two processes interleaving their counters on one series (e.g. a resumed session reporting alongside the original), therefore contributes NOTHING until the samples run clean and the prior-window baseline recovers - a bounded under-count for up to two hours, where either shape previously spiked the panel by ~the full counter value for an hour. A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     },
     {
       "id": 11,
@@ -718,11 +718,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (team) (last_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (team) (((clamp_min(last_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - max_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset 1h), 0)) or (last_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))) and (resets(claude_code_lines_of_code_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) == 0))",
           "legendFormat": "{{team}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts at most the session's real in-window spend - typically its post-reset rise - instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed: each session's latest sample minus its peak in the PREVIOUS hour's window, clamped at 0 (sessions with no samples an hour ago: latest minus window minimum), and only windows with a monotonic counter (resets == 0) count at all. A counter reset, or two processes interleaving their counters on one series (e.g. a resumed session reporting alongside the original), therefore contributes NOTHING until the samples run clean and the prior-window baseline recovers - a bounded under-count for up to two hours, where either shape previously spiked the panel by ~the full counter value for an hour. A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     },
     {
       "id": 12,
@@ -747,11 +747,11 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (team) (last_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))",
+          "expr": "sum by (team) (((clamp_min(last_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - max_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h] offset 1h), 0)) or (last_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) - min_over_time(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]))) and (resets(claude_code_commit_count{team=~\"$team\", cost_center=~\"$cost_center\", user_groups=~\"$okta_group\"}[1h]) == 0))",
           "legendFormat": "{{team}}"
         }
       ],
-      "description": "Accrued in the trailing hour, per session then summed (last_over_time - min_over_time is each session's rise from its lowest to its latest sample in the window; single-sample sessions contribute 0, and a counter reset inside the window counts at most the session's real in-window spend - typically its post-reset rise - instead of spiking by the full pre-reset value). A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
+      "description": "Accrued in the trailing hour, per session then summed: each session's latest sample minus its peak in the PREVIOUS hour's window, clamped at 0 (sessions with no samples an hour ago: latest minus window minimum), and only windows with a monotonic counter (resets == 0) count at all. A counter reset, or two processes interleaving their counters on one series (e.g. a resumed session reporting alongside the original), therefore contributes NOTHING until the samples run clean and the prior-window baseline recovers - a bounded under-count for up to two hours, where either shape previously spiked the panel by ~the full counter value for an hour. A session that stops reporting drains out of this view within an hour - by design; the cumulative panels above hold totals to the right edge."
     }
   ]
 }
