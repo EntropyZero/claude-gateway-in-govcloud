@@ -1474,7 +1474,7 @@ Resources:
                             ${RequiredMinVersionLine}
                             ${ManagedClaudeMdLine}
                             permissions:
-                              deny: ['WebFetch', 'WebSearch', 'mcp__*']
+                              deny: ['WebSearch', 'mcp__*']
                             env:
                               DISABLE_UPDATES: "1"
                               DISABLE_AUTOUPDATER: "1"
