@@ -449,3 +449,96 @@ print("yaml-ok")' "$BATS_TEST_TMPDIR/enc2" "$BATS_TEST_TMPDIR/tricky.md"
   src "json_string_from_file '$BATS_TEST_TMPDIR/absent.md'"
   [ "$status" -ne 0 ]
 }
+
+# ---- managed_marketplaces_json / managed_plugins_json (enterprise skill push)
+# Compose the ManagedExtraMarketplaces / ManagedEnabledPlugins CFN parameter
+# values: single-line compact JSON objects rendered verbatim into the managed
+# cli block (JSON is valid YAML flow style). Validation fails closed - a line
+# break there is a gateway boot loop and `$` is gateway env expansion.
+
+@test "managed_marketplaces_json: github source composes the exact record shape" {
+  src "managed_marketplaces_json org-plugins github example-org/claude-plugins '' true"
+  [ "$status" -eq 0 ]
+  [ "$output" = '{"org-plugins":{"source":{"source":"github","repo":"example-org/claude-plugins"},"autoUpdate":true}}' ]
+}
+
+@test "managed_marketplaces_json: git source with ref and autoUpdate off" {
+  src "managed_marketplaces_json org-plugins git https://git.example.com/x/y.git v1.2 false"
+  [ "$status" -eq 0 ]
+  [ "$output" = '{"org-plugins":{"source":{"source":"git","url":"https://git.example.com/x/y.git","ref":"v1.2"},"autoUpdate":false}}' ]
+}
+
+@test "managed_marketplaces_json: output is one line with no '\$'" {
+  src "managed_marketplaces_json org-plugins github example-org/claude-plugins main true"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 1 ]
+  [[ "$output" != *'$'* ]]
+}
+
+@test "managed_marketplaces_json: non-kebab-case name fails closed" {
+  src "managed_marketplaces_json 'Org_Plugins' github x/y '' true"
+  [ "$status" -ne 0 ]
+}
+
+@test "managed_marketplaces_json: unknown source type fails closed" {
+  src "managed_marketplaces_json org-plugins gitlab x/y '' true"
+  [ "$status" -ne 0 ]
+}
+
+@test "managed_marketplaces_json: github location must be owner/repo" {
+  src "managed_marketplaces_json org-plugins github 'owner/repo/extra' '' true"
+  [ "$status" -ne 0 ]
+  src "managed_marketplaces_json org-plugins github 'https://github.com/x/y' '' true"
+  [ "$status" -ne 0 ]
+}
+
+@test "managed_marketplaces_json: git location must be https:// or ssh:// (no scp-style, no \$)" {
+  src "managed_marketplaces_json org-plugins git 'git@host:x/y.git' '' true"
+  [ "$status" -ne 0 ]
+  src "managed_marketplaces_json org-plugins git 'https://h/\$USER/repo' '' true"
+  [ "$status" -ne 0 ]
+}
+
+@test "managed_marketplaces_json: ref with whitespace fails closed" {
+  src "managed_marketplaces_json org-plugins github x/y 'a branch' true"
+  [ "$status" -ne 0 ]
+}
+
+@test "managed_marketplaces_json: autoUpdate must be true or false" {
+  src "managed_marketplaces_json org-plugins github x/y '' yes"
+  [ "$status" -ne 0 ]
+}
+
+@test "managed_plugins_json: pins every plugin to the pushed marketplace" {
+  src "managed_plugins_json org-plugins 'org-skills, other-plugin'"
+  [ "$status" -eq 0 ]
+  [ "$output" = '{"org-skills@org-plugins":true,"other-plugin@org-plugins":true}' ]
+}
+
+@test "managed_plugins_json: an explicit @marketplace entry fails closed" {
+  # a force-installed plugin from a marketplace the client does not know can
+  # never install - only the one pushed marketplace is valid, so the suffix
+  # is appended, never accepted
+  src "managed_plugins_json org-plugins 'org-skills@org-plugins'"
+  [ "$status" -ne 0 ]
+  src "managed_plugins_json org-plugins 'name@elsewhere'"
+  [ "$status" -ne 0 ]
+}
+
+@test "managed_plugins_json: non-kebab-case plugin name fails closed" {
+  src "managed_plugins_json org-plugins 'Org_Skills'"
+  [ "$status" -ne 0 ]
+}
+
+@test "managed_plugins_json: empty or whitespace-only list fails closed" {
+  src "managed_plugins_json org-plugins ' , '"
+  [ "$status" -ne 0 ]
+  src "managed_plugins_json org-plugins ''"
+  [ "$status" -ne 0 ]
+}
+
+@test "managed_plugins_json: embedded line break fails closed (read would silently drop later entries)" {
+  src "managed_plugins_json org-plugins \$'alpha,\nbeta'"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"line break"* ]]
+}

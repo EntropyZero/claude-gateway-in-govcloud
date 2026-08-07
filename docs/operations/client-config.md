@@ -222,8 +222,9 @@ unable to start (§5.6 has the recovery).
 
 - `/model` lists exactly three models — Opus 4.8 (the default), Sonnet 5, and
   Sonnet 4.5. That is by design, not an error; nothing else is served here.
-- Web tools (WebFetch / WebSearch) and MCP tools are disabled centrally and
-  cannot be re-enabled in your local settings.
+- WebSearch and MCP tools are disabled centrally and cannot be re-enabled in
+  your local settings. WebFetch works: it fetches from your laptop, subject
+  to the same web access policy as your browser.
 - Updates are disabled; you always run the IT-distributed build, so `claude
   update` doing nothing is intentional. New versions are published to the
   download portal (the version is shown on its page) — when IT announces
@@ -425,7 +426,7 @@ After a client authenticates, the **gateway pushes settings to it** via its
 `/managed/settings` endpoint — the same mechanism it already uses to hand
 clients their telemetry (OTLP) configuration.
 
-Seven things are pushed:
+Nine things are pushed:
 
 **a) The model allowlist — always, to every user.** The gateway pushes
 `availableModels: [<OPUS_MODEL_ID>, <SONNET_MODEL_ID>, <HAIKU_MODEL_ID>]` plus
@@ -466,17 +467,13 @@ lockdown to every authenticated user is broader coverage than a group-scoped
 push and drops a dependency on the Okta groups claim.
 
 **c) Web/MCP tool denies — also to everyone.** The policy carries
-`permissions: { deny: ["WebFetch", "WebSearch", "mcp__*"] }` in `cli`. A bare
+`permissions: { deny: ["WebSearch", "mcp__*"] }` in `cli`. A bare
 tool name in `deny` removes the tool from the model's context entirely —
-stronger than a scoped `WebFetch(domain:*)` deny, which only blocks matching
-calls — and `mcp__*` covers every tool of every MCP server. Deny rules union
-across scopes and a deny at any scope cannot be re-allowed at another, so users
-cannot re-enable any of them locally. Rationale per tool:
+stronger than a scoped deny like `WebFetch(domain:*)`, which only blocks
+matching calls — and `mcp__*` covers every tool of every MCP server. Deny rules
+union across scopes and a deny at any scope cannot be re-allowed at another, so
+users cannot re-enable any of them locally. Rationale per tool:
 
-- **WebFetch** fetches *locally on the client* (the CLI does the HTTP request,
-  after a hostname-only preflight to `api.anthropic.com`); in this network
-  posture (no NAT, Zscaler server-side egress only) it could only fail slowly —
-  the deny makes the posture explicit instead of incidental.
 - **WebSearch** executes *server-side* and **Amazon Bedrock does not expose the
   server-side web search tool at all**, so it is non-functional on this gateway
   regardless — the deny is defense-in-depth tidiness.
@@ -484,11 +481,15 @@ cannot re-enable any of them locally. Rationale per tool:
   expose fetch-like tools). The offline installer also controls what MCP config
   users receive, so this is belt-and-braces.
 
-Subagents (`Agent`) are deliberately **not** denied — a
-bare `Agent` deny would block all subagents, built-in and custom alike. The
-model can still reach the web through `Bash` (`curl`/`wget`), which is bounded
-by the same Zscaler client-side policy as everything else on the laptop; a
-`Bash(curl *)`-style deny was considered and not applied.
+Two tools are deliberately **not** denied. **WebFetch** (allowed since
+2026-08-07; it was denied in the original rollout) fetches *locally on the
+client* — the CLI does the HTTP request, after a hostname-only preflight to
+`api.anthropic.com` — so it is bounded by the same Zscaler client-side web
+policy as the developer's browser. **Subagents (`Agent`)** stay allowed
+because a bare `Agent` deny would block all subagents, built-in and custom
+alike. The model can likewise reach the web through `Bash` (`curl`/`wget`),
+bounded by the same Zscaler policy; a `Bash(curl *)`-style deny was
+considered and not applied.
 
 **d) The small/fast model override — also to everyone.** The policy sets
 `env.ANTHROPIC_DEFAULT_HAIKU_MODEL` to the configured haiku-role model ID,
@@ -590,6 +591,68 @@ denies in (c). Four properties to know:
   verified against the client memory documentation but **needs live
   confirmation** — after first enabling it, run `/memory` on one client
   and confirm the managed rules appear.
+
+**h) Session-recap disable — only when the organization opts in.** Set
+`DISABLE_SESSION_RECAPS=true` in `deploy.env` and re-run `deploy-gateway.sh`:
+the policy carries `awaySummaryEnabled: false` in `cli`, and clients stop
+showing session recaps — both the recap shown when a user returns to a
+session after being away and the remote-recap variant, whose client-side
+gate checks the same key. The default (`false`) pushes nothing, leaving the
+client default (recaps on). Gateway-side behavior is binary-verified (the
+mirrored 2.1.211 and 2.1.220 gateways boot with the key); the client
+honoring it is verified against the client settings schema but **needs live
+confirmation** — after first enabling it, leave a pilot session idle past
+five minutes (the threshold the client settings schema states for the
+recap) and confirm no recap appears.
+
+**i) Enterprise skills — only when the organization hosts them.** There is
+**no direct skill-push key** in the managed settings; skills ship **inside a
+plugin** from a marketplace the organization hosts. The push has two keys in
+`cli`, each with its own `deploy.env` switch:
+
+- `extraKnownMarketplaces` (from the `PLUGIN_MARKETPLACE_*` variables)
+  registers the marketplace on every client: a github `owner/repo` or a full
+  git URL (internal GitLab/Gitea over https/ssh both work), optionally
+  pinned to a branch/tag. Start the repository from
+  `scripts/enterprise-marketplace.example/`.
+- `enabledPlugins` (from `MANAGED_PLUGINS`, comma-separated plugin names)
+  force-installs plugins from that marketplace at **managed scope**: users
+  cannot disable them, and every skill inside becomes available in each
+  session (invoked as `/<plugin>:<skill>`, or triggered by the model from
+  the skill's description; a skill's body loads into context when it
+  triggers, not up front). `PLUGIN_MARKETPLACE_NAME` must equal the `name`
+  field in the marketplace repo's `marketplace.json` — a mismatch is
+  untested client behavior; keep them identical.
+
+Three properties to know. First, **clients fetch the marketplace directly** —
+the gateway only pushes the pointer, and the offline build host is never
+involved — so the marketplace host must be reachable from developer laptops
+(Zscaler policy, internal DNS), **and readable without interactive git
+authentication**: the client fetches with an internal git implementation
+that does not use git credential helpers, `gh` auth, or OS keychains, so a
+private github.com repo fails outright
+([anthropics/claude-code#17201](https://github.com/anthropics/claude-code/issues/17201)).
+Use a repo that is anonymously readable from the corporate network (an
+internal git server is usually the right answer). Second, with
+`PLUGIN_MARKETPLACE_AUTO_UPDATE=true` (the default) clients refresh the
+marketplace and its plugins at startup, so **pushing to the marketplace repo
+is the whole release process** for a skill update (bump `version` in the
+plugin's `plugin.json`). Third, the verification status: gateway-side
+behavior is binary-verified (the mirrored 2.1.211 and 2.1.220 gateways boot
+with both keys and the exact JSON value shapes the deploy renders), but
+**client-side auto-install is contested and needs live confirmation** — a
+public tracker report
+([anthropics/claude-code#45323](https://github.com/anthropics/claude-code/issues/45323),
+closed unplanned) says CLI clients cache managed plugin config without
+registering the marketplace or installing anything, while the 2.1.211 and
+2.1.220 client bundles do contain managed "policy-required" plugin
+install/prune code. Treat the push as unproven until the pilot check
+passes: after first enabling, run `/plugin` on a pilot client and confirm
+the plugin appears with managed scope and its skills list. If auto-install
+does not happen on the deployed client version, the fallback is a one-time
+per-user `/plugin install <plugin>@<marketplace>` (announce it in the
+rollout note) — the managed `enabledPlugins` entry still prevents users
+from disabling it.
 
 The Okta **groups claim is required** for per-group spend caps
 (`scope_type` `rbac_group`), which resolve against it — so the gateway
@@ -844,7 +907,10 @@ is in force.
   small/fast-model override, the **minimum client version floor**
   (`requiredMinimumVersion`, defaulting to the gateway's own version),
   optional **organization-wide Claude rules** (`claudeMd` from
-  `CLAUDE_MD_FILE`, §6g), and central telemetry config + update lockdown for
+  `CLAUDE_MD_FILE`, §6g), the optional **session-recap disable**
+  (`DISABLE_SESSION_RECAPS`, §6h), optional **enterprise skills** as
+  force-installed plugins (`PLUGIN_MARKETPLACE_*` / `MANAGED_PLUGINS`, §6i),
+  and central telemetry config + update lockdown for
   every connected client.
 
 The channels compose cleanly and target different keys: the installer writes no

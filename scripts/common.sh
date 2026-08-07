@@ -407,3 +407,112 @@ json_string_from_file() {
 with open(sys.argv[1], encoding="utf-8") as f:
     print(json.dumps(f.read()))' "$1"
 }
+
+# managed_marketplaces_json NAME TYPE LOCATION [REF] [AUTO_UPDATE] - print the
+# extraKnownMarketplaces managed-settings value as a single-line compact JSON
+# object (valid YAML flow mapping): one marketplace named NAME, fetched by the
+# CLIENT from TYPE 'github' (LOCATION = owner/repo) or 'git' (LOCATION = full
+# URL, https:// or ssh://), optionally pinned to REF (branch/tag; empty =
+# default branch). AUTO_UPDATE 'true' (the default) lets clients refresh the
+# marketplace and its installed plugins at startup, so plugin updates ship by
+# pushing to the marketplace repo. Validation is strict and fails closed: the
+# value is rendered into the gateway's managed cli block, where a stray line
+# break is a boot loop and a `${` is env-expanded (see ManagedClaudeMd in
+# 02-gateway.yaml) - every charset below excludes whitespace, quotes,
+# backslashes, and `$`.
+managed_marketplaces_json() {
+  local name="$1" type="$2" location="$3" ref="${4:-}" auto="${5:-true}"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "FATAL: python3 is required to compose the marketplace JSON (managed_marketplaces_json)." >&2
+    return 1
+  fi
+  if ! [[ "$name" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+    echo "FATAL: marketplace name '$name' must be kebab-case ([a-z0-9-], no leading/trailing dash)." >&2
+    return 1
+  fi
+  case "$type" in
+    github)
+      if ! [[ "$location" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+        echo "FATAL: github marketplace location '$location' must be owner/repo." >&2
+        return 1
+      fi ;;
+    git)
+      if ! [[ "$location" =~ ^(https|ssh)://[A-Za-z0-9._~:/@%-]+$ ]]; then
+        echo "FATAL: git marketplace location '$location' must be a full https:// or ssh:// URL" >&2
+        echo "       (no spaces, quotes, or '\$'; scp-style 'git@host:path' is not accepted here)." >&2
+        return 1
+      fi ;;
+    *)
+      echo "FATAL: marketplace source type '$type' must be 'github' or 'git'." >&2
+      return 1 ;;
+  esac
+  if [ -n "$ref" ] && ! [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+    echo "FATAL: marketplace ref '$ref' must be a plain branch/tag name ([A-Za-z0-9._/-])." >&2
+    return 1
+  fi
+  case "$auto" in true|false) ;; *)
+    echo "FATAL: marketplace auto-update '$auto' must be 'true' or 'false'." >&2
+    return 1 ;;
+  esac
+  python3 -c 'import json,sys
+name, type_, location, ref, auto = sys.argv[1:6]
+src = {"source": type_, ("repo" if type_ == "github" else "url"): location}
+if ref:
+    src["ref"] = ref
+print(json.dumps({name: {"source": src, "autoUpdate": auto == "true"}},
+                 separators=(",", ":")))' "$name" "$type" "$location" "$ref" "$auto"
+}
+
+# managed_plugins_json MARKETPLACE PLUGINS_CSV - print the enabledPlugins
+# managed-settings value as a single-line compact JSON object of
+# "plugin@MARKETPLACE": true entries, from a comma-separated list of plugin
+# names (surrounding whitespace per entry is trimmed). Every plugin is pinned
+# to MARKETPLACE - the one marketplace the same deploy pushes via
+# extraKnownMarketplaces - because a force-installed plugin from a marketplace
+# the client does not know can never install; an entry that names a
+# marketplace itself ('name@other') is refused for the same reason.
+managed_plugins_json() {
+  local marketplace="$1" plugins_csv="$2" entry
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "FATAL: python3 is required to compose the plugins JSON (managed_plugins_json)." >&2
+    return 1
+  fi
+  if ! [[ "$marketplace" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+    echo "FATAL: marketplace name '$marketplace' must be kebab-case ([a-z0-9-])." >&2
+    return 1
+  fi
+  # `read` consumes only the first line - an embedded newline would silently
+  # DROP every entry after it instead of failing closed; refuse it instead.
+  if [[ "$plugins_csv" == *$'\n'* || "$plugins_csv" == *$'\r'* ]]; then
+    echo "FATAL: MANAGED_PLUGINS must be a single comma-separated line (embedded line break found)." >&2
+    return 1
+  fi
+  local -a entries=()
+  IFS=',' read -r -a entries <<<"$plugins_csv"
+  local -a cleaned=()
+  for entry in ${entries[@]+"${entries[@]}"}; do
+    # trim surrounding whitespace
+    entry="${entry#"${entry%%[![:space:]]*}"}"
+    entry="${entry%"${entry##*[![:space:]]}"}"
+    [ -z "$entry" ] && continue
+    if [[ "$entry" == *@* ]]; then
+      echo "FATAL: MANAGED_PLUGINS entry '$entry' must be a bare plugin name -" >&2
+      echo "       '@${marketplace}' is appended automatically (the only marketplace" >&2
+      echo "       this deploy registers on clients)." >&2
+      return 1
+    fi
+    if ! [[ "$entry" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+      echo "FATAL: plugin name '$entry' must be kebab-case ([a-z0-9-], no leading/trailing dash)." >&2
+      return 1
+    fi
+    cleaned+=("$entry")
+  done
+  if [ "${#cleaned[@]}" -eq 0 ]; then
+    echo "FATAL: MANAGED_PLUGINS is set but contains no plugin names." >&2
+    return 1
+  fi
+  python3 -c 'import json,sys
+marketplace = sys.argv[1]
+print(json.dumps({f"{p}@{marketplace}": True for p in sys.argv[2:]},
+                 separators=(",", ":")))' "$marketplace" "${cleaned[@]}"
+}
