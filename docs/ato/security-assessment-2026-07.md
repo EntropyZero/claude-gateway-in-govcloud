@@ -1321,3 +1321,17 @@ in [`ato-package-gaps.md`](ato-package-gaps.md).
 | [`conops.md`](conops.md) | Users, roles, operational and degraded modes; the fail-closed behaviors in A3 and A16 are described operationally there. |
 | [`../operations/monitoring-and-retention.md`](../operations/monitoring-and-retention.md) | The authoritative alarm/retention inventory the monitoring findings are measured against. |
 | [`../operations/cost-controls.md`](../operations/cost-controls.md) | §5 is the fail-closed spend-store recovery runbook referenced by A3 and SA-2026-07-14. |
+
+---
+
+## 10. Post-assessment changes (appended; this assessment is point-in-time)
+
+- **2026-08-07 — `WebFetch` removed from the managed deny list** (commit
+  "SB -- Allowing WebFetch"). A8's description of the *applied* denies
+  changes accordingly: the policy now denies `WebSearch` and `mcp__*`
+  only, and `WebFetch` joins `Bash` (curl/wget) and `Agent` as a
+  deliberately-allowed client-side web path, bounded by the same
+  client-side Zscaler policy. The A8 acceptance rationale (residual web
+  access bounded by Zscaler, not by tool denies) already covers this
+  posture; `control-implementation.md` AC-20 and `client-config.md` §6c
+  reflect it. A future assessment supersedes this note.

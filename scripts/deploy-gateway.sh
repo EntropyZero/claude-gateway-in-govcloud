@@ -146,6 +146,67 @@ if [ -n "${CLAUDE_MD_FILE:-}" ]; then
   fi
 fi
 
+# Session recaps: DISABLE_SESSION_RECAPS=true pushes awaySummaryEnabled: false
+# to every client (managed settings). Validate here so a typo'd value fails
+# with the deploy.env variable's name instead of an opaque CFN error.
+case "${DISABLE_SESSION_RECAPS:-false}" in
+  true|false) ;;
+  *)
+    echo "FATAL: DISABLE_SESSION_RECAPS='${DISABLE_SESSION_RECAPS}' must be 'true' or 'false'." >&2
+    exit 1 ;;
+esac
+
+# Enterprise skill/plugin push: PLUGIN_MARKETPLACE_* registers one org plugin
+# marketplace on every client (extraKnownMarketplaces) and MANAGED_PLUGINS
+# force-installs plugins from it (enabledPlugins) - skills ship INSIDE those
+# plugins (start from scripts/enterprise-marketplace.example/). Clients fetch
+# the marketplace themselves, so its host must be reachable from developer
+# laptops; the gateway and the build host never touch it. common.sh composes
+# and validates the two single-line JSON parameter values.
+MANAGED_EXTRA_MARKETPLACES=""
+MANAGED_ENABLED_PLUGINS=""
+if [ -n "${PLUGIN_MARKETPLACE_NAME:-}" ]; then
+  if [ -z "${PLUGIN_MARKETPLACE_LOCATION:-}" ]; then
+    echo "FATAL: PLUGIN_MARKETPLACE_NAME is set but PLUGIN_MARKETPLACE_LOCATION is not." >&2
+    echo "       Set it to owner/repo (PLUGIN_MARKETPLACE_SOURCE=github) or a full" >&2
+    echo "       https:// or ssh:// git URL (PLUGIN_MARKETPLACE_SOURCE=git)." >&2
+    exit 1
+  fi
+  MANAGED_EXTRA_MARKETPLACES="$(managed_marketplaces_json \
+    "$PLUGIN_MARKETPLACE_NAME" \
+    "${PLUGIN_MARKETPLACE_SOURCE:-github}" \
+    "$PLUGIN_MARKETPLACE_LOCATION" \
+    "${PLUGIN_MARKETPLACE_REF:-}" \
+    "${PLUGIN_MARKETPLACE_AUTO_UPDATE:-true}")"
+  if [ -n "${MANAGED_PLUGINS:-}" ]; then
+    MANAGED_ENABLED_PLUGINS="$(managed_plugins_json \
+      "$PLUGIN_MARKETPLACE_NAME" "$MANAGED_PLUGINS")"
+  fi
+  # 1024 is the parameter MaxLength; failing here names the deploy.env vars
+  # (both values are ASCII by construction, so ${#...} counts CFN chars).
+  for v in MANAGED_EXTRA_MARKETPLACES MANAGED_ENABLED_PLUGINS; do
+    val="${!v}"
+    if [ "${#val}" -gt 1024 ]; then
+      echo "FATAL: $v exceeds the 1024-char CFN parameter limit; shorten the" >&2
+      echo "       marketplace location/ref or the MANAGED_PLUGINS list." >&2
+      exit 1
+    fi
+  done
+elif [ -n "${MANAGED_PLUGINS:-}" ]; then
+  echo "FATAL: MANAGED_PLUGINS is set but PLUGIN_MARKETPLACE_NAME is not. A force-" >&2
+  echo "       installed plugin can only come from a marketplace this deploy also" >&2
+  echo "       registers on clients - set the PLUGIN_MARKETPLACE_* variables too." >&2
+  exit 1
+elif [ -n "${PLUGIN_MARKETPLACE_LOCATION:-}" ] || [ -n "${PLUGIN_MARKETPLACE_REF:-}" ]; then
+  # location/ref without a name would be SILENTLY ignored - nothing pushed,
+  # discovered only on a client. Refuse the half-configuration instead.
+  echo "FATAL: PLUGIN_MARKETPLACE_LOCATION/_REF are set but PLUGIN_MARKETPLACE_NAME" >&2
+  echo "       is not - nothing would be pushed. Set PLUGIN_MARKETPLACE_NAME (it must" >&2
+  echo "       equal the 'name' in the marketplace repo's marketplace.json), or unset" >&2
+  echo "       the other PLUGIN_MARKETPLACE_* variables." >&2
+  exit 1
+fi
+
 ARTIFACTS_BUCKET="$(ensure_artifacts_bucket)"
 
 # On failure, KEEP successfully-created resources (the stack lands in
@@ -219,6 +280,9 @@ aws cloudformation deploy \
       "HaikuBedrockModelId=${HAIKU_BEDROCK_MODEL_ID}" \
       "MinClientVersion=${MIN_CLIENT_VERSION}" \
       "ManagedClaudeMd=${MANAGED_CLAUDE_MD}" \
+      "DisableSessionRecaps=${DISABLE_SESSION_RECAPS:-false}" \
+      "ManagedExtraMarketplaces=${MANAGED_EXTRA_MARKETPLACES}" \
+      "ManagedEnabledPlugins=${MANAGED_ENABLED_PLUGINS}" \
       "SpendGroupLimitMode=${SPEND_GROUP_LIMIT_MODE:-min}" \
       "SpendBlockedMessage=${SPEND_BLOCKED_MESSAGE:-Contact the Claude Code platform team to request an increase.}" \
       "SpendAdminGroups=${SPEND_ADMIN_GROUPS:-}"

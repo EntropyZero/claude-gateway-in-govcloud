@@ -191,7 +191,8 @@ def _managed_body():
 
 
 def _managed_policies(min_version=True, log_prompts=False, log_responses=False,
-                      claude_md=None):
+                      claude_md=None, disable_recaps=False, marketplaces=None,
+                      plugins=None):
     """Parse the rendered managed: block into policy dicts.
 
     min_version toggles the RequiredMinVersionLine render: True is the
@@ -206,6 +207,12 @@ def _managed_policies(min_version=True, log_prompts=False, log_responses=False,
     here exactly as deploy-gateway.sh's json_string_from_file does before
     rendering the ManagedClaudeMdLine enabled branch; None is the disabled
     branch (a YAML comment line).
+    disable_recaps toggles the AwaySummaryLine render the same way
+    (DisableSessionRecaps='true' vs the default comment line).
+    marketplaces / plugins, when set, are dicts encoded to the compact
+    single-line JSON that common.sh's managed_marketplaces_json /
+    managed_plugins_json produce for the two parameters; None is the
+    disabled branch (a YAML comment line).
     """
     raw = _managed_body()
     repl = ("requiredMinimumVersion: '2.1.207'" if min_version
@@ -214,6 +221,18 @@ def _managed_policies(min_version=True, log_prompts=False, log_responses=False,
     repl = ("claudeMd: " + json.dumps(claude_md) if claude_md is not None
             else "# claudeMd: not set (CLAUDE_MD_FILE empty)")
     raw = raw.replace("${ManagedClaudeMdLine}", repl)
+    repl = ("awaySummaryEnabled: false" if disable_recaps
+            else "# awaySummaryEnabled: default (DisableSessionRecaps=false)")
+    raw = raw.replace("${AwaySummaryLine}", repl)
+    repl = ("extraKnownMarketplaces: "
+            + json.dumps(marketplaces, separators=(",", ":"))
+            if marketplaces is not None
+            else "# extraKnownMarketplaces: not set (PLUGIN_MARKETPLACE_NAME empty)")
+    raw = raw.replace("${ExtraMarketplacesLine}", repl)
+    repl = ("enabledPlugins: " + json.dumps(plugins, separators=(",", ":"))
+            if plugins is not None
+            else "# enabledPlugins: not set (MANAGED_PLUGINS empty)")
+    raw = raw.replace("${EnabledPluginsLine}", repl)
     repl = ('OTEL_LOG_USER_PROMPTS: "1"' if log_prompts
             else "# OTEL_LOG_USER_PROMPTS: not enabled (LogUserPrompts=false)")
     raw = raw.replace("${LogUserPromptsLine}", repl)
@@ -313,7 +332,7 @@ def test_model_allowlist_and_lockdown_reach_every_user():
     )
 
 
-def test_webfetch_deny_and_small_model_override_reach_every_user():
+def test_tool_denies_and_small_model_override_reach_every_user():
     """The catch-all also carries the web/MCP tool denies and the
     small/fast-model override (added 2026-07-24).
 
@@ -323,8 +342,11 @@ def test_webfetch_deny_and_small_model_override_reach_every_user():
       every MCP server. Managed-scope denies union across scopes and cannot be
       re-allowed, so none of this is user-overridable. WebSearch is server-side
       and Bedrock does not expose it anyway (defense-in-depth). `Agent`
-      (subagents) is deliberately NOT denied (decision 2026-07-24); this gate
-      pins the exact deny list so a silent widening or narrowing fails loudly.
+      (subagents) is deliberately NOT denied (decision 2026-07-24), and
+      `WebFetch` was deliberately REMOVED from the deny list (decision
+      2026-08-07, commit "SB -- Allowing WebFetch": clients fetch locally
+      through the Zscaler egress); this gate pins the exact deny list so a
+      silent widening or narrowing fails loudly.
     - ANTHROPIC_DEFAULT_HAIKU_MODEL must be the GATEWAY-facing haiku-role ID
       (HaikuModelId - Sonnet 4.5, the same value as its availableModels
       entry), NOT the Bedrock inference profile ID - the client asks the
@@ -333,9 +355,10 @@ def test_webfetch_deny_and_small_model_override_reach_every_user():
       Haiku-family model that neither GovCloud nor this gateway serves.
     """
     cli = _managed_policies()[-1]["cli"]
-    assert cli["permissions"]["deny"] == ["WebFetch", "WebSearch", "mcp__*"], (
-        "the managed deny list must be exactly ['WebFetch', 'WebSearch', "
-        "'mcp__*'] - Agent (subagents) stays allowed by decision (2026-07-24)"
+    assert cli["permissions"]["deny"] == ["WebSearch", "mcp__*"], (
+        "the managed deny list must be exactly ['WebSearch', 'mcp__*'] - "
+        "Agent (subagents) stays allowed by decision (2026-07-24), WebFetch "
+        "by decision (2026-08-07)"
     )
     assert cli["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "claude-sonnet-4-5", (
         "small/fast model must be the gateway-served haiku-role ID "
@@ -568,6 +591,242 @@ def test_deploy_script_encodes_and_bounds_claude_md_file():
     assert "json_string_from_file()" in common, (
         "json_string_from_file must live in common.sh (reused, bats-tested)"
     )
+
+
+def test_away_summary_disable_inside_cli_and_conditional():
+    """Session-recap disable (awaySummaryEnabled, added 2026-08-07).
+
+    - `awaySummaryEnabled` must sit INSIDE `cli` (it is a Claude Code
+      settings.json key; BOOT-VERIFIED against the mirrored 2.1.211 and
+      2.1.220 gateways 2026-08-07: inside cli it boots, a typo'd variant
+      fails boot with "unknown settings key"). One key covers both recap
+      surfaces: the away-session recap and the remote-recap variant, whose
+      client-side gate checks `awaySummaryEnabled === false` (verified in
+      the 2.1.211/2.1.220 client bundles).
+    - It renders from the AwaySummaryLine Sub var, gated on
+      WantDisableSessionRecaps; the disabled branch (the default) must be a
+      full-line YAML comment so the block parses either way.
+    """
+    cli = _managed_policies(disable_recaps=True)[-1]["cli"]
+    assert cli["awaySummaryEnabled"] is False
+    # default: block still parses, key absent everywhere
+    for policy in _managed_policies(disable_recaps=False):
+        assert "awaySummaryEnabled" not in policy
+        assert "awaySummaryEnabled" not in policy.get("cli", {})
+    # never at policy level (unrecognized key there = boot failure)
+    for policy in _managed_policies(disable_recaps=True):
+        assert "awaySummaryEnabled" not in policy, (
+            f"awaySummaryEnabled at policy level is a BOOT FAILURE: {policy!r}"
+        )
+    text = _template_text()
+    assert re.search(r"AwaySummaryLine:\s*!If", text), (
+        "AwaySummaryLine should be conditional on WantDisableSessionRecaps"
+    )
+    assert "WantDisableSessionRecaps" in text
+    assert "- 'awaySummaryEnabled: false'" in text
+    assert "- '# awaySummaryEnabled: default (DisableSessionRecaps=false)'" in text, (
+        "the WantDisableSessionRecaps else-branch must stay a full-line YAML "
+        "comment - an empty string or dangling key breaks the rendered block"
+    )
+    # the parameter default is the safe side (recaps stay on)
+    m = re.search(r"^  DisableSessionRecaps:\n(?:.*\n)*?    Default: '(\w+)'",
+                  text, re.M)
+    assert m and m.group(1) == "false", (
+        "DisableSessionRecaps must default to 'false'"
+    )
+    # the marker sits inside the cli: block of the body
+    body = _managed_body()
+    assert body.index("- cli:") < body.index("${AwaySummaryLine}")
+
+
+def test_managed_plugin_push_inside_cli_and_conditional():
+    """Enterprise skill push (extraKnownMarketplaces + enabledPlugins, added
+    2026-08-07). Skills have NO direct managed-settings distribution key -
+    they ship inside a PLUGIN from an org-hosted marketplace, registered via
+    extraKnownMarketplaces and force-installed via enabledPlugins.
+
+    - Both keys must sit INSIDE `cli` (Claude Code settings.json keys;
+      BOOT-VERIFIED against the mirrored 2.1.211 and 2.1.220 gateways
+      2026-08-07 with the exact flow-style JSON values common.sh renders).
+    - Both values are MAPS, not arrays (the client settings schema:
+      enabledPlugins is a record of "plugin@marketplace" -> bool,
+      extraKnownMarketplaces a record of name -> {source: {...}}).
+    - Each renders from its own Sub var, gated on its own Have* condition
+      (a marketplace push without force-installed plugins is legitimate);
+      the disabled branches must be full-line YAML comments.
+    """
+    mkt = {"org-plugins": {
+        "source": {"source": "github", "repo": "example-org/claude-plugins"},
+        "autoUpdate": True,
+    }}
+    plugins = {"org-skills@org-plugins": True}
+    cli = _managed_policies(marketplaces=mkt, plugins=plugins)[-1]["cli"]
+    assert cli["extraKnownMarketplaces"] == mkt, (
+        "extraKnownMarketplaces must round-trip the composed JSON as a YAML map"
+    )
+    assert cli["enabledPlugins"] == plugins, (
+        "enabledPlugins must round-trip the composed JSON as a YAML map"
+    )
+    # marketplace-only render (no forced plugins) is a valid combination
+    cli = _managed_policies(marketplaces=mkt)[-1]["cli"]
+    assert cli["extraKnownMarketplaces"] == mkt
+    assert "enabledPlugins" not in cli
+    # default: block still parses, keys absent everywhere
+    for policy in _managed_policies():
+        for key in ("extraKnownMarketplaces", "enabledPlugins"):
+            assert key not in policy
+            assert key not in policy.get("cli", {})
+    # never at policy level (unrecognized key there = boot failure)
+    for policy in _managed_policies(marketplaces=mkt, plugins=plugins):
+        for key in ("extraKnownMarketplaces", "enabledPlugins"):
+            assert key not in policy, (
+                f"{key} at policy level is a BOOT FAILURE: {policy!r}"
+            )
+    text = _template_text()
+    for var, cond, param, off in (
+        ("ExtraMarketplacesLine", "HaveManagedExtraMarketplaces",
+         "ManagedExtraMarketplaces",
+         "- '# extraKnownMarketplaces: not set (PLUGIN_MARKETPLACE_NAME empty)'"),
+        ("EnabledPluginsLine", "HaveManagedEnabledPlugins",
+         "ManagedEnabledPlugins",
+         "- '# enabledPlugins: not set (MANAGED_PLUGINS empty)'"),
+    ):
+        assert re.search(var + r":\s*!If", text), (
+            f"{var} should be conditional on {cond}"
+        )
+        assert cond in text
+        assert "${" + param + "}" in text, (
+            f"the value must come from the {param} parameter"
+        )
+        assert off in text, (
+            f"the {cond} else-branch must stay a full-line YAML comment"
+        )
+    body = _managed_body()
+    cli_ix = body.index("- cli:")
+    for marker in ("${ExtraMarketplacesLine}", "${EnabledPluginsLine}"):
+        assert cli_ix < body.index(marker), f"{marker} must render inside cli:"
+
+
+def test_managed_plugin_parameters_reject_dollar_and_line_breaks():
+    """Both plugin-push parameters accept only the composed shape: empty, or
+    one single-line JSON object. Char-class-only patterns ON PURPOSE -
+    iterative in Java's regex engine, none of the alternation-group
+    StackOverflow risk pinned on ManagedClaudeMd - and they exclude `$`
+    OUTRIGHT (the gateway env-expands ${NAME} in config values, and no
+    legitimate marketplace name/repo/URL contains `$`) plus all five Java
+    line terminators (each is a YAML line break -> gateway boot loop)."""
+    text = _template_text()
+    for param in ("ManagedExtraMarketplaces", "ManagedEnabledPlugins"):
+        blk = text[text.index(param + ":"):]
+        m = re.search(r"AllowedPattern:\s*'([^']+)'", blk)
+        assert m, f"{param} has no AllowedPattern"
+        pat = m.group(1)
+        # built from pieces like the ManagedClaudeMd pin, so no literal
+        # backslash-u sequence appears in this source file; the result is
+        # byte-identical to the template text
+        bs = chr(92)
+        expected = ("(" + bs + "{[^$" + bs + "n" + bs + "r" + bs + "u0085"
+                    + bs + "u2028" + bs + "u2029]*" + bs + "})?")
+        assert pat == expected, (
+            f"{param} AllowedPattern changed: keep it a bare char class "
+            "(no alternation groups - Java-regex StackOverflow class) that "
+            "excludes '$' and ALL FIVE Java line terminators"
+        )
+        assert re.fullmatch(pat, "")  # empty = feature off
+        assert re.fullmatch(
+            pat, '{"org-plugins":{"source":{"source":"github",'
+                 '"repo":"example-org/claude-plugins"},"autoUpdate":true}}'
+        )
+        assert re.fullmatch(pat, '{"org-skills@org-plugins":true}')
+        for bad in (
+            "extraKnownMarketplaces:\n  org: {}",   # raw YAML, multi-line
+            '{"a":true}\n{"b":true}',               # embedded newline
+            '{"repo":"x/${VAR}"}',                  # gateway env expansion
+            '{"url":"https://h/$x"}',               # bare $ - still excluded
+            '"just-a-string"',                      # not an object
+            '{"a"' + chr(0x0D) + ':true}',          # raw CR
+            '{"a"' + chr(0x85) + ':true}',          # NEL
+            '{"a"' + chr(0x2028) + ':true}',        # LS
+            '{"a"' + chr(0x2029) + ':true}',        # PS
+        ):
+            assert not re.fullmatch(pat, bad), (
+                f"{param} AllowedPattern accepts {bad!r}"
+            )
+
+
+def test_deploy_script_wires_recap_and_plugin_push():
+    """deploy-gateway.sh must validate DISABLE_SESSION_RECAPS, compose the two
+    plugin-push JSON values via the common.sh helpers (never inline), refuse
+    MANAGED_PLUGINS without PLUGIN_MARKETPLACE_NAME (a force-installed plugin
+    from an unregistered marketplace can never install), and pass all three
+    parameters through."""
+    script = open(os.path.join(
+        os.path.dirname(__file__), "..", "..", "scripts", "deploy-gateway.sh"
+    )).read()
+    assert "DisableSessionRecaps=${DISABLE_SESSION_RECAPS:-false}" in script, (
+        "deploy-gateway.sh must pass DisableSessionRecaps (default false)"
+    )
+    assert "ManagedExtraMarketplaces=${MANAGED_EXTRA_MARKETPLACES}" in script
+    assert "ManagedEnabledPlugins=${MANAGED_ENABLED_PLUGINS}" in script
+    assert "managed_marketplaces_json" in script, (
+        "the marketplace JSON must come from the common.sh composer"
+    )
+    assert "managed_plugins_json" in script, (
+        "the plugins JSON must come from the common.sh composer"
+    )
+    # the recap flag is validated with a named error that actually ABORTS -
+    # pin the exit inside the case's catch-all branch, not just the case line
+    m = re.search(
+        r'case "\$\{DISABLE_SESSION_RECAPS:-false\}" in\n(.*?)\nesac',
+        script, re.S,
+    )
+    assert m, "DISABLE_SESSION_RECAPS must be validated with a case statement"
+    assert re.search(r"\*\)\n(?:.*\n)*?\s*exit 1", m.group(1)), (
+        "the DISABLE_SESSION_RECAPS catch-all branch must exit 1 - a warning "
+        "there would deploy a typo'd value to an opaque CFN error"
+    )
+    # pairing guard: plugins without a marketplace is refused WITH an exit
+    m = re.search(
+        r'elif \[ -n "\$\{MANAGED_PLUGINS:-\}" \]; then\n((?:.*\n)*?)fi',
+        script,
+    )
+    assert m, "MANAGED_PLUGINS without PLUGIN_MARKETPLACE_NAME must fail closed"
+    assert "exit 1" in m.group(1), (
+        "the MANAGED_PLUGINS-without-marketplace branch must exit 1"
+    )
+    # a marketplace name without a location is refused before composing
+    assert re.search(
+        r'\[ -z "\$\{PLUGIN_MARKETPLACE_LOCATION:-\}" \]\s*;?\s*then\n'
+        r"(?:.*\n)*?\s*exit 1",
+        script,
+    ), "PLUGIN_MARKETPLACE_NAME without PLUGIN_MARKETPLACE_LOCATION must exit 1"
+    # the 1024-char CFN MaxLength is pre-checked with an error naming the vars
+    assert re.search(r"-gt 1024\b(?:.*\n)*?\s*exit 1", script), (
+        "the composed JSON values must be bounded against the 1024-char "
+        "parameter MaxLength with a named fatal, not left to an opaque CFN error"
+    )
+    # pin the composer ARGUMENT ORDER - swapping REF and AUTO_UPDATE would
+    # pass every other gate and ship autoUpdate as a git ref
+    assert re.search(
+        r'managed_marketplaces_json \\\n'
+        r'\s*"\$PLUGIN_MARKETPLACE_NAME" \\\n'
+        r'\s*"\$\{PLUGIN_MARKETPLACE_SOURCE:-github\}" \\\n'
+        r'\s*"\$PLUGIN_MARKETPLACE_LOCATION" \\\n'
+        r'\s*"\$\{PLUGIN_MARKETPLACE_REF:-\}" \\\n'
+        r'\s*"\$\{PLUGIN_MARKETPLACE_AUTO_UPDATE:-true\}"',
+        script,
+    ), ("managed_marketplaces_json must be called as NAME SOURCE LOCATION "
+        "REF AUTO_UPDATE (defaults github / empty ref / autoUpdate on)")
+    assert re.search(
+        r'managed_plugins_json \\\n'
+        r'\s*"\$PLUGIN_MARKETPLACE_NAME" "\$MANAGED_PLUGINS"',
+        script,
+    ), "managed_plugins_json must be called as MARKETPLACE PLUGINS_CSV"
+    common = open(os.path.join(
+        os.path.dirname(__file__), "..", "..", "scripts", "common.sh"
+    )).read()
+    assert "managed_marketplaces_json()" in common
+    assert "managed_plugins_json()" in common
 
 
 def test_log_user_prompts_is_opt_in_and_conditional():

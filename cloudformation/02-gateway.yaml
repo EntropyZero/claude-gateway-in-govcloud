@@ -222,6 +222,67 @@ Parameters:
       deploy-gateway.sh produces it from CLAUDE_MD_FILE. Empty pushes no
       managed rules.
 
+  DisableSessionRecaps:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Push awaySummaryEnabled: false to every client via the managed
+      settings, disabling Claude Code's session recaps: the recap shown when
+      a user returns to an idle session (5+ minutes away, per the client
+      settings schema's own description of the key), and the remote-recap
+      variant, which is gated on the same key. 'false' (the default) pushes
+      nothing - clients keep their built-in default (recaps on). Clients
+      pick the change up at their next settings fetch.
+
+  ManagedExtraMarketplaces:
+    Type: String
+    Default: ''
+    MaxLength: 1024
+    # A SINGLE-LINE JSON object as produced by common.sh
+    # managed_marketplaces_json - JSON is valid YAML flow style, so the
+    # value is rendered verbatim after `extraKnownMarketplaces: ` in the
+    # managed cli block. The pattern is deliberately a bare char class
+    # inside literal braces - iterative in Java's regex engine, so none of
+    # the alternation-group StackOverflow risk documented on
+    # ManagedClaudeMd. It rejects raw line breaks (all five Java line
+    # terminators; each is a YAML line break - a gateway BOOT LOOP, not a
+    # validation error) and `$` outright: the gateway expands ${NAME} in
+    # config values as env vars after YAML parsing, and no legitimate
+    # marketplace name, repo, or URL contains `$`.
+    AllowedPattern: '(\{[^$\n\r\u0085\u2028\u2029]*\})?'
+    ConstraintDescription: >-
+      Empty, or a single-line JSON object as produced by
+      managed_marketplaces_json in scripts/common.sh (deploy-gateway.sh
+      builds it from the PLUGIN_MARKETPLACE_* deploy.env variables) - never
+      raw YAML, never anything containing '$'.
+    Description: >-
+      Client plugin-marketplace registration, pushed to every client as the
+      extraKnownMarketplaces managed-settings key (single-line JSON object,
+      one marketplace). Clients fetch the marketplace themselves (github or
+      git source), so its host must be reachable from developer laptops -
+      NOT from the gateway or build host. Empty pushes no marketplace.
+
+  ManagedEnabledPlugins:
+    Type: String
+    Default: ''
+    MaxLength: 1024
+    # Same shape, rendering, and pattern rationale as
+    # ManagedExtraMarketplaces above: single-line JSON object (from
+    # common.sh managed_plugins_json), rendered after `enabledPlugins: `.
+    AllowedPattern: '(\{[^$\n\r\u0085\u2028\u2029]*\})?'
+    ConstraintDescription: >-
+      Empty, or a single-line JSON object as produced by
+      managed_plugins_json in scripts/common.sh (deploy-gateway.sh builds it
+      from MANAGED_PLUGINS) - never raw YAML, never anything containing '$'.
+    Description: >-
+      Force-installed client plugins, pushed to every client as the
+      enabledPlugins managed-settings key: a JSON object of
+      "plugin@marketplace": true entries. This is how organization-wide
+      skills ship - packaged in a plugin, from the marketplace registered
+      via ManagedExtraMarketplaces. Managed-scope plugins install
+      automatically and users cannot disable them. Empty forces no plugins.
+
   SpendAdminGroups:
     Type: String
     Default: ''
@@ -587,6 +648,19 @@ Parameters:
 # Fargate only accepts specific CPU/memory pairings; an invalid combo
 # otherwise surfaces as an opaque task-definition error mid-deploy.
 Rules:
+  # Force-installed plugins can only come from a marketplace the same push
+  # registers on clients - enabledPlugins referencing an unregistered
+  # marketplace boots the gateway fine but can never install anywhere.
+  # deploy-gateway.sh guards the same pairing; this covers direct CFN deploys.
+  ManagedPluginsRequireMarketplace:
+    RuleCondition: !Not [!Equals [!Ref ManagedEnabledPlugins, '']]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref ManagedExtraMarketplaces, '']]
+        AssertDescription: >-
+          ManagedEnabledPlugins requires ManagedExtraMarketplaces - a
+          force-installed plugin from a marketplace clients do not know can
+          never install. Set both (deploy-gateway.sh composes them from
+          PLUGIN_MARKETPLACE_* and MANAGED_PLUGINS).
   FargateMemoryForCpu512:
     RuleCondition: !Equals [!Ref TaskCpu, '512']
     Assertions:
@@ -626,6 +700,9 @@ Conditions:
   HaveSpendAdminGroups: !Not [!Equals [!Ref SpendAdminGroups, '']]
   HaveMinClientVersion: !Not [!Equals [!Ref MinClientVersion, '']]
   HaveManagedClaudeMd: !Not [!Equals [!Ref ManagedClaudeMd, '']]
+  WantDisableSessionRecaps: !Equals [!Ref DisableSessionRecaps, 'true']
+  HaveManagedExtraMarketplaces: !Not [!Equals [!Ref ManagedExtraMarketplaces, '']]
+  HaveManagedEnabledPlugins: !Not [!Equals [!Ref ManagedEnabledPlugins, '']]
   WantLogUserPrompts: !Equals [!Ref LogUserPrompts, 'true']
   WantLogAssistantResponses: !Equals [!Ref LogAssistantResponses, 'true']
   WantAdminEndpointIngress: !And [!Condition WantAnyInterfaceEndpoint, !Condition HaveAdminClientSg]
@@ -1401,21 +1478,57 @@ Resources:
             #    boot with "unknown settings key". CLIENT-side rendering into
             #    context is doc-verified only - needs live confirmation
             #    (check /memory on a pilot client after enabling).
+            #  * awaySummaryEnabled: false (only when DisableSessionRecaps=
+            #    'true') - disables the client's session recaps. One key
+            #    covers both surfaces: the recap shown when a user returns
+            #    to an idle session, and the remote-recap variant, whose
+            #    client-side gate also checks this key (schema-verified in
+            #    the 2.1.211 and 2.1.220 client bundles). BOOT-VERIFIED
+            #    against the mirrored 2.1.211 gateway (2026-08-07): inside
+            #    cli it boots; a typo'd variant fails boot with "unknown
+            #    settings key".
+            #  * extraKnownMarketplaces / enabledPlugins (only when the
+            #    PLUGIN_MARKETPLACE_* / MANAGED_PLUGINS deploy.env vars are
+            #    set) - the enterprise skill push. There is NO direct
+            #    skill-distribution key in managed settings; skills ship
+            #    inside a PLUGIN, from a marketplace the org hosts
+            #    (scripts/enterprise-marketplace.example/ is the starter).
+            #    extraKnownMarketplaces registers the marketplace (a map
+            #    keyed by marketplace name; source github owner/repo or a
+            #    full git URL); enabledPlugins force-installs
+            #    "plugin@marketplace": true entries at managed scope - the
+            #    plugin's skills load in every session and users cannot
+            #    disable them. CLIENTS fetch the marketplace directly, so
+            #    its host must be reachable from developer laptops (NOT
+            #    from the gateway or the offline build host - this is a
+            #    client-side fetch, outside the mirror layer's scope).
+            #    Both values are single-line JSON objects composed by
+            #    common.sh (managed_marketplaces_json /
+            #    managed_plugins_json). BOOT-VERIFIED against the mirrored
+            #    2.1.211 gateway (2026-08-07); client-side AUTO-INSTALL is
+            #    CONTESTED (anthropics/claude-code#45323 vs the managed
+            #    "policy-required" install code present in the
+            #    2.1.211/2.1.220 bundles) and the marketplace must be
+            #    readable without interactive git auth (#17201) - see
+            #    client-config.md §6i for the pilot check + fallback.
             #  * env - the update lockdown, the server-side twin of the installer's
             #    -DisableUpdates. This USED to be scoped to `MANAGED_CLI_GROUPS`
             #    Okta groups; it now applies to everyone, which is strictly broader
             #    coverage AND drops the groups-claim dependency (2026-07-24).
-            #  * permissions.deny [WebFetch, WebSearch, mcp__*] - removes each
-            #    tool from the model's context entirely (a bare tool name is
+            #  * permissions.deny [WebSearch, mcp__*] - removes each tool
+            #    from the model's context entirely (a bare tool name is
             #    STRONGER than a scoped WebFetch(domain:*) deny, which only
             #    blocks matching calls; mcp__* covers every tool of every MCP
-            #    server). WebFetch fetches LOCALLY on the client and could only
-            #    fail slowly in this no-NAT / Zscaler posture; WebSearch is
-            #    server-side and Bedrock does not expose it at all, so its deny
-            #    is defense-in-depth tidiness; the MCP deny closes the
-            #    remaining tool-borne web path. Denies union across scopes and
-            #    cannot be re-allowed at another scope, so none of this is
-            #    user-overridable. Subagents (Agent) stay allowed by decision.
+            #    server). WebSearch is server-side and Bedrock does not
+            #    expose it at all, so its deny is defense-in-depth tidiness;
+            #    the MCP deny closes the remaining tool-borne web path.
+            #    Denies union across scopes and cannot be re-allowed at
+            #    another scope, so none of this is user-overridable.
+            #    Subagents (Agent) stay allowed by decision, and WebFetch
+            #    was removed from the deny list by decision (2026-08-07,
+            #    "SB -- Allowing WebFetch"): it fetches LOCALLY on the
+            #    client, through the same Zscaler egress the developer's
+            #    browser uses.
             #  * ANTHROPIC_DEFAULT_HAIKU_MODEL - points the client's small/fast
             #    background model at the configured haiku-role ID (Sonnet 4.5;
             #    GovCloud has no Haiku family). Without it the client asks for a
@@ -1473,6 +1586,9 @@ Resources:
                             enforceAvailableModels: true
                             ${RequiredMinVersionLine}
                             ${ManagedClaudeMdLine}
+                            ${AwaySummaryLine}
+                            ${ExtraMarketplacesLine}
+                            ${EnabledPluginsLine}
                             permissions:
                               deny: ['WebSearch', 'mcp__*']
                             env:
@@ -1497,6 +1613,22 @@ Resources:
                       - HaveManagedClaudeMd
                       - !Sub 'claudeMd: ${ManagedClaudeMd}'
                       - '# claudeMd: not set (CLAUDE_MD_FILE empty)'
+                    AwaySummaryLine: !If
+                      - WantDisableSessionRecaps
+                      - 'awaySummaryEnabled: false'
+                      - '# awaySummaryEnabled: default (DisableSessionRecaps=false)'
+                    # both values are single-line JSON objects (valid YAML
+                    # flow mappings) built by common.sh; the nested !Sub
+                    # never re-scans the substituted VALUE, and `$` inside
+                    # either value is rejected by the parameter patterns
+                    ExtraMarketplacesLine: !If
+                      - HaveManagedExtraMarketplaces
+                      - !Sub 'extraKnownMarketplaces: ${ManagedExtraMarketplaces}'
+                      - '# extraKnownMarketplaces: not set (PLUGIN_MARKETPLACE_NAME empty)'
+                    EnabledPluginsLine: !If
+                      - HaveManagedEnabledPlugins
+                      - !Sub 'enabledPlugins: ${ManagedEnabledPlugins}'
+                      - '# enabledPlugins: not set (MANAGED_PLUGINS empty)'
                     LogUserPromptsLine: !If
                       - WantLogUserPrompts
                       - 'OTEL_LOG_USER_PROMPTS: "1"'

@@ -1,0 +1,8 @@
+{
+  "name": "org-skills",
+  "description": "Organization-wide skills for Claude Code",
+  "version": "1.0.0",
+  "author": {
+    "name": "Claude Code platform team"
+  }
+}

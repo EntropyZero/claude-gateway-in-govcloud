@@ -1,0 +1,13 @@
+{
+  "name": "org-plugins",
+  "owner": {
+    "name": "Claude Code platform team"
+  },
+  "plugins": [
+    {
+      "name": "org-skills",
+      "source": "./plugins/org-skills",
+      "description": "Organization-wide skills for Claude Code"
+    }
+  ]
+}

@@ -114,6 +114,45 @@ now asserts Python ≥3.11.5 for faithful possessive-quantifier support).
 Still needs one live CFN re-probe (change-set with a 4096-char value) —
 blocked on expired AWS creds at fix time.
 
+**Committed, NOT yet deployed (2026-08-07): session-recap disable + managed
+enterprise-skill push.** Two independent managed-settings additions to 02's
+catch-all `cli:` block. (1) `DISABLE_SESSION_RECAPS=true` (02 param
+`DisableSessionRecaps`, default false) pushes `awaySummaryEnabled: false` —
+one key disables both the away-session recap and the remote-recap variant
+(the latter's client gate checks the same key; schema-verified in the
+2.1.207/2.1.211/2.1.220 client bundles). (2) Enterprise skills ship as a
+force-installed PLUGIN from an org-hosted marketplace — there is NO direct
+skill-push key: `PLUGIN_MARKETPLACE_*` → `extraKnownMarketplaces` (github
+owner/repo or full git URL; starter repo
+`scripts/enterprise-marketplace.example/`), `MANAGED_PLUGINS` →
+`enabledPlugins`. Both values are single-line JSON objects composed/validated
+by common.sh (`managed_marketplaces_json` / `managed_plugins_json`; kebab-case
+names, no `$`, no line breaks — same env-expansion/boot-loop class as
+claudeMd, but the params' AllowedPatterns are bare char classes, the
+iterative form the 2026-07-30 JVM calibration showed safe; not yet
+live-CFN-probed, low risk). CLIENTS fetch the marketplace directly, so its
+host must be reachable from developer laptops AND anonymously git-readable
+(deliberately outside the mirror layer).
+Gateway-side BOOT-VERIFIED against mirrored 2.1.211 + 2.1.220 (exact rendered
+flow-style values; typo'd key = boot-fatal negative control); client-side
+recap suppression is schema-verified only, and client-side plugin
+AUTO-INSTALL is CONTESTED — anthropics/claude-code#45323 (closed unplanned)
+says CLI clients cache managed plugin config without acting on it, while the
+2.1.211/2.1.220 bundles contain managed "policy-required" install/prune code;
+the marketplace repo must also be readable WITHOUT interactive git auth
+(private github.com fails, #17201 - client git ignores credential helpers).
+After first enable: idle pilot session shows no recap; `/plugin` shows the
+plugin at managed scope (fallback if not: one-time per-user
+`/plugin install <plugin>@<marketplace>`). Deploy = `deploy-gateway.sh`
+re-run. Gated by `test_gateway_config.py` + `common.bats`. Docs:
+client-config §6h/§6i.
+**Same change, decision sync (2026-08-07):** the standalone commit "SB --
+Allowing WebFetch" (7243a9d) dropped WebFetch from the managed deny list but
+left the pinned test red and the docs stale — the deny-list test, template
+comment, client-config §4.1/§6c, control-implementation AC-20, and an
+appended §10 note in the 2026-07 assessment now all reflect the
+WebSearch+mcp__*-only deny posture.
+
 **Pending publish (2026-07-29):** both client installers now seed
 `hasCompletedOnboarding: true` in `.claude.json` at install time — without
 it every fresh install dies at the client's Anthropic connectivity preflight
@@ -247,7 +286,9 @@ bumps via the mirror layer) are in `docs/operations/om-runbooks.md`.
 - **User decisions:** precompiled native `claude` binary only (no npm
   distribution); Grafana auth = Okta SSO; S3 Object Lock deferred;
   first-party JS allowed in the portal (inline still banned); `Bash`
-  curl/wget and subagents deliberately not denied in the managed policy.
+  curl/wget, subagents, and (since 2026-08-07) `WebFetch` deliberately not
+  denied in the managed policy — the deny list is exactly
+  `['WebSearch', 'mcp__*']`, pinned by test.
 - **Landing zone:** hub-and-spoke with Transit Gateway (not peering); central
   egress; the workload VPC is a no-NAT spoke in the target profile.
 - **Managed-policy ordering is load-bearing:** gateway policy selection is
